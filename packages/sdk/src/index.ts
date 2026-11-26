@@ -1,3 +1,9 @@
+export const DATABASE_CAPABILITY = "database";
+
+export type DatabaseCapability = {
+	readonly schema: string;
+};
+
 export type PluginManifest = {
 	readonly name: string;
 	readonly requires?: Readonly<Record<string, string>>;

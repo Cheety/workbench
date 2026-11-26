@@ -9,6 +9,7 @@ import { startPlugins } from "./kernel.ts";
 import { createLogger } from "./logger.ts";
 import { discoverPluginPackages } from "./plugin-discovery.ts";
 import { createPostgresCheck } from "./postgres.ts";
+import { migrateSchemas } from "./schema-migrations.ts";
 import {
 	type RunningServer,
 	type ServerOptions,
@@ -79,6 +80,8 @@ const plugins = reportFailedStart(
 		discover: discoverPluginPackages(PACKAGES_DIRECTORY),
 		enabledPlugins: config.enabledPlugins,
 		capabilityProviders: {},
+		migrateSchemas: (schemas) =>
+			migrateSchemas(config.databaseUrl, schemas, logger),
 		hookTimeout: { ms: config.pluginHookTimeoutMs, setTimer: setSystemTimer },
 		stopSignal: pluginStart.signal,
 		logger,

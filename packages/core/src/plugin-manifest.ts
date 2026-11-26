@@ -1,5 +1,6 @@
-import type { PluginContext } from "@workbench/sdk";
+import { DATABASE_CAPABILITY, type PluginContext } from "@workbench/sdk";
 import { quote } from "./quote.ts";
+import type { Migration } from "./schema-migrations.ts";
 
 const PLUGIN_NAME = /^[a-z][a-z0-9-]*$/;
 
@@ -24,6 +25,7 @@ export type ValidPlugin = {
 	readonly version: string;
 	readonly requires: ReadonlyMap<string, string>;
 	readonly capabilities: readonly string[];
+	loadMigrations(): Promise<readonly Migration[]>;
 	activate(ctx: PluginContext): Promise<void>;
 	deactivate(): Promise<void>;
 };
@@ -32,6 +34,7 @@ export type UnvalidatedPlugin = {
 	readonly declaredName: string;
 	readonly version: unknown;
 	readonly definition: unknown;
+	readonly loadMigrations: (() => Promise<readonly Migration[]>) | undefined;
 };
 
 export type PluginValidation =
@@ -39,7 +42,7 @@ export type PluginValidation =
 	| { readonly valid: false; readonly problems: readonly string[] };
 
 export function validatePlugin(
-	{ declaredName, version, definition }: UnvalidatedPlugin,
+	{ declaredName, version, definition, loadMigrations }: UnvalidatedPlugin,
 	offeredCapabilities: readonly string[],
 ): PluginValidation {
 	if (!isRecord(definition)) {
@@ -57,6 +60,7 @@ export function validatePlugin(
 		...nameProblems(definition.manifest, declaredName),
 		...requires.problems,
 		...capabilities.problems,
+		...migrationProblems(loadMigrations, capabilities.value),
 		...hookProblems(definition, "activate"),
 		...hookProblems(definition, "deactivate"),
 	];
@@ -72,6 +76,7 @@ export function validatePlugin(
 			version,
 			requires: requires.value,
 			capabilities: capabilities.value,
+			loadMigrations: loadMigrations ?? (async () => []),
 			activate: async (ctx) => {
 				if (typeof definition.activate === "function")
 					await definition.activate(ctx);
@@ -158,6 +163,18 @@ function readCapabilities(
 					`manifest.capabilities names ${quote(capability)}, which this instance does not offer`,
 			),
 	};
+}
+
+function migrationProblems(
+	loadMigrations: UnvalidatedPlugin["loadMigrations"],
+	capabilities: readonly string[],
+): readonly string[] {
+	return loadMigrations === undefined ||
+		capabilities.includes(DATABASE_CAPABILITY)
+		? []
+		: [
+				`package.json declares migrations, but manifest.capabilities does not name ${quote(DATABASE_CAPABILITY)}`,
+			];
 }
 
 function hookProblems(

@@ -3,9 +3,15 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { PluginDiscovery, PluginPackage } from "./kernel.ts";
 import { isPluginName } from "./plugin-manifest.ts";
+import { quote } from "./quote.ts";
+import type { Migration } from "./schema-migrations.ts";
 import { systemFailureReason } from "./system-error.ts";
 
 const PACKAGE_JSON = "package.json";
+
+const SQL_FILE = ".sql";
+
+const MIGRATION_FILE_NAME = /^[0-9]{4}_[a-z0-9_]+\.sql$/;
 
 const NOTHING: PluginDiscovery = { packages: [], unreadable: [] };
 
@@ -48,20 +54,30 @@ async function readPackage(root: string): Promise<PluginDiscovery> {
 		return NOTHING;
 	const declared = packageJson.workbench.plugin;
 	if (declared === undefined) return NOTHING;
-	const { name: pluginName = undefined, entry = undefined } = isRecord(declared)
-		? declared
-		: {};
+	const {
+		name: pluginName = undefined,
+		entry = undefined,
+		migrations = undefined,
+	} = isRecord(declared) ? declared : {};
 	if (!isPluginName(pluginName) || typeof entry !== "string") {
 		return unreadable(
 			root,
 			'workbench.plugin must declare the plugin "name" (lowercase letters, digits and hyphens, starting with a letter) and the "entry" path',
 		);
 	}
-	const entryPath = entryPathInside(root, entry);
+	const entryPath = pathInside(root, entry);
 	if (entryPath === undefined) {
 		return unreadable(
 			root,
 			'workbench.plugin "entry" must be a relative path to a file inside the package',
+		);
+	}
+	const migrationsPath =
+		typeof migrations === "string" ? pathInside(root, migrations) : undefined;
+	if (migrations !== undefined && migrationsPath === undefined) {
+		return unreadable(
+			root,
+			'workbench.plugin "migrations" must be a relative path to a directory inside the package',
 		);
 	}
 	const pluginPackage: PluginPackage = {
@@ -72,20 +88,43 @@ async function readPackage(root: string): Promise<PluginDiscovery> {
 			const module: unknown = await import(pathToFileURL(entryPath).href);
 			return isRecord(module) ? module.default : undefined;
 		},
+		...(migrationsPath === undefined
+			? {}
+			: { loadMigrations: () => readMigrations(migrationsPath) }),
 	};
 	return { packages: [pluginPackage], unreadable: [] };
 }
 
-function entryPathInside(root: string, entry: string): string | undefined {
-	if (isAbsolute(entry)) return undefined;
-	const entryPath = resolve(root, entry);
-	const fromRoot = relative(resolve(root), entryPath);
+async function readMigrations(
+	directory: string,
+): Promise<readonly Migration[]> {
+	const names = (await readdir(directory))
+		.filter((name) => name.endsWith(SQL_FILE))
+		.sort();
+	const misnamed = names.find((name) => !MIGRATION_FILE_NAME.test(name));
+	if (misnamed !== undefined) {
+		throw new Error(
+			`migration file ${quote(misnamed)} must be named like "0001_create_notes.sql": four digits, an underscore, lowercase letters, digits and underscores, ".sql"`,
+		);
+	}
+	return Promise.all(
+		names.map(async (name) => ({
+			name,
+			sql: await Bun.file(join(directory, name)).text(),
+		})),
+	);
+}
+
+function pathInside(root: string, path: string): string | undefined {
+	if (isAbsolute(path)) return undefined;
+	const resolved = resolve(root, path);
+	const fromRoot = relative(resolve(root), resolved);
 	const isInside =
 		fromRoot !== "" &&
 		fromRoot !== ".." &&
 		!fromRoot.startsWith(`..${sep}`) &&
 		!isAbsolute(fromRoot);
-	return isInside ? entryPath : undefined;
+	return isInside ? resolved : undefined;
 }
 
 function unreadable(directory: string, problem: string): PluginDiscovery {
