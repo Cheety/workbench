@@ -20,6 +20,7 @@ export class PostgresGate {
 	readonly #port: number;
 	readonly #target: URL;
 	#listener: TCPSocketListener<DownstreamState> | undefined;
+	#acceptedConnections = 0;
 
 	private constructor(port: number, target: URL) {
 		this.#port = port;
@@ -47,6 +48,11 @@ export class PostgresGate {
 		url.hostname = "127.0.0.1";
 		url.port = String(this.#port);
 		return url.href;
+	}
+
+	/** How many connections the gate has accepted so far, in any mode. */
+	get acceptedConnections(): number {
+		return this.#acceptedConnections;
 	}
 
 	refuse(): void {
@@ -79,7 +85,8 @@ export class PostgresGate {
 			hostname: "127.0.0.1",
 			port: this.#port,
 			socket: {
-				open(downstream) {
+				open: (downstream) => {
+					this.#acceptedConnections += 1;
 					downstream.data = { upstream: undefined, pending: [] };
 					if (mode === "silent") return;
 					void Bun.connect({

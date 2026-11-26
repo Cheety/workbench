@@ -5,6 +5,9 @@ import { createPostgresCheck } from "./postgres.ts";
 import { type RunningServer, startServer } from "./server.ts";
 import { PostgresGate } from "./testing/postgres.ts";
 
+/** Well above the `max_connections` of 100 of a default Postgres. */
+const PARALLEL_PROBES = 300;
+
 type LogEntry = Record<string, unknown>;
 
 let running: RunningServer | undefined;
@@ -88,6 +91,19 @@ describe("readiness", () => {
 
 		expect(whileReachable.status).toBe(200);
 		expect(response.status).toBe(503);
+	});
+
+	test("stays ready when more probes arrive at once than Postgres has connections", async () => {
+		const { get, gate } = startTestServer();
+		gate.forward();
+
+		const responses = await Promise.all(
+			Array.from({ length: PARALLEL_PROBES }, () => get("/health/ready")),
+		);
+
+		expect(
+			responses.filter((response) => response.status !== 200),
+		).toHaveLength(0);
 	});
 
 	test("logs why it is not ready without leaking the database credentials", async () => {

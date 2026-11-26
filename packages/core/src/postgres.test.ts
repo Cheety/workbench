@@ -22,6 +22,8 @@ describe("test database", () => {
 	});
 });
 
+const PARALLEL_CHECKS = 20;
+
 describe("createPostgresCheck", () => {
 	const gates: PostgresGate[] = [];
 
@@ -55,6 +57,40 @@ describe("createPostgresCheck", () => {
 		const status = await check();
 
 		expect(status).toEqual({ reachable: false, reason: "timeout" });
+	});
+
+	test("shares one connection among checks that run at the same time", async () => {
+		const gate = openGate();
+		gate.forward();
+		const check = createPostgresCheck({
+			url: new Secret(gate.url),
+			timeoutMs: 5000,
+		});
+
+		const statuses = await Promise.all(
+			Array.from({ length: PARALLEL_CHECKS }, () => check()),
+		);
+
+		expect(statuses).toEqual(
+			Array.from({ length: PARALLEL_CHECKS }, () => ({ reachable: true })),
+		);
+		expect(gate.acceptedConnections).toBe(1);
+	});
+
+	test("checks again after a hung check has reached its deadline", async () => {
+		const gate = openGate();
+		gate.goSilent();
+		const check = createPostgresCheck({
+			url: new Secret(gate.url),
+			timeoutMs: 500,
+		});
+		const hung = await check();
+		gate.forward();
+
+		const status = await check();
+
+		expect(hung).toEqual({ reachable: false, reason: "timeout" });
+		expect(status).toEqual({ reachable: true });
 	});
 
 	test("reports wrong credentials as unreachable instead of failing", async () => {

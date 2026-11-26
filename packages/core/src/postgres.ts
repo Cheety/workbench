@@ -15,40 +15,56 @@ const UNKNOWN_REASON = "unknown";
 /**
  * Creates a check that reports whether Postgres answers a query within
  * `timeoutMs` milliseconds.
+ *
+ * Calls that overlap share one check and its result, so the check never
+ * holds more than one connection, however many callers ask at once.
  */
 export function createPostgresCheck(options: {
 	readonly url: Secret;
 	readonly timeoutMs: number;
 }): DatabaseCheck {
-	return async () => {
-		// A connection of its own per check: a pooled connection that hangs
-		// would keep later checks waiting behind it after Postgres is back.
-		const sql = new SQL(options.url.reveal(), {
-			max: 1,
-			connectionTimeout: options.timeoutMs / 1000,
+	let inFlight: Promise<DatabaseStatus> | undefined;
+	return () => {
+		inFlight ??= queryOnce(options).finally(() => {
+			inFlight = undefined;
 		});
-		const answered = sql`SELECT 1`.then(
-			(): DatabaseStatus => ({ reachable: true }),
-			(error: unknown): DatabaseStatus => ({
-				reachable: false,
-				reason: describeFailure(error),
-			}),
-		);
-		const { promise: timedOut, resolve } =
-			Promise.withResolvers<DatabaseStatus>();
-		// The driver's own timeout covers connecting only and overshoots while
-		// it retries, so the deadline is enforced here.
-		const timer = setTimeout(
-			() => resolve({ reachable: false, reason: TIMEOUT_REASON }),
-			options.timeoutMs,
-		);
-		try {
-			return await Promise.race([answered, timedOut]);
-		} finally {
-			clearTimeout(timer);
-			void sql.close({ timeout: 0 }).catch(() => {});
-		}
+		return inFlight;
 	};
+}
+
+async function queryOnce(options: {
+	readonly url: Secret;
+	readonly timeoutMs: number;
+}): Promise<DatabaseStatus> {
+	// A connection of its own per check: a pooled connection that hangs
+	// would keep later checks waiting behind it after Postgres is back.
+	const sql = new SQL(options.url.reveal(), {
+		max: 1,
+		connectionTimeout: options.timeoutMs / 1000,
+	});
+	const answered = sql`SELECT 1`.then(
+		(): DatabaseStatus => ({ reachable: true }),
+		(error: unknown): DatabaseStatus => ({
+			reachable: false,
+			reason: describeFailure(error),
+		}),
+	);
+	const { promise: timedOut, resolve } =
+		Promise.withResolvers<DatabaseStatus>();
+	// The driver's own timeout covers connecting only and overshoots while
+	// it retries, so the deadline is enforced here.
+	const timer = setTimeout(
+		() => resolve({ reachable: false, reason: TIMEOUT_REASON }),
+		options.timeoutMs,
+	);
+	try {
+		return await Promise.race([answered, timedOut]);
+	} finally {
+		clearTimeout(timer);
+		// Awaited so that the next check starts only after this connection
+		// is gone; without a grace period it does not wait for a hung query.
+		await sql.close({ timeout: 0 }).catch(() => {});
+	}
 }
 
 // Only codes are reported: driver messages are not guaranteed to be free of
