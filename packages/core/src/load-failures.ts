@@ -11,6 +11,7 @@ export type LoadFailureReason =
 	| "dependency_not_loaded"
 	| "dependency_cycle"
 	| "capability_unavailable"
+	| "migration_failed"
 	| "activation_failed"
 	| "activation_timed_out";
 

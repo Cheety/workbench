@@ -15,11 +15,14 @@ const HEALTH_STATUS = {
 	notReady: "not_ready",
 } as const;
 
+export type StartupStatus = "starting" | "started" | "failed";
+
 export type ServerOptions = {
 	readonly port: number;
 	readonly logger: Logger;
 	readonly checkDatabase: DatabaseCheck;
 	readonly newCorrelationId: () => string;
+	readonly startupStatus: () => StartupStatus;
 };
 
 export type RunningServer = {
@@ -46,15 +49,12 @@ async function handleRequest(
 		acceptCorrelationId(request) ?? options.newCorrelationId();
 	const logger = options.logger.with({ correlationId });
 	const path = new URL(request.url).pathname;
-	const response = await route(
-		request.method,
-		path,
-		options.checkDatabase,
-		logger,
-	).catch((error: unknown) => {
-		logger.error("request failed", { error: errorName(error) });
-		return problem(500, "Internal Server Error");
-	});
+	const response = await route(request.method, path, options, logger).catch(
+		(error: unknown) => {
+			logger.error("request failed", { error: errorName(error) });
+			return problem(500, "Internal Server Error");
+		},
+	);
 	response.headers.set(CORRELATION_ID_HEADER, correlationId);
 	const entry = { method: request.method, path, status: response.status };
 	const level = path.startsWith(HEALTH_PATH_PREFIX) ? "debug" : "info";
@@ -76,23 +76,36 @@ function acceptCorrelationId(request: Request): string | undefined {
 async function route(
 	method: string,
 	path: string,
-	checkDatabase: DatabaseCheck,
+	options: ServerOptions,
 	logger: Logger,
 ): Promise<Response> {
 	if (method === "GET" && path === LIVENESS_PATH)
 		return Response.json({ status: HEALTH_STATUS.alive });
 	if (method === "GET" && path === READINESS_PATH)
-		return readiness(checkDatabase, logger);
+		return readiness(options, logger);
 	return problem(404, "Not Found");
 }
 
 async function readiness(
-	checkDatabase: DatabaseCheck,
+	{ checkDatabase, startupStatus }: ServerOptions,
 	logger: Logger,
 ): Promise<Response> {
+	const startup = startupStatus();
+	if (startup === "starting") {
+		logger.debug("not ready: instance starting");
+		return notReady();
+	}
+	if (startup === "failed") {
+		logger.warn("not ready: instance failed to start");
+		return notReady();
+	}
 	const database = await checkDatabase(logger);
 	if (database.reachable) return Response.json({ status: HEALTH_STATUS.ready });
 	logger.warn("not ready: database unreachable", { reason: database.reason });
+	return notReady();
+}
+
+function notReady(): Response {
 	return Response.json({ status: HEALTH_STATUS.notReady }, { status: 503 });
 }
 

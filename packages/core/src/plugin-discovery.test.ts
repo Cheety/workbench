@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { InvalidMigrationFileNameError } from "./migration-files.ts";
 import { discoverPluginPackages } from "./plugin-discovery.ts";
 
 let packagesDirectory: string;
@@ -27,6 +28,27 @@ async function writeNotesPlugin(root: string, entry: string): Promise<void> {
 		join(root, "src", "plugin.ts"),
 		'export default { manifest: { name: "notes" } };',
 	);
+}
+
+async function writeMigratingNotesPlugin(
+	root: string,
+	migrations: unknown,
+	files: Readonly<Record<string, string>>,
+): Promise<void> {
+	await mkdir(join(root, "src"), { recursive: true });
+	await mkdir(join(root, "migrations"), { recursive: true });
+	await writeFile(
+		join(root, "package.json"),
+		JSON.stringify({
+			name: "@fixture/plugin-notes",
+			version: "1.2.3",
+			workbench: {
+				plugin: { name: "notes", entry: "./src/plugin.ts", migrations },
+			},
+		}),
+	);
+	for (const [name, content] of Object.entries(files))
+		await writeFile(join(root, "migrations", name), content);
 }
 
 async function writePackage(
@@ -219,4 +241,80 @@ describe("plugin discovery", () => {
 
 		await expect(discover()).rejects.toMatchObject({ code: "ENOENT" });
 	});
+
+	test("reads the SQL migrations from the directory that package.json names, in the order of their names", async () => {
+		const directory = await temporaryDirectory();
+		await writeMigratingNotesPlugin(
+			join(directory, "plugin-notes"),
+			"./migrations",
+			{
+				"0002_add_body.sql": "ALTER TABLE notes ADD COLUMN body text;",
+				"0001_create_notes.sql": "CREATE TABLE notes (id bigint);",
+				"README.md": "Not a migration.",
+			},
+		);
+		const { packages } = await discoverPluginPackages(directory)();
+
+		const migrations = await packages[0]?.loadMigrations?.();
+
+		expect(migrations).toEqual([
+			{
+				name: "0001_create_notes.sql",
+				sql: "CREATE TABLE notes (id bigint);",
+			},
+			{
+				name: "0002_add_body.sql",
+				sql: "ALTER TABLE notes ADD COLUMN body text;",
+			},
+		]);
+	});
+
+	test("finds no migrations for a package whose package.json names none", async () => {
+		const { packages } = await discoverPluginPackages(packagesDirectory)();
+
+		expect(packages[1]?.loadMigrations).toBeUndefined();
+	});
+
+	test("refuses to read a migration whose file name does not start with a four-digit number", async () => {
+		const directory = await temporaryDirectory();
+		await writeMigratingNotesPlugin(
+			join(directory, "plugin-notes"),
+			"./migrations",
+			{ "create_notes.sql": "CREATE TABLE notes (id bigint);" },
+		);
+		const { packages } = await discoverPluginPackages(directory)();
+
+		const loading = packages[0]?.loadMigrations?.();
+
+		await expect(loading).rejects.toBeInstanceOf(InvalidMigrationFileNameError);
+		await expect(loading).rejects.toThrow(
+			'migration file "create_notes.sql" must be named like "0001_create_notes.sql": four digits, an underscore, lowercase letters, digits and underscores, ".sql"',
+		);
+	});
+
+	test.each([
+		["is not a path", 42],
+		["leaves the package", "../outside"],
+		["names the package itself", "."],
+	])(
+		"reports a package whose migrations directory %s",
+		async (_case, migrations) => {
+			const directory = await temporaryDirectory();
+			const root = join(directory, "plugin-notes");
+			await writeMigratingNotesPlugin(root, migrations, {});
+
+			const discovery = await discoverPluginPackages(directory)();
+
+			expect(discovery).toEqual({
+				packages: [],
+				unreadable: [
+					{
+						directory: root,
+						problem:
+							'workbench.plugin "migrations" must be a relative path to a directory inside the package',
+					},
+				],
+			});
+		},
+	);
 });

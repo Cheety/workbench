@@ -1,10 +1,34 @@
-import type { Socket, TCPSocketListener } from "bun";
+import { type Socket, SQL, type TCPSocketListener } from "bun";
 
 const DEFAULT_TEST_DATABASE_URL =
 	"postgres://workbench:workbench@127.0.0.1:54329/workbench_test";
 
 export const TEST_DATABASE_URL: string =
 	process.env.TEST_DATABASE_URL ?? DEFAULT_TEST_DATABASE_URL;
+
+export type FreshDatabase = {
+	readonly url: string;
+	readonly sql: SQL;
+	drop(): Promise<void>;
+};
+
+export async function createFreshDatabase(): Promise<FreshDatabase> {
+	const name = `workbench_test_${crypto.randomUUID().replaceAll("-", "")}`;
+	const admin = new SQL(TEST_DATABASE_URL, { max: 1 });
+	await admin.unsafe(`CREATE DATABASE ${name}`);
+	const url = new URL(TEST_DATABASE_URL);
+	url.pathname = `/${name}`;
+	const sql = new SQL(url.href, { max: 1 });
+	return {
+		url: url.href,
+		sql,
+		drop: async () => {
+			await sql.close();
+			await admin.unsafe(`DROP DATABASE ${name} WITH (FORCE)`);
+			await admin.close();
+		},
+	};
+}
 
 type GateMode = "refusing" | "forwarding" | "silent";
 
@@ -21,7 +45,7 @@ export class PostgresGate {
 		this.#target = target;
 	}
 
-	static create(): PostgresGate {
+	static create(target: string = TEST_DATABASE_URL): PostgresGate {
 		const reservation = Bun.listen({
 			hostname: "127.0.0.1",
 			port: 0,
@@ -29,7 +53,7 @@ export class PostgresGate {
 		});
 		const port = reservation.port;
 		reservation.stop(true);
-		return new PostgresGate(port, new URL(TEST_DATABASE_URL));
+		return new PostgresGate(port, new URL(target));
 	}
 
 	get url(): string {

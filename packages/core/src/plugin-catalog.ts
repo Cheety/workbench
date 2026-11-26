@@ -3,12 +3,14 @@ import { type HookTimeout, runWithin } from "./hook-timeout.ts";
 import type { LoadFailure } from "./load-failures.ts";
 import { type ValidPlugin, validatePlugin } from "./plugin-manifest.ts";
 import { quote } from "./quote.ts";
+import type { Migration } from "./schema-migrations.ts";
 
 export type PluginPackage = {
 	readonly packageName: string;
 	readonly pluginName: string;
 	readonly version: unknown;
 	readonly loadDefinition: () => Promise<unknown>;
+	readonly loadMigrations?: () => Promise<readonly Migration[]>;
 };
 
 export type UnreadablePackage = {
@@ -78,7 +80,12 @@ async function loadPlugin(
 		});
 	}
 	const validation = validatePlugin(
-		{ declaredName, version, definition },
+		{
+			declaredName,
+			version,
+			definition,
+			loadMigrations: pluginPackage.loadMigrations,
+		},
 		offeredCapabilities,
 	);
 	return validation.valid

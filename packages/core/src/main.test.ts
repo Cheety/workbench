@@ -1,11 +1,18 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Subprocess, TCPSocketListener } from "bun";
-import { TEST_DATABASE_URL } from "./testing/postgres.ts";
+import {
+	createFreshDatabase,
+	type FreshDatabase,
+	PostgresGate,
+	TEST_DATABASE_URL,
+} from "./testing/postgres.ts";
 
 const MAIN = new URL("./main.ts", import.meta.url).pathname;
 
 const instances: Subprocess[] = [];
+const databases: FreshDatabase[] = [];
 let occupiedPort: TCPSocketListener | undefined;
+let openGate: PostgresGate | undefined;
 
 afterEach(async () => {
 	for (const instance of instances.splice(0)) {
@@ -14,7 +21,16 @@ afterEach(async () => {
 	}
 	occupiedPort?.stop(true);
 	occupiedPort = undefined;
+	openGate?.close();
+	openGate = undefined;
+	for (const database of databases.splice(0)) await database.drop();
 });
+
+async function freshDatabase(): Promise<FreshDatabase> {
+	const database = await createFreshDatabase();
+	databases.push(database);
+	return database;
+}
 
 function spawnInstance(env: Record<string, string>) {
 	const instance = Bun.spawn([process.execPath, MAIN], {
@@ -33,19 +49,6 @@ function occupyPort(): number {
 		socket: { data() {} },
 	});
 	return occupiedPort.port;
-}
-
-async function readFirstLine(
-	stream: ReadableStream<Uint8Array>,
-): Promise<string> {
-	const decoder = new TextDecoder();
-	let buffered = "";
-	for await (const chunk of stream) {
-		buffered += decoder.decode(chunk, { stream: true });
-		const end = buffered.indexOf("\n");
-		if (end !== -1) return buffered.slice(0, end);
-	}
-	throw new Error(`stream ended before a full line: ${buffered}`);
 }
 
 type LogEntry = Record<string, unknown>;
@@ -152,9 +155,10 @@ describe("instance start", () => {
 			DATABASE_URL: TEST_DATABASE_URL,
 			PORT: "0",
 		});
-		const started = JSON.parse(await readFirstLine(instance.stdout));
+		const log = readLog(instance.stdout);
+		const [started] = await log.until("instance started");
 
-		const ready = await fetch(`http://127.0.0.1:${started.port}/health/ready`);
+		const ready = await fetch(`http://127.0.0.1:${started?.port}/health/ready`);
 		instance.kill("SIGTERM");
 		const exitCode = await instance.exited;
 
@@ -248,5 +252,138 @@ describe("plugins of an instance", () => {
 			notLoaded: ["ghost"],
 		});
 		expect(live.status).toBe(200);
+	});
+});
+
+describe("migrations at start", () => {
+	test("create the core schema and the table of the reference plugin on a fresh database before reporting ready", async () => {
+		const database = await freshDatabase();
+		const instance = spawnInstance({
+			DATABASE_URL: database.url,
+			PORT: "0",
+			PLUGINS: "reference",
+		});
+
+		const startup = await readLog(instance.stdout).until("instance started");
+		const ready = await fetch(
+			`http://127.0.0.1:${startup[0]?.port}/health/ready`,
+		);
+
+		expect(startup).toContainEqual(
+			expect.objectContaining({
+				message: "migration applied",
+				schema: "plugin_reference",
+				migration: "0001_create_notes.sql",
+			}),
+		);
+		expect(ready.status).toBe(200);
+		expect(
+			await database.sql`SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema IN ('core', 'plugin_reference') ORDER BY table_schema, table_name`,
+		).toEqual([
+			{ table_schema: "core", table_name: "migrations" },
+			{ table_schema: "plugin_reference", table_name: "notes" },
+		]);
+	});
+
+	test("apply each migration once when two instances start against the same fresh database", async () => {
+		const database = await freshDatabase();
+		const env = { DATABASE_URL: database.url, PORT: "0", PLUGINS: "reference" };
+		const first = spawnInstance(env);
+		const second = spawnInstance(env);
+
+		const startups = await Promise.all([
+			readLog(first.stdout).until("instance started"),
+			readLog(second.stdout).until("instance started"),
+		]);
+
+		expect(
+			startups
+				.flat()
+				.filter((entry) => entry.message === "migration applied")
+				.map((entry) => entry.migration),
+		).toEqual(["0001_create_notes.sql"]);
+		expect(
+			await database.sql`SELECT schema_name, migration FROM core.migrations`,
+		).toEqual([
+			{ schema_name: "plugin_reference", migration: "0001_create_notes.sql" },
+		]);
+	});
+
+	test("migrate nothing when the instance starts again", async () => {
+		const database = await freshDatabase();
+		const env = { DATABASE_URL: database.url, PORT: "0", PLUGINS: "reference" };
+		const first = spawnInstance(env);
+		await readLog(first.stdout).until("instance started");
+		first.kill("SIGTERM");
+		await first.exited;
+		const second = spawnInstance(env);
+
+		const startup = await readLog(second.stdout).until("instance started");
+
+		expect(startup.map((entry) => entry.message)).not.toContain(
+			"migration applied",
+		);
+	});
+
+	test("wait for an unreachable database, then migrate and report ready", async () => {
+		const database = await freshDatabase();
+		const gate = PostgresGate.create(database.url);
+		openGate = gate;
+		const instance = spawnInstance({
+			DATABASE_URL: gate.url,
+			PORT: "0",
+			PLUGINS: "reference",
+		});
+		const log = readLog(instance.stdout);
+		const waiting = await log.until("database unreachable, retrying");
+		const whileWaiting = await fetch(
+			`http://127.0.0.1:${waiting[0]?.port}/health/ready`,
+		);
+		gate.forward();
+
+		await log.until("instance started");
+		const ready = await fetch(
+			`http://127.0.0.1:${waiting[0]?.port}/health/ready`,
+		);
+
+		expect(whileWaiting.status).toBe(503);
+		expect(ready.status).toBe(200);
+	});
+
+	test("report not ready and log why when a migration fails", async () => {
+		const database = await freshDatabase();
+		await database.sql.unsafe(
+			"CREATE SCHEMA plugin_reference; CREATE TABLE plugin_reference.notes (id bigint);",
+		);
+		const instance = spawnInstance({
+			DATABASE_URL: database.url,
+			PORT: "0",
+			PLUGINS: "reference",
+		});
+
+		const startup = await readLog(instance.stdout).until(
+			"instance failed to start",
+		);
+		const ready = await fetch(
+			`http://127.0.0.1:${startup[0]?.port}/health/ready`,
+		);
+
+		expect(startup).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				message: "migration failed",
+				schema: "plugin_reference",
+				migration: "0001_create_notes.sql",
+			}),
+		);
+		expect(startup).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				message: "plugin not loaded",
+				plugin: "reference",
+				reason: "migration_failed",
+			}),
+		);
+		expect(ready.status).toBe(503);
 	});
 });

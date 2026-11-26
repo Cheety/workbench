@@ -1,0 +1,17 @@
+# Plugin-Migrationen stehen als SQL-Dateien im Plugin-Paket, die `package.json` nennt ihr Verzeichnis
+
+Ein Plugin mit der Capability `database` bekommt ein eigenes Schema `plugin_<name>` (Bindestriche als Unterstriche) und liefert seine Migrationen als SQL-Dateien mit. Das Verzeichnis nennt die `package.json` unter `workbench.plugin.migrations`, so wie sie schon den Einstieg nennt (ADR-0007). Erwogen wurde ein festes Verzeichnis `migrations/` per Namenskonvention (Verdrahtung über Namen statt über eine ausdrückliche Angabe) und eine Liste der Migrationen im Manifest (der Kernel müsste den Code des Plugins laden, um an Dateien zu kommen, und das Manifest trüge Dateipfade). Der Präfix `plugin_` hält die Schemas der Plugins von `core`, `public` und den Schemas von Postgres fern, auch bei einem Plugin namens `core`.
+
+Die Migrationen laufen beim Start mit dem Migrations-Runner des Cores unter einer Postgres-Advisory-Lock, jede in eigener Transaktion mit dem Schema des Plugins als `search_path`; `core.migrations` hält die angewandten fest. Erwogen wurde drizzle-kit; die Migrationen sind aber reines SQL, ein eigener Runner braucht keine weitere Abhängigkeit und kann Lock, Schema und Ladefehler so behandeln, wie der Kernel es braucht.
+
+Schlägt die Migration eines Plugins fehl, wird dieses Plugin nicht geladen (`migration_failed`), die übrigen laufen weiter (ADR-0007), aber die Instanz meldet nicht „bereit“, bis ein Neustart gelingt. Erwogen wurde, wie bei anderen Ladefehlern bereit zu melden; dann ginge ein Upgrade mit kaputter Migration unbemerkt in Betrieb, obwohl Story 80 verlangt, dass „bereit“ eine gelungene Migration bedeutet.
+
+Ist Postgres beim Start nicht erreichbar, prüft die Instanz ohne Obergrenze erneut, mit exponentiellem Backoff und Full Jitter bis höchstens 10 s, und meldet bis dahin „nicht bereit“. Ebenso wartet ein Migrationslauf ohne Obergrenze auf die Advisory-Lock, die ein anderer Lauf hält. Das weicht bewusst von der Regel ab, Wiederholungen zu begrenzen: Nach der Regel für Health-Checks heißt eine fehlende Abhängigkeit „nicht bereit“, nicht Absturz, und die Migration einer anderen Instanz darf so viele Anweisungen umfassen, wie sie braucht. Erwogen wurde, nach einer Frist abzubrechen; dann entschiede ein Wettlauf zwischen Datenbankstart und Frist, ob die Instanz startet, und ein Neustart durch Compose begänne das Warten nur von vorn. Ein Signal beendet beide Wartezeiten jederzeit.
+
+Begrenzt ist dagegen jede einzelne Anweisung eines Laufs, das Warten auf Tabellensperren eingeschlossen, auf 60 s (`statement_timeout` der Sitzung). Ohne diese Grenze hielte eine Migration, die an einer fremden Tabellensperre hängt, die Advisory-Lock für immer, und jede andere Instanz wartete mit. Läuft die Frist ab, schlägt die Migration fehl und der Lauf gibt die Lock frei. Eine Anweisung, die länger braucht, etwa eine große Datenänderung, gehört in einen Batch-Job statt in eine Migration.
+
+## Consequences
+
+- Die Grenze zwischen den Schemas ist eine Konvention, keine Durchsetzung: Eine Migration läuft mit den Rechten der Instanz und kann fremde Schemas ansprechen. Eigene Postgres-Rollen je Plugin wären der nächste Schritt.
+- Der Dateiname ist der Schlüssel einer Migration. Eine angewandte Migration, die später geändert wird, erkennt der Runner nicht.
+- Readiness hängt damit von einem einzigen Ladefehler-Grund ab (`migration_failed`); die übrigen Ladefehler berücksichtigt sie weiterhin nicht.

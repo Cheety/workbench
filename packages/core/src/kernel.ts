@@ -1,7 +1,12 @@
-import type { PluginContext } from "@workbench/sdk";
+import {
+	DATABASE_CAPABILITY,
+	type DatabaseCapability,
+	type PluginContext,
+} from "@workbench/sdk";
 import {
 	describeThrown,
 	summarize,
+	type ThrownError,
 	UNKNOWN_FAILURE_REASON,
 } from "./failure-reason.ts";
 import { type HookTimeout, runWithin } from "./hook-timeout.ts";
@@ -15,6 +20,12 @@ import {
 import type { ValidPlugin } from "./plugin-manifest.ts";
 import { dependencyNotLoaded, resolvePlugins } from "./plugin-resolution.ts";
 import { quote } from "./quote.ts";
+import type {
+	MigrationRun,
+	SchemaMigrationOutcome,
+	SchemaMigrations,
+} from "./schema-migrations.ts";
+import { pluginSchemaName, type SchemaName } from "./schema-name.ts";
 import { systemFailureReason } from "./system-error.ts";
 
 export type { HookTimeout } from "./hook-timeout.ts";
@@ -27,10 +38,15 @@ export type {
 
 export type CapabilityProviders = Readonly<Record<string, () => unknown>>;
 
+export type MigrateSchemas = (
+	schemas: readonly SchemaMigrations[],
+) => Promise<MigrationRun>;
+
 export type KernelOptions = {
 	readonly discover: () => Promise<PluginDiscovery>;
 	readonly enabledPlugins: readonly string[];
 	readonly capabilityProviders: CapabilityProviders;
+	readonly migrateSchemas: MigrateSchemas;
 	readonly hookTimeout: HookTimeout;
 	readonly stopSignal?: AbortSignal;
 	readonly logger: Logger;
@@ -94,7 +110,7 @@ async function activateEnabledPlugins(
 	const activationOrder = await resolvePlugins(
 		catalogPlugins(
 			packages,
-			Object.keys(options.capabilityProviders),
+			[DATABASE_CAPABILITY, ...Object.keys(options.capabilityProviders)],
 			options.hookTimeout,
 		),
 		options.enabledPlugins,
@@ -103,10 +119,13 @@ async function activateEnabledPlugins(
 	logger.info("plugins resolved", {
 		activationOrder: activationOrder.map((plugin) => plugin.name),
 	});
-	for (const [position, plugin] of activationOrder.entries()) {
+	const migrated = stopSignal?.aborted
+		? activationOrder
+		: await migratePluginSchemas(activationOrder, options, failures);
+	for (const [position, plugin] of migrated.entries()) {
 		if (stopSignal?.aborted) {
 			logger.info("plugin start stopped", {
-				notActivated: activationOrder
+				notActivated: migrated
 					.slice(position)
 					.map((remaining) => remaining.name),
 			});
@@ -124,6 +143,74 @@ async function activateEnabledPlugins(
 		});
 	}
 	return active;
+}
+
+async function migratePluginSchemas(
+	plugins: readonly ValidPlugin[],
+	{ migrateSchemas }: KernelOptions,
+	failures: LoadFailures,
+): Promise<readonly ValidPlugin[]> {
+	const owners = new Map<SchemaName, ValidPlugin>();
+	const schemas: SchemaMigrations[] = [];
+	for (const plugin of plugins) {
+		if (!plugin.capabilities.includes(DATABASE_CAPABILITY)) continue;
+		try {
+			const schema = pluginSchemaName(plugin.name);
+			schemas.push({ schema, migrations: await plugin.loadMigrations() });
+			owners.set(schema, plugin);
+		} catch (error) {
+			const thrown = describeThrown(error);
+			failures.reject(migrationFailed(plugin, summarize(thrown), thrown));
+		}
+	}
+	if (schemas.length > 0) {
+		try {
+			const run = await migrateSchemas(schemas);
+			if (!run.stopped) rejectUnmigrated(owners, run.outcomes, failures);
+		} catch (error) {
+			const thrown = describeThrown(error);
+			for (const owner of owners.values())
+				failures.reject(migrationFailed(owner, summarize(thrown), thrown));
+		}
+	}
+	return plugins.filter((plugin) => failures.find(plugin.name) === undefined);
+}
+
+function rejectUnmigrated(
+	owners: ReadonlyMap<SchemaName, ValidPlugin>,
+	outcomes: readonly SchemaMigrationOutcome[],
+	failures: LoadFailures,
+): void {
+	const outcomeOf = new Map(
+		outcomes.map((outcome) => [outcome.schema, outcome]),
+	);
+	for (const [schema, owner] of owners) {
+		const outcome = outcomeOf.get(schema);
+		if (outcome === undefined) {
+			failures.reject(
+				migrationFailed(
+					owner,
+					`the migration run reported no outcome for schema ${quote(schema)}`,
+					undefined,
+				),
+			);
+		} else if (!outcome.migrated) {
+			failures.reject(migrationFailed(owner, outcome.detail, outcome.error));
+		}
+	}
+}
+
+function migrationFailed(
+	plugin: ValidPlugin,
+	cause: string,
+	error: ThrownError | undefined,
+): LoadFailure {
+	const failure: LoadFailure = {
+		plugin: plugin.name,
+		reason: "migration_failed",
+		detail: `plugin ${quote(plugin.name)} was not activated because its schema could not be migrated: ${cause}`,
+	};
+	return error === undefined ? failure : { ...failure, error };
 }
 
 async function discoverPackages(
@@ -194,7 +281,7 @@ function provideContext(
 	const granted = new Map<string, unknown>();
 	for (const capability of plugin.capabilities) {
 		try {
-			granted.set(capability, providers[capability]?.());
+			granted.set(capability, provide(capability, plugin.name, providers));
 		} catch (error) {
 			const thrown = describeThrown(error);
 			return {
@@ -218,6 +305,18 @@ function provideContext(
 			},
 		},
 	};
+}
+
+function provide(
+	capability: string,
+	plugin: string,
+	providers: CapabilityProviders,
+): unknown {
+	if (capability === DATABASE_CAPABILITY) {
+		const database: DatabaseCapability = { schema: pluginSchemaName(plugin) };
+		return database;
+	}
+	return providers[capability]?.();
 }
 
 async function deactivate(

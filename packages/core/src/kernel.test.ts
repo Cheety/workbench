@@ -1,9 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
 	definePlugin,
 	type PluginContext,
 	type PluginDefinition,
 } from "@workbench/sdk";
+import { Secret } from "./config.ts";
+import { setSystemTimer } from "./hook-timeout.ts";
 import {
 	type CapabilityProviders,
 	type HookTimeout,
@@ -13,19 +15,16 @@ import {
 	UndeclaredCapabilityError,
 	type UnreadablePackage,
 } from "./kernel.ts";
-import { createLogger } from "./logger.ts";
-
-type LogEntry = Record<string, unknown>;
-
-function recordingLogger() {
-	const entries: LogEntry[] = [];
-	const logger = createLogger({
-		level: "debug",
-		now: () => new Date("2026-11-26T08:00:00.000Z"),
-		write: (line) => entries.push(JSON.parse(line)),
-	});
-	return { logger, entries };
-}
+import {
+	type Migration,
+	type MigrationRun,
+	type MigrationRunner,
+	migrateSchemas,
+	type SchemaMigrations,
+} from "./schema-migrations.ts";
+import { schemaName } from "./schema-name.ts";
+import { createFreshDatabase, type FreshDatabase } from "./testing/postgres.ts";
+import { recordingLogger } from "./testing/recording-logger.ts";
 
 function packageOf(
 	definition: PluginDefinition,
@@ -39,11 +38,37 @@ function packageOf(
 	};
 }
 
+type MigrateSchemas = (
+	schemas: readonly SchemaMigrations[],
+) => Promise<MigrationRun>;
+
+const migrateAll: MigrateSchemas = async (schemas) => ({
+	stopped: false,
+	outcomes: schemas.map(({ schema, migrations }) => ({
+		schema,
+		migrated: true,
+		applied: migrations.map((migration) => migration.name),
+	})),
+});
+
+function withMigrations(
+	pluginPackage: PluginPackage,
+	migrations: readonly Migration[],
+): PluginPackage {
+	return { ...pluginPackage, loadMigrations: async () => migrations };
+}
+
+const CREATE_NOTES: Migration = {
+	name: "0001_create_notes.sql",
+	sql: "CREATE TABLE notes (id bigint PRIMARY KEY);",
+};
+
 type Scenario = {
 	readonly packages: readonly PluginPackage[];
 	readonly unreadable?: readonly UnreadablePackage[];
 	readonly enabledPlugins: readonly string[];
 	readonly capabilityProviders?: CapabilityProviders;
+	readonly migrateSchemas?: MigrateSchemas;
 	readonly hookTimeout?: HookTimeout;
 	readonly stopSignal?: AbortSignal;
 };
@@ -89,6 +114,7 @@ async function start(scenario: Scenario) {
 		}),
 		enabledPlugins: scenario.enabledPlugins,
 		capabilityProviders: scenario.capabilityProviders ?? {},
+		migrateSchemas: scenario.migrateSchemas ?? migrateAll,
 		hookTimeout: scenario.hookTimeout ?? NEVER_EXPIRING,
 		...(scenario.stopSignal === undefined
 			? {}
@@ -1122,6 +1148,7 @@ describe("plugin kernel", () => {
 			discover: () => Promise.reject(failure),
 			enabledPlugins: ["notes"],
 			capabilityProviders: {},
+			migrateSchemas: migrateAll,
 			hookTimeout: NEVER_EXPIRING,
 			logger,
 		});
@@ -1424,6 +1451,7 @@ describe("plugin kernel", () => {
 			discover: () => Promise.reject(new TypeError("packages is not iterable")),
 			enabledPlugins: [],
 			capabilityProviders: {},
+			migrateSchemas: migrateAll,
 			hookTimeout: NEVER_EXPIRING,
 			logger,
 		});
@@ -1440,5 +1468,462 @@ describe("plugin kernel", () => {
 				},
 			}),
 		);
+	});
+});
+
+describe("plugin schemas", () => {
+	function capturingContexts() {
+		const contexts = new Map<string, PluginContext>();
+		const plugin = (manifest: PluginDefinition["manifest"]): PluginDefinition =>
+			definePlugin({
+				manifest,
+				activate: (ctx) => {
+					contexts.set(manifest.name, ctx);
+				},
+			});
+		return { contexts, plugin };
+	}
+
+	test("migrates the schema of each plugin with the database capability before activating any plugin", async () => {
+		const journal: string[] = [];
+		const migrated: SchemaMigrations[][] = [];
+
+		await start({
+			packages: [
+				withMigrations(
+					packageOf(
+						recordingPlugin(journal, {
+							name: "sticky-notes",
+							capabilities: ["database"],
+						}),
+					),
+					[CREATE_NOTES],
+				),
+				packageOf(
+					recordingPlugin(journal, {
+						name: "board",
+						capabilities: ["database"],
+					}),
+				),
+				packageOf(recordingPlugin(journal, { name: "cards" })),
+			],
+			enabledPlugins: ["cards", "sticky-notes", "board"],
+			migrateSchemas: async (schemas) => {
+				migrated.push([...schemas]);
+				journal.push("migrate");
+				return migrateAll(schemas);
+			},
+		});
+
+		expect(migrated).toEqual([
+			[
+				{
+					schema: schemaName("plugin_sticky_notes"),
+					migrations: [CREATE_NOTES],
+				},
+				{ schema: schemaName("plugin_board"), migrations: [] },
+			],
+		]);
+		expect(journal).toEqual([
+			"migrate",
+			"activate cards",
+			"activate sticky-notes",
+			"activate board",
+		]);
+	});
+
+	test("migrates nothing when no enabled plugin declares the database capability", async () => {
+		let called = false;
+
+		await start({
+			packages: [packageOf(definePlugin({ manifest: { name: "cards" } }))],
+			enabledPlugins: ["cards"],
+			migrateSchemas: async (schemas) => {
+				called = true;
+				return migrateAll(schemas);
+			},
+		});
+
+		expect(called).toBe(false);
+	});
+
+	test("tells a plugin with the database capability the name of its schema", async () => {
+		const { contexts, plugin } = capturingContexts();
+
+		await start({
+			packages: [
+				packageOf(plugin({ name: "sticky-notes", capabilities: ["database"] })),
+				packageOf(plugin({ name: "cards" })),
+			],
+			enabledPlugins: ["sticky-notes", "cards"],
+		});
+
+		expect(contexts.get("sticky-notes")?.capability("database")).toEqual({
+			schema: schemaName("plugin_sticky_notes"),
+		});
+		expect(() => contexts.get("cards")?.capability("database")).toThrow(
+			new UndeclaredCapabilityError("cards", "database"),
+		);
+	});
+
+	test("does not load a plugin whose schema migration fails, nor the plugins requiring it", async () => {
+		const journal: string[] = [];
+		const detail =
+			'migration "0001_create_notes.sql" of schema "plugin_notes" failed (PostgresError: syntax error)';
+		const error = { name: "PostgresError", message: "syntax error" };
+
+		const { plugins, entries } = await start({
+			packages: [
+				withMigrations(
+					packageOf(
+						recordingPlugin(journal, {
+							name: "notes",
+							capabilities: ["database"],
+						}),
+					),
+					[CREATE_NOTES],
+				),
+				packageOf(
+					recordingPlugin(journal, {
+						name: "board",
+						requires: { notes: "^1.0.0" },
+					}),
+				),
+				packageOf(
+					recordingPlugin(journal, {
+						name: "cards",
+						capabilities: ["database"],
+					}),
+				),
+			],
+			enabledPlugins: ["notes", "board", "cards"],
+			migrateSchemas: async () => ({
+				stopped: false,
+				outcomes: [
+					{
+						schema: schemaName("plugin_notes"),
+						migrated: false,
+						applied: [],
+						detail,
+						error,
+					},
+					{ schema: schemaName("plugin_cards"), migrated: true, applied: [] },
+				],
+			}),
+		});
+
+		const failure: LoadFailure = {
+			plugin: "notes",
+			reason: "migration_failed",
+			detail: `plugin "notes" was not activated because its schema could not be migrated: ${detail}`,
+			error,
+		};
+		expect(plugins.failures).toEqual([
+			failure,
+			{
+				plugin: "board",
+				reason: "dependency_not_loaded",
+				detail: `plugin "board" requires plugin "notes", which was not loaded: ${failure.detail}`,
+			},
+		]);
+		expect(plugins.active).toEqual(["cards"]);
+		expect(journal).toEqual(["activate cards"]);
+		expect(entries).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				message: "plugin not loaded",
+				...failure,
+			}),
+		);
+	});
+
+	test("does not load the plugins with the database capability when the migration cannot run at all", async () => {
+		const journal: string[] = [];
+
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					recordingPlugin(journal, {
+						name: "notes",
+						capabilities: ["database"],
+					}),
+				),
+				packageOf(recordingPlugin(journal, { name: "cards" })),
+			],
+			enabledPlugins: ["notes", "cards"],
+			migrateSchemas: () =>
+				Promise.reject(new Error("connect ECONNREFUSED 127.0.0.1:5432")),
+		});
+
+		expect(plugins.failures).toEqual([
+			{
+				plugin: "notes",
+				reason: "migration_failed",
+				detail:
+					'plugin "notes" was not activated because its schema could not be migrated: Error: connect ECONNREFUSED 127.0.0.1:5432',
+				error: expect.objectContaining({
+					name: "Error",
+					message: "connect ECONNREFUSED 127.0.0.1:5432",
+				}),
+			},
+		]);
+		expect(journal).toEqual(["activate cards"]);
+	});
+
+	test("attributes each migration outcome to the plugin owning its schema, whatever the order", async () => {
+		const journal: string[] = [];
+		const detail =
+			'migration "0001_create_notes.sql" of schema "plugin_notes" failed (PostgresError: syntax error)';
+
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					recordingPlugin(journal, {
+						name: "notes",
+						capabilities: ["database"],
+					}),
+				),
+				packageOf(
+					recordingPlugin(journal, {
+						name: "cards",
+						capabilities: ["database"],
+					}),
+				),
+			],
+			enabledPlugins: ["notes", "cards"],
+			migrateSchemas: async () => ({
+				stopped: false,
+				outcomes: [
+					{ schema: schemaName("plugin_cards"), migrated: true, applied: [] },
+					{
+						schema: schemaName("plugin_notes"),
+						migrated: false,
+						applied: [],
+						detail,
+					},
+				],
+			}),
+		});
+
+		expect(plugins.failures).toEqual([
+			{
+				plugin: "notes",
+				reason: "migration_failed",
+				detail: `plugin "notes" was not activated because its schema could not be migrated: ${detail}`,
+			},
+		]);
+		expect(journal).toEqual(["activate cards"]);
+	});
+
+	test("does not load a plugin whose schema has no migration outcome", async () => {
+		const journal: string[] = [];
+
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					recordingPlugin(journal, {
+						name: "notes",
+						capabilities: ["database"],
+					}),
+				),
+				packageOf(
+					recordingPlugin(journal, {
+						name: "cards",
+						capabilities: ["database"],
+					}),
+				),
+			],
+			enabledPlugins: ["notes", "cards"],
+			migrateSchemas: async () => ({
+				stopped: false,
+				outcomes: [
+					{ schema: schemaName("plugin_cards"), migrated: true, applied: [] },
+				],
+			}),
+		});
+
+		expect(plugins.failures).toEqual([
+			{
+				plugin: "notes",
+				reason: "migration_failed",
+				detail:
+					'plugin "notes" was not activated because its schema could not be migrated: the migration run reported no outcome for schema "plugin_notes"',
+			},
+		]);
+		expect(journal).toEqual(["activate cards"]);
+	});
+
+	test("does not load a plugin whose migrations cannot be read and migrates the others", async () => {
+		const migrated: string[] = [];
+
+		const { plugins } = await start({
+			packages: [
+				{
+					...packageOf(
+						definePlugin({
+							manifest: { name: "notes", capabilities: ["database"] },
+						}),
+					),
+					loadMigrations: () =>
+						Promise.reject(
+							new Error('"create_notes.sql" does not start with a number'),
+						),
+				},
+				packageOf(
+					definePlugin({
+						manifest: { name: "cards", capabilities: ["database"] },
+					}),
+				),
+			],
+			enabledPlugins: ["notes", "cards"],
+			migrateSchemas: async (schemas) => {
+				migrated.push(...schemas.map(({ schema }) => schema));
+				return migrateAll(schemas);
+			},
+		});
+
+		expect(plugins.failures).toEqual([
+			expect.objectContaining({
+				plugin: "notes",
+				reason: "migration_failed",
+				detail:
+					'plugin "notes" was not activated because its schema could not be migrated: Error: "create_notes.sql" does not start with a number',
+			}),
+		]);
+		expect(plugins.active).toEqual(["cards"]);
+		expect(migrated).toEqual(["plugin_cards"]);
+	});
+
+	test("migrates no schema once it is told to stop while loading the plugins", async () => {
+		const stop = new AbortController();
+		let called = false;
+
+		const { plugins } = await start({
+			packages: [
+				{
+					...packageOf(
+						definePlugin({
+							manifest: { name: "notes", capabilities: ["database"] },
+						}),
+					),
+					loadDefinition: async () => {
+						stop.abort();
+						return definePlugin({
+							manifest: { name: "notes", capabilities: ["database"] },
+						});
+					},
+				},
+			],
+			enabledPlugins: ["notes"],
+			migrateSchemas: async (schemas) => {
+				called = true;
+				return migrateAll(schemas);
+			},
+			stopSignal: stop.signal,
+		});
+
+		expect(called).toBe(false);
+		expect(plugins.active).toEqual([]);
+	});
+
+	test("does not load a plugin that ships migrations without declaring the database capability", async () => {
+		const { plugins } = await start({
+			packages: [
+				withMigrations(
+					packageOf(definePlugin({ manifest: { name: "notes" } })),
+					[CREATE_NOTES],
+				),
+			],
+			enabledPlugins: ["notes"],
+		});
+
+		expect(plugins.failures).toEqual([
+			{
+				plugin: "notes",
+				reason: "invalid_manifest",
+				detail:
+					'plugin package "@workbench/plugin-notes" has an invalid manifest: package.json declares migrations, but manifest.capabilities does not name "database"',
+			},
+		]);
+	});
+
+	test("does not load a plugin whose name is too long for the name of its schema, and migrates nothing for it", async () => {
+		const name = `notes-${"a".repeat(51)}`;
+		let called = false;
+
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					definePlugin({ manifest: { name, capabilities: ["database"] } }),
+				),
+			],
+			enabledPlugins: [name],
+			migrateSchemas: async (schemas) => {
+				called = true;
+				return migrateAll(schemas);
+			},
+		});
+
+		expect(plugins.failures).toEqual([
+			{
+				plugin: name,
+				reason: "invalid_manifest",
+				detail: `plugin package "@workbench/plugin-${name}" has an invalid manifest: manifest.name must have at most 56 characters`,
+			},
+		]);
+		expect(called).toBe(false);
+	});
+});
+
+describe("plugin schemas in Postgres", () => {
+	const databases: FreshDatabase[] = [];
+
+	afterEach(async () => {
+		for (const database of databases.splice(0)) await database.drop();
+	});
+
+	function migratingInto(database: FreshDatabase): MigrateSchemas {
+		const runner: MigrationRunner = {
+			databaseUrl: new Secret(database.url),
+			connectionTimeoutMs: 2_000,
+			statementTimeoutMs: 5_000,
+			lockRetryDelayMs: () => 10,
+			setTimer: setSystemTimer,
+			logger: recordingLogger().logger,
+		};
+		return (schemas) =>
+			migrateSchemas(runner, schemas, new AbortController().signal);
+	}
+
+	test("creates a schema with its tables only for the plugin with the database capability", async () => {
+		const database = await createFreshDatabase();
+		databases.push(database);
+
+		await start({
+			packages: [
+				withMigrations(
+					packageOf(
+						definePlugin({
+							manifest: { name: "sticky-notes", capabilities: ["database"] },
+						}),
+					),
+					[CREATE_NOTES],
+				),
+				packageOf(definePlugin({ manifest: { name: "cards" } })),
+			],
+			enabledPlugins: ["sticky-notes", "cards"],
+			migrateSchemas: migratingInto(database),
+		});
+
+		const schemas = await database.sql<{ schema_name: string }[]>`
+			SELECT schema_name FROM information_schema.schemata
+			WHERE starts_with(schema_name, 'plugin_') ORDER BY schema_name`;
+		const tables = await database.sql<{ table_name: string }[]>`
+			SELECT table_name FROM information_schema.tables
+			WHERE table_schema = 'plugin_sticky_notes'`;
+		expect(schemas.map((row) => row.schema_name)).toEqual([
+			"plugin_sticky_notes",
+		]);
+		expect(tables.map((row) => row.table_name)).toEqual(["notes"]);
 	});
 });
