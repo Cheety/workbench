@@ -25,7 +25,7 @@ beforeAll(async () => {
 		{
 			name: "@fixture/plugin-notes",
 			version: "1.2.3",
-			workbench: { plugin: "./src/plugin.ts" },
+			workbench: { plugin: { name: "notes", entry: "./src/plugin.ts" } },
 		},
 		'export default { manifest: { name: "notes" } };',
 	);
@@ -34,7 +34,7 @@ beforeAll(async () => {
 		{
 			name: "@fixture/plugin-broken",
 			version: "0.1.0",
-			workbench: { plugin: "./src/plugin.ts" },
+			workbench: { plugin: { name: "broken", entry: "./src/plugin.ts" } },
 		},
 		'throw new TypeError("broken on import");',
 	);
@@ -51,14 +51,26 @@ afterAll(async () => {
 });
 
 describe("plugin discovery", () => {
-	test("finds the packages that name a plugin entry, in a stable order", async () => {
+	test("finds the packages that declare a plugin, in a stable order", async () => {
 		const packages = await discoverPluginPackages(packagesDirectory)();
 
 		expect(
-			packages.map(({ packageName, version }) => ({ packageName, version })),
+			packages.map(({ packageName, pluginName, version }) => ({
+				packageName,
+				pluginName,
+				version,
+			})),
 		).toEqual([
-			{ packageName: "@fixture/plugin-broken", version: "0.1.0" },
-			{ packageName: "@fixture/plugin-notes", version: "1.2.3" },
+			{
+				packageName: "@fixture/plugin-broken",
+				pluginName: "broken",
+				version: "0.1.0",
+			},
+			{
+				packageName: "@fixture/plugin-notes",
+				pluginName: "notes",
+				version: "1.2.3",
+			},
 		]);
 	});
 

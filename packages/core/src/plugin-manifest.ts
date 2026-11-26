@@ -31,73 +31,78 @@ export type ValidPlugin = {
 	deactivate(): Promise<void>;
 };
 
-export type InvalidPlugin = {
-	/** The plugin name, if the manifest states a usable one. */
-	readonly name: string | undefined;
-	readonly problems: readonly string[];
-};
-
 export type UnvalidatedPlugin = {
+	/** The plugin name the package's `package.json` declares. */
+	readonly declaredName: string;
 	readonly version: unknown;
 	readonly definition: unknown;
 };
 
-export function isValidPlugin(
-	plugin: ValidPlugin | InvalidPlugin,
-): plugin is ValidPlugin {
-	return !("problems" in plugin);
-}
+export type PluginValidation =
+	| { readonly valid: true; readonly plugin: ValidPlugin }
+	| { readonly valid: false; readonly problems: readonly string[] };
 
 export function validatePlugin(
-	{ version, definition }: UnvalidatedPlugin,
+	{ declaredName, version, definition }: UnvalidatedPlugin,
 	offeredCapabilities: readonly string[],
-): ValidPlugin | InvalidPlugin {
+): PluginValidation {
 	if (!isRecord(definition)) {
 		return {
-			name: undefined,
+			valid: false,
 			problems: ["default export must be a plugin definition"],
 		};
 	}
-	const manifest = isRecord(definition.manifest) ? definition.manifest : {};
-	const name = isPluginName(manifest.name) ? manifest.name : undefined;
-	const requires = readRequires(manifest.requires);
+	const requires = readRequires(definition.manifest);
 	const capabilities = readCapabilities(
-		manifest.capabilities,
+		definition.manifest,
 		offeredCapabilities,
 	);
-	const problems: string[] = [];
-	if (!isRecord(definition.manifest)) {
-		problems.push("manifest must be an object");
-	} else if (name === undefined) {
-		problems.push(
-			"manifest.name must consist of lowercase letters, digits and hyphens and start with a letter",
-		);
-	}
-	problems.push(
+	const problems = [
+		...nameProblems(definition.manifest, declaredName),
 		...requires.problems,
 		...capabilities.problems,
 		...hookProblems(definition, "activate"),
 		...hookProblems(definition, "deactivate"),
-	);
+	];
 	if (!isSemVerVersion(version))
 		problems.push("package.json version must be a SemVer version");
-	if (name === undefined || !isSemVerVersion(version) || problems.length > 0)
-		return { name, problems };
+	if (!isSemVerVersion(version) || problems.length > 0)
+		return { valid: false, problems };
 
 	return {
-		name,
-		version,
-		requires: requires.value,
-		capabilities: capabilities.value,
-		activate: async (ctx) => {
-			if (typeof definition.activate === "function")
-				await definition.activate(ctx);
-		},
-		deactivate: async () => {
-			if (typeof definition.deactivate === "function")
-				await definition.deactivate();
+		valid: true,
+		plugin: {
+			name: declaredName,
+			version,
+			requires: requires.value,
+			capabilities: capabilities.value,
+			activate: async (ctx) => {
+				if (typeof definition.activate === "function")
+					await definition.activate(ctx);
+			},
+			deactivate: async () => {
+				if (typeof definition.deactivate === "function")
+					await definition.deactivate();
+			},
 		},
 	};
+}
+
+function nameProblems(
+	manifest: unknown,
+	declaredName: string,
+): readonly string[] {
+	if (!isRecord(manifest)) return ["manifest must be an object"];
+	if (!isPluginName(manifest.name)) {
+		return [
+			"manifest.name must consist of lowercase letters, digits and hyphens and start with a letter",
+		];
+	}
+	return manifest.name === declaredName
+		? []
+		: [
+				`manifest.name ${quote(manifest.name)} differs from the plugin name ${quote(declaredName)} that package.json declares`,
+			];
 }
 
 type Read<Value> = {
@@ -105,7 +110,8 @@ type Read<Value> = {
 	readonly problems: readonly string[];
 };
 
-function readRequires(requires: unknown): Read<ReadonlyMap<string, string>> {
+function readRequires(manifest: unknown): Read<ReadonlyMap<string, string>> {
+	const requires = isRecord(manifest) ? manifest.requires : undefined;
 	if (requires === undefined) return { value: new Map(), problems: [] };
 	if (!isRecord(requires)) {
 		return {
@@ -132,9 +138,10 @@ function readRequires(requires: unknown): Read<ReadonlyMap<string, string>> {
 }
 
 function readCapabilities(
-	capabilities: unknown,
+	manifest: unknown,
 	offered: readonly string[],
 ): Read<readonly string[]> {
+	const capabilities = isRecord(manifest) ? manifest.capabilities : undefined;
 	if (capabilities === undefined) return { value: [], problems: [] };
 	if (
 		!Array.isArray(capabilities) ||

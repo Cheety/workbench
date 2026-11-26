@@ -1,27 +1,15 @@
 import type { PluginContext } from "@workbench/sdk";
-import { UNKNOWN_FAILURE_REASON } from "./failure-reason.ts";
+import { errorName } from "./failure-reason.ts";
 import { type LoadFailure, LoadFailures } from "./load-failures.ts";
 import type { Logger } from "./logger.ts";
-import {
-	type InvalidPlugin,
-	isValidPlugin,
-	type ValidPlugin,
-	validatePlugin,
-} from "./plugin-manifest.ts";
+import { catalogPlugins, type PluginPackage } from "./plugin-catalog.ts";
+import type { ValidPlugin } from "./plugin-manifest.ts";
 import { dependencyNotLoaded, resolvePlugins } from "./plugin-resolution.ts";
 import { quote } from "./quote.ts";
 import { systemFailureReason } from "./system-error.ts";
 
 export type { LoadFailure } from "./load-failures.ts";
-
-/** A plugin package as discovery found it, before anything is validated. */
-export type PluginPackage = {
-	readonly packageName: string;
-	/** The `version` of the package's `package.json`, as found. */
-	readonly version: unknown;
-	/** Loads the default export of the plugin entry. */
-	readonly loadDefinition: () => Promise<unknown>;
-};
+export type { PluginPackage } from "./plugin-catalog.ts";
 
 /**
  * The capabilities this instance offers, by name. A provider is called once
@@ -63,6 +51,8 @@ export class UndeclaredCapabilityError extends Error {
 /**
  * Runs the plugin lifecycle up to activation: discover the plugin packages,
  * resolve what the instance config enables, activate in dependency order.
+ * Plugins the instance config does not enable are left alone: their entries
+ * are not loaded and their defects are not reported.
  *
  * Never rejects because of a plugin: every plugin that cannot be loaded is
  * logged as "plugin not loaded" and listed in `failures`, the others run.
@@ -74,13 +64,8 @@ export async function startPlugins(
 	const failures = new LoadFailures(logger);
 
 	const packages = await discoverPackages(options);
-	const installed = await loadPlugins(
-		packages,
-		Object.keys(options.capabilityProviders),
-		failures,
-	);
-	const activationOrder = resolvePlugins(
-		installed,
+	const activationOrder = await resolvePlugins(
+		catalogPlugins(packages, Object.keys(options.capabilityProviders)),
 		options.enabledPlugins,
 		failures,
 	);
@@ -136,53 +121,6 @@ async function discoverPackages(
 			reason: systemFailureReason(error),
 		});
 		return [];
-	}
-}
-
-async function loadPlugins(
-	packages: readonly PluginPackage[],
-	offeredCapabilities: readonly string[],
-	failures: LoadFailures,
-): Promise<ReadonlyMap<string, ValidPlugin>> {
-	const installed = new Map<string, ValidPlugin>();
-	for (const pluginPackage of packages) {
-		const plugin = await loadPlugin(pluginPackage, offeredCapabilities);
-		if (isValidPlugin(plugin) && !installed.has(plugin.name)) {
-			installed.set(plugin.name, plugin);
-			continue;
-		}
-		const invalid: InvalidPlugin = isValidPlugin(plugin)
-			? {
-					name: undefined,
-					problems: [
-						`manifest.name ${quote(plugin.name)} is already taken by another plugin package`,
-					],
-				}
-			: plugin;
-		failures.reject({
-			plugin: invalid.name ?? pluginPackage.packageName,
-			reason: "invalid_manifest",
-			detail: `plugin package ${quote(pluginPackage.packageName)} has an invalid manifest: ${invalid.problems.join("; ")}`,
-		});
-	}
-	return installed;
-}
-
-async function loadPlugin(
-	pluginPackage: PluginPackage,
-	offeredCapabilities: readonly string[],
-): Promise<ValidPlugin | InvalidPlugin> {
-	try {
-		const definition = await pluginPackage.loadDefinition();
-		return validatePlugin(
-			{ version: pluginPackage.version, definition },
-			offeredCapabilities,
-		);
-	} catch (error) {
-		return {
-			name: undefined,
-			problems: [`plugin entry failed to load (${errorName(error)})`],
-		};
 	}
 }
 
@@ -245,8 +183,4 @@ async function deactivate(
 		}
 	}
 	return outcome;
-}
-
-function errorName(error: unknown): string {
-	return error instanceof Error ? error.name : UNKNOWN_FAILURE_REASON;
 }

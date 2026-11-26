@@ -1,4 +1,5 @@
 import type { LoadFailure, LoadFailures } from "./load-failures.ts";
+import type { PluginCatalog, PluginLoad } from "./plugin-catalog.ts";
 import type { ValidPlugin } from "./plugin-manifest.ts";
 import { quote } from "./quote.ts";
 
@@ -7,41 +8,46 @@ import { quote } from "./quote.ts";
  * every required plugin before the plugins that require it. Everything else
  * is rejected with the reason; a plugin that requires a rejected plugin is
  * rejected too, and its reason quotes the cause.
+ *
+ * Only enabled plugins are loaded from the catalog, so no code of any other
+ * plugin runs and none of them is rejected.
  */
-export function resolvePlugins(
-	installed: ReadonlyMap<string, ValidPlugin>,
+export async function resolvePlugins(
+	catalog: PluginCatalog,
 	enabledPlugins: readonly string[],
 	failures: LoadFailures,
-): readonly ValidPlugin[] {
+): Promise<readonly ValidPlugin[]> {
 	const enabled = new Set(enabledPlugins);
 	const activationOrder: ValidPlugin[] = [];
 	const resolved = new Map<string, ValidPlugin>();
 	const resolving: string[] = [];
 
-	const rejected = (failure: LoadFailure): LoadFailure => {
+	const rejected = (failure: LoadFailure): PluginLoad => {
 		failures.reject(failure);
-		return failure;
+		return { loaded: false, failure };
 	};
 
-	const resolve = (name: string): ValidPlugin | LoadFailure => {
-		const known = resolved.get(name) ?? failures.find(name);
-		if (known !== undefined) return known;
-		const plugin = installed.get(name);
-		if (plugin === undefined) return rejected(unknownPlugin(name));
-		const failure = firstRequirementFailure(plugin);
+	const resolve = async (name: string): Promise<PluginLoad> => {
+		const plugin = resolved.get(name);
+		if (plugin !== undefined) return { loaded: true, plugin };
+		const known = failures.find(name);
+		if (known !== undefined) return { loaded: false, failure: known };
+		const load = await catalog.load(name);
+		if (!load.loaded) return rejected(load.failure);
+		const failure = await firstRequirementFailure(load.plugin);
 		if (failure !== undefined) return rejected(failure);
-		resolved.set(name, plugin);
-		activationOrder.push(plugin);
-		return plugin;
+		resolved.set(name, load.plugin);
+		activationOrder.push(load.plugin);
+		return load;
 	};
 
-	const firstRequirementFailure = (
+	const firstRequirementFailure = async (
 		plugin: ValidPlugin,
-	): LoadFailure | undefined => {
+	): Promise<LoadFailure | undefined> => {
 		resolving.push(plugin.name);
 		try {
 			for (const [required, range] of plugin.requires) {
-				const failure = requirementFailure(plugin, required, range);
+				const failure = await requirementFailure(plugin, required, range);
 				if (failure !== undefined) return failure;
 			}
 			return undefined;
@@ -50,11 +56,11 @@ export function resolvePlugins(
 		}
 	};
 
-	const requirementFailure = (
+	const requirementFailure = async (
 		plugin: ValidPlugin,
 		required: string,
 		range: string,
-	): LoadFailure | undefined => {
+	): Promise<LoadFailure | undefined> => {
 		const requirement = `plugin ${quote(plugin.name)} requires plugin ${quote(required)}`;
 		if (resolving.includes(required)) {
 			const cycle = [...resolving.slice(resolving.indexOf(required)), required];
@@ -64,8 +70,8 @@ export function resolvePlugins(
 				detail: `plugin ${quote(plugin.name)} is part of a dependency cycle: ${cycle.join(" -> ")}`,
 			};
 		}
-		if (!enabled.has(required) && failures.find(required) === undefined) {
-			const state = installed.has(required)
+		if (!enabled.has(required)) {
+			const state = catalog.isDiscovered(required)
 				? "not enabled in the instance config"
 				: "not installed";
 			return {
@@ -74,20 +80,21 @@ export function resolvePlugins(
 				detail: `${requirement} (${range}), which is ${state}`,
 			};
 		}
-		const requiredPlugin = resolve(required);
-		if (isLoadFailure(requiredPlugin))
-			return dependencyNotLoaded(plugin, required, requiredPlugin);
-		if (!Bun.semver.satisfies(requiredPlugin.version, range)) {
+		const requiredPlugin = await resolve(required);
+		if (!requiredPlugin.loaded)
+			return dependencyNotLoaded(plugin, required, requiredPlugin.failure);
+		const { version } = requiredPlugin.plugin;
+		if (!Bun.semver.satisfies(version, range)) {
 			return {
 				plugin: plugin.name,
 				reason: "version_mismatch",
-				detail: `${requirement} in a version matching ${range}, but ${requiredPlugin.version} is installed`,
+				detail: `${requirement} in a version matching ${range}, but ${version} is installed`,
 			};
 		}
 		return undefined;
 	};
 
-	for (const name of enabledPlugins) resolve(name);
+	for (const name of enabledPlugins) await resolve(name);
 	return activationOrder;
 }
 
@@ -101,18 +108,4 @@ export function dependencyNotLoaded(
 		reason: "dependency_not_loaded",
 		detail: `plugin ${quote(plugin.name)} requires plugin ${quote(required)}, which was not loaded: ${cause.detail}`,
 	};
-}
-
-function unknownPlugin(name: string): LoadFailure {
-	return {
-		plugin: name,
-		reason: "unknown_plugin",
-		detail: `plugin ${quote(name)} is enabled in the instance config, but no plugin package provides it`,
-	};
-}
-
-function isLoadFailure(
-	outcome: ValidPlugin | LoadFailure,
-): outcome is LoadFailure {
-	return "reason" in outcome;
 }

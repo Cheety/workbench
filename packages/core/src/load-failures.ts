@@ -3,6 +3,7 @@ import type { Logger } from "./logger.ts";
 export type LoadFailureReason =
 	| "invalid_manifest"
 	| "unknown_plugin"
+	| "duplicate_plugin"
 	| "missing_dependency"
 	| "version_mismatch"
 	| "dependency_not_loaded"
@@ -11,7 +12,7 @@ export type LoadFailureReason =
 
 /** Why a plugin was not loaded, worded for the operator of the instance. */
 export type LoadFailure = {
-	/** The plugin name, or the plugin package name if the name is unusable. */
+	/** The plugin name, as the instance config or a manifest refers to it. */
 	readonly plugin: string;
 	readonly reason: LoadFailureReason;
 	readonly detail: string;

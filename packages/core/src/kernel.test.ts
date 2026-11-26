@@ -31,6 +31,7 @@ function packageOf(
 ): PluginPackage {
 	return {
 		packageName: `@workbench/plugin-${definition.manifest.name}`,
+		pluginName: definition.manifest.name,
 		version,
 		loadDefinition: async () => definition,
 	};
@@ -118,6 +119,7 @@ describe("plugin kernel", () => {
 			packages: [
 				{
 					packageName: "@workbench/plugin-board",
+					pluginName: "board",
 					version: "1.0.0",
 					loadDefinition: async () => ({
 						manifest: { name: "board", requires: { notes: "not a range" } },
@@ -172,6 +174,12 @@ describe("plugin kernel", () => {
 			"default export must be a plugin definition",
 		],
 		[
+			"a name other than the one package.json declares",
+			{ manifest: { name: "notes" } },
+			"1.0.0",
+			'manifest.name "notes" differs from the plugin name "board" that package.json declares',
+		],
+		[
 			"a required plugin that is not a plugin name",
 			{ manifest: { name: "board", requires: { "Not A Name": "^1.0.0" } } },
 			"1.0.0",
@@ -202,15 +210,17 @@ describe("plugin kernel", () => {
 				packages: [
 					{
 						packageName: "@workbench/plugin-board",
+						pluginName: "board",
 						version,
 						loadDefinition: async () => definition,
 					},
 				],
-				enabledPlugins: [],
+				enabledPlugins: ["board"],
 			});
 
 			expect(plugins.failures).toEqual([
 				expect.objectContaining({
+					plugin: "board",
 					reason: "invalid_manifest",
 					detail: `plugin package "@workbench/plugin-board" has an invalid manifest: ${problem}`,
 				}),
@@ -218,21 +228,58 @@ describe("plugin kernel", () => {
 		},
 	);
 
-	test("names the plugin package when the manifest gives no usable name", async () => {
+	test("does not load the entry of a plugin the instance config does not enable", async () => {
+		const loaded: string[] = [];
+		const tracked = (name: string): PluginPackage => ({
+			...packageOf(definePlugin({ manifest: { name } })),
+			loadDefinition: async () => {
+				loaded.push(name);
+				return definePlugin({ manifest: { name } });
+			},
+		});
+
+		const { plugins } = await start({
+			packages: [tracked("board"), tracked("notes")],
+			enabledPlugins: ["notes"],
+		});
+
+		expect(loaded).toEqual(["notes"]);
+		expect(plugins.active).toEqual(["notes"]);
+	});
+
+	test("reports no load failure for a broken plugin the instance config does not enable", async () => {
+		const { plugins, entries } = await start({
+			packages: [
+				packageOf(definePlugin({ manifest: { name: "board" } }), "one"),
+				packageOf(definePlugin({ manifest: { name: "notes" } })),
+			],
+			enabledPlugins: ["notes"],
+		});
+
+		expect(plugins.failures).toEqual([]);
+		expect(entries.map((entry) => entry.message)).not.toContain(
+			"plugin not loaded",
+		);
+	});
+
+	test("keeps a plugin apart from a plugin package of the same name", async () => {
 		const { plugins } = await start({
 			packages: [
 				{
-					packageName: "@workbench/plugin-board",
+					packageName: "notes",
+					pluginName: "board",
 					version: "1.0.0",
 					loadDefinition: async () => ({ manifest: { name: 7 } }),
 				},
+				packageOf(definePlugin({ manifest: { name: "notes" } })),
 			],
-			enabledPlugins: [],
+			enabledPlugins: ["board", "notes"],
 		});
 
 		expect(plugins.failures.map((failure) => failure.plugin)).toEqual([
-			"@workbench/plugin-board",
+			"board",
 		]);
+		expect(plugins.active).toEqual(["notes"]);
 	});
 
 	test("reports a plugin whose entry cannot be loaded without leaking the error text", async () => {
@@ -240,17 +287,18 @@ describe("plugin kernel", () => {
 			packages: [
 				{
 					packageName: "@workbench/plugin-board",
+					pluginName: "board",
 					version: "1.0.0",
 					loadDefinition: () =>
 						Promise.reject(new SyntaxError("s3cr3t-detail")),
 				},
 			],
-			enabledPlugins: [],
+			enabledPlugins: ["board"],
 		});
 
 		expect(plugins.failures).toEqual([
 			{
-				plugin: "@workbench/plugin-board",
+				plugin: "board",
 				reason: "invalid_manifest",
 				detail:
 					'plugin package "@workbench/plugin-board" has an invalid manifest: plugin entry failed to load (SyntaxError)',
@@ -468,31 +516,56 @@ describe("plugin kernel", () => {
 		expect(journal).toEqual([]);
 	});
 
-	test("loads only the first of two plugin packages that claim the same plugin name", async () => {
+	test("loads none of several plugin packages that declare the same plugin name", async () => {
 		const journal: string[] = [];
 
 		const { plugins } = await start({
 			packages: [
 				packageOf(recordingPlugin(journal, { name: "notes" })),
 				{
+					...packageOf(recordingPlugin(journal, { name: "notes" })),
 					packageName: "@workbench/plugin-notes-copy",
-					version: "1.0.0",
-					loadDefinition: async () =>
-						recordingPlugin(journal, { name: "notes" }),
 				},
+				packageOf(
+					recordingPlugin(journal, {
+						name: "board",
+						requires: { notes: "^1.0.0" },
+					}),
+				),
 			],
-			enabledPlugins: ["notes"],
+			enabledPlugins: ["notes", "board"],
 		});
 
 		expect(plugins.failures).toEqual([
 			{
-				plugin: "@workbench/plugin-notes-copy",
-				reason: "invalid_manifest",
+				plugin: "notes",
+				reason: "duplicate_plugin",
 				detail:
-					'plugin package "@workbench/plugin-notes-copy" has an invalid manifest: manifest.name "notes" is already taken by another plugin package',
+					'plugin "notes" is declared by several plugin packages: "@workbench/plugin-notes", "@workbench/plugin-notes-copy"',
 			},
+			expect.objectContaining({
+				plugin: "board",
+				reason: "dependency_not_loaded",
+			}),
 		]);
-		expect(journal).toEqual(["activate notes"]);
+		expect(journal).toEqual([]);
+	});
+
+	test("ignores plugin packages that declare the same plugin name while the instance config does not enable it", async () => {
+		const { plugins } = await start({
+			packages: [
+				packageOf(definePlugin({ manifest: { name: "notes" } })),
+				{
+					...packageOf(definePlugin({ manifest: { name: "notes" } })),
+					packageName: "@workbench/plugin-notes-copy",
+				},
+				packageOf(definePlugin({ manifest: { name: "board" } })),
+			],
+			enabledPlugins: ["board"],
+		});
+
+		expect(plugins.failures).toEqual([]);
+		expect(plugins.active).toEqual(["board"]);
 	});
 
 	test("does not load a plugin whose activation fails, nor the plugins requiring it", async () => {

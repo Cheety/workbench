@@ -4,7 +4,10 @@
 	"private": true,
 	"type": "module",
 	"workbench": {
-		"plugin": "./src/plugin.ts"
+		"plugin": {
+			"name": "reference",
+			"entry": "./src/plugin.ts"
+		}
 	},
 	"dependencies": {
 		"@workbench/sdk": "workspace:*"

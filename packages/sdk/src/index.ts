@@ -5,7 +5,8 @@
 export type PluginManifest = {
 	/**
 	 * The name the instance config and other plugins refer to: lowercase
-	 * letters, digits and hyphens, starting with a letter.
+	 * letters, digits and hyphens, starting with a letter. It must equal
+	 * `workbench.plugin.name` of the package's `package.json`.
 	 */
 	readonly name: string;
 	/** Required plugins by name, each with the SemVer range it must satisfy. */
@@ -33,7 +34,7 @@ export type PluginDefinition = {
 
 /**
  * Declares a plugin; the result is the default export of the plugin entry
- * named in `workbench.plugin` of the package's `package.json`.
+ * named in `workbench.plugin.entry` of the package's `package.json`.
  *
  * It only anchors the type: the kernel validates what it loads, because a
  * loaded module is untyped at runtime.

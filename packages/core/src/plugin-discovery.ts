@@ -2,14 +2,16 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { PluginPackage } from "./kernel.ts";
+import { isPluginName } from "./plugin-manifest.ts";
 
 const PACKAGE_JSON = "package.json";
 
 /**
  * Finds the plugin packages among the packages in `packagesDirectory`: those
- * whose `package.json` names a plugin entry in `workbench.plugin`, a path
- * relative to the package (ADR-0007). Other directories are not plugins and
- * are skipped. No plugin code is loaded before `loadDefinition` is called.
+ * whose `package.json` declares a plugin in `workbench.plugin`, with the plugin
+ * `name` and the `entry`, a path relative to the package (ADR-0007). Other
+ * directories are not plugins and are skipped. No plugin code is loaded before
+ * `loadDefinition` is called.
  *
  * The returned function rejects if the directory or a `package.json` in it
  * cannot be read.
@@ -40,10 +42,13 @@ async function readPluginPackage(
 	const packageJson: unknown = await file.json();
 	if (!isRecord(packageJson) || !isRecord(packageJson.workbench))
 		return undefined;
-	const entry = packageJson.workbench.plugin;
-	if (typeof entry !== "string") return undefined;
+	const declared = packageJson.workbench.plugin;
+	if (!isRecord(declared)) return undefined;
+	const { name: pluginName, entry } = declared;
+	if (!isPluginName(pluginName) || typeof entry !== "string") return undefined;
 	return {
 		packageName: typeof packageJson.name === "string" ? packageJson.name : root,
+		pluginName,
 		version: packageJson.version,
 		loadDefinition: async () => {
 			const module: unknown = await import(

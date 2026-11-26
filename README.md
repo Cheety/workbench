@@ -46,7 +46,17 @@ Logs sind JSON-Zeilen auf der Standardausgabe. Jede Anfrage trägt eine Korrelat
 
 ## Plugins
 
-Ein Plugin-Paket ist ein Paket unter `packages/`, dessen `package.json` unter `workbench.plugin` den Pfad seines Einstiegs nennt. Der Einstieg exportiert als Default das Ergebnis von `definePlugin()` aus `@workbench/sdk`:
+Ein Plugin-Paket ist ein Paket unter `packages/`, dessen `package.json` unter `workbench.plugin` den Namen des Plugins und den Pfad seines Einstiegs nennt:
+
+```json
+{
+	"name": "@workbench/plugin-board",
+	"version": "1.0.0",
+	"workbench": { "plugin": { "name": "board", "entry": "./src/plugin.ts" } }
+}
+```
+
+Der Einstieg exportiert als Default das Ergebnis von `definePlugin()` aus `@workbench/sdk`:
 
 ```ts
 import { definePlugin } from "@workbench/sdk";
@@ -62,23 +72,24 @@ export default definePlugin({
 });
 ```
 
-- `name` ist der Name, unter dem die Instanz-Config und andere Plugins das Plugin ansprechen: Kleinbuchstaben, Ziffern und Bindestriche, beginnend mit einem Buchstaben. Die Version ist die `version` der `package.json`.
+- `name` ist der Name, unter dem die Instanz-Config und andere Plugins das Plugin ansprechen: Kleinbuchstaben, Ziffern und Bindestriche, beginnend mit einem Buchstaben. Er muss dem Namen in der `package.json` gleichen. Die Version ist die `version` der `package.json`.
 - `requires` nennt vorausgesetzte Plugins mit SemVer-Range (`^`, `~`, Vergleichsoperatoren, `x`/`*`, mit Leerzeichen oder `||` kombiniert).
 - `capabilities` nennt die Capabilities, die das Plugin braucht. `ctx.capability(name)` liefert nur deklarierte und wirft sonst einen Fehler. Der Core bietet noch keine Capability an; ein Manifest, das eine unbekannte deklariert, ist ungültig.
 
-Beim Start entdeckt der Kernel die Plugin-Pakete, löst `requires` für die in `PLUGINS` genannten Plugins auf und aktiviert sie, vorausgesetzte zuerst. Beim Shutdown (`SIGTERM`, `SIGINT`) stoppt erst der Server, dann werden die Plugins in umgekehrter Reihenfolge deaktiviert. Änderungen an `PLUGINS` wirken nach einem Neustart.
+Beim Start entdeckt der Kernel die Plugin-Pakete, lädt die Einstiege der in `PLUGINS` genannten Plugins, löst ihre `requires` auf und aktiviert sie, vorausgesetzte zuerst. Von einem Plugin, das nicht in `PLUGINS` steht, läuft kein Code, und seine Mängel sind kein Ladefehler. Beim Shutdown (`SIGTERM`, `SIGINT`) stoppt erst der Server, dann werden die Plugins in umgekehrter Reihenfolge deaktiviert. Änderungen an `PLUGINS` wirken nach einem Neustart.
 
 Kann ein Plugin nicht geladen werden, startet die Instanz trotzdem. Das Log nennt jeden Ladefehler als Eintrag `plugin not loaded` mit `plugin`, `reason` und einer ausformulierten Meldung in `detail`; der Eintrag `plugins started` fasst aktive (`active`) und nicht geladene (`notLoaded`) Plugins zusammen.
 
-| `reason`                | Bedeutung                                                                                     |
-| ----------------------- | --------------------------------------------------------------------------------------------- |
-| `invalid_manifest`      | Manifest oder Paketversion ungültig, Einstieg nicht ladbar oder Plugin-Name doppelt vergeben. |
-| `unknown_plugin`        | In `PLUGINS` genannt, aber kein Plugin-Paket stellt das Plugin bereit.                        |
-| `missing_dependency`    | Ein vorausgesetztes Plugin ist nicht installiert oder nicht in `PLUGINS` aktiviert.           |
-| `version_mismatch`      | Die Version eines vorausgesetzten Plugins erfüllt die Range nicht.                            |
-| `dependency_not_loaded` | Ein vorausgesetztes Plugin wurde selbst nicht geladen; `detail` nennt dessen Ursache.         |
-| `dependency_cycle`      | Plugins setzen einander im Kreis voraus.                                                      |
-| `activation_failed`     | `activate` des Plugins ist fehlgeschlagen.                                                    |
+| `reason`                | Bedeutung                                                                                      |
+| ----------------------- | ---------------------------------------------------------------------------------------------- |
+| `invalid_manifest`      | Manifest oder Paketversion ungültig, Einstieg nicht ladbar oder Name anders als im Paket.      |
+| `unknown_plugin`        | In `PLUGINS` genannt, aber kein Plugin-Paket stellt das Plugin bereit.                         |
+| `duplicate_plugin`      | Mehrere Plugin-Pakete deklarieren denselben Plugin-Namen; keines davon wird geladen.           |
+| `missing_dependency`    | Ein vorausgesetztes Plugin ist nicht installiert oder nicht in `PLUGINS` aktiviert.            |
+| `version_mismatch`      | Die Version eines vorausgesetzten Plugins erfüllt die Range nicht.                             |
+| `dependency_not_loaded` | Ein vorausgesetztes Plugin wurde selbst nicht geladen; `detail` nennt dessen Ursache.          |
+| `dependency_cycle`      | Plugins setzen einander im Kreis voraus.                                                       |
+| `activation_failed`     | `activate` des Plugins ist fehlgeschlagen.                                                     |
 
 ## Umgebungsvariablen
 
