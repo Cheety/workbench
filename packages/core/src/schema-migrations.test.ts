@@ -220,7 +220,11 @@ describe("schema migrations", () => {
 				},
 			],
 		};
-		await migrateSchemas(url, [], recordingLogger().logger);
+		await migrateSchemas(
+			url,
+			[{ schema: gated.schema, migrations: [] }],
+			recordingLogger().logger,
+		);
 		const holder = new SQL(database.url, { max: 1 });
 		await holder.unsafe("BEGIN; SELECT id FROM public.gate FOR UPDATE;");
 		const { logger } = recordingLogger();
@@ -234,6 +238,10 @@ describe("schema migrations", () => {
 		await holder.close();
 		const outcomes = await runs;
 
+		expect(outcomes.flat().map((outcome) => outcome.migrated)).toEqual([
+			true,
+			true,
+		]);
 		expect(
 			outcomes.flat().map((outcome) => outcome.applied),
 		).toContainAllValues([["0001_wait_at_gate.sql"], []]);
