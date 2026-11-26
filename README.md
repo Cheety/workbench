@@ -80,16 +80,16 @@ Beim Start entdeckt der Kernel die Plugin-Pakete, lädt die Einstiege der in `PL
 
 Kann ein Plugin nicht geladen werden, startet die Instanz trotzdem. Das Log nennt jeden Ladefehler als Eintrag `plugin not loaded` mit `plugin`, `reason` und einer ausformulierten Meldung in `detail`; der Eintrag `plugins started` fasst aktive (`active`) und nicht geladene (`notLoaded`) Plugins zusammen.
 
-| `reason`                | Bedeutung                                                                                      |
-| ----------------------- | ---------------------------------------------------------------------------------------------- |
-| `invalid_manifest`      | Manifest oder Paketversion ungültig, Einstieg nicht ladbar oder Name anders als im Paket.      |
-| `unknown_plugin`        | In `PLUGINS` genannt, aber kein Plugin-Paket stellt das Plugin bereit.                         |
-| `duplicate_plugin`      | Mehrere Plugin-Pakete deklarieren denselben Plugin-Namen; keines davon wird geladen.           |
-| `missing_dependency`    | Ein vorausgesetztes Plugin ist nicht installiert oder nicht in `PLUGINS` aktiviert.            |
-| `version_mismatch`      | Die Version eines vorausgesetzten Plugins erfüllt die Range nicht.                             |
-| `dependency_not_loaded` | Ein vorausgesetztes Plugin wurde selbst nicht geladen; `detail` nennt dessen Ursache.          |
-| `dependency_cycle`      | Plugins setzen einander im Kreis voraus.                                                       |
-| `activation_failed`     | `activate` des Plugins ist fehlgeschlagen.                                                     |
+| `reason`                | Bedeutung                                                                                 |
+| ----------------------- | ----------------------------------------------------------------------------------------- |
+| `invalid_manifest`      | Manifest oder Paketversion ungültig, Einstieg nicht ladbar oder Name anders als im Paket. |
+| `unknown_plugin`        | In `PLUGINS` genannt, aber kein Plugin-Paket stellt das Plugin bereit.                    |
+| `duplicate_plugin`      | Mehrere Plugin-Pakete deklarieren denselben Plugin-Namen; keines davon wird geladen.      |
+| `missing_dependency`    | Ein vorausgesetztes Plugin ist nicht installiert oder nicht in `PLUGINS` aktiviert.       |
+| `version_mismatch`      | Die Version eines vorausgesetzten Plugins erfüllt die Range nicht.                        |
+| `dependency_not_loaded` | Ein vorausgesetztes Plugin wurde selbst nicht geladen; `detail` nennt dessen Ursache.     |
+| `dependency_cycle`      | Plugins setzen einander im Kreis voraus.                                                  |
+| `activation_failed`     | `activate` des Plugins ist fehlgeschlagen.                                                |
 
 ## Umgebungsvariablen
 
