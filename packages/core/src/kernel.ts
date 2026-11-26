@@ -72,7 +72,8 @@ export class UndeclaredCapabilityError extends Error {
  * are not loaded and their defects are not reported.
  *
  * A plugin whose entry does not finish loading within the hook timeout is not
- * loaded. A plugin whose `activate` throws or does not finish within the hook
+ * loaded. A plugin for which a capability provider throws is not loaded and
+ * its `activate` is not called. A plugin whose `activate` throws or does not finish within the hook
  * timeout is not loaded and is not deactivated later.
  *
  * Never rejects because of a plugin: every plugin that cannot be loaded is
@@ -185,9 +186,11 @@ async function activate(
 		if (cause !== undefined)
 			return dependencyNotLoaded(plugin, required, cause);
 	}
+	const provision = provideContext(plugin, capabilityProviders);
+	if (!provision.provided) return provision.failure;
 	try {
 		const outcome = await runWithin(
-			() => plugin.activate(contextFor(plugin, capabilityProviders)),
+			() => plugin.activate(provision.context),
 			hookTimeout,
 		);
 		if (outcome === "finished") return undefined;
@@ -207,21 +210,39 @@ async function activate(
 	}
 }
 
-function contextFor(
+type ContextProvision =
+	| { readonly provided: true; readonly context: PluginContext }
+	| { readonly provided: false; readonly failure: LoadFailure };
+
+function provideContext(
 	plugin: ValidPlugin,
 	providers: CapabilityProviders,
-): PluginContext {
-	const granted = new Map(
-		plugin.capabilities.map((capability) => [
-			capability,
-			providers[capability]?.(),
-		]),
-	);
+): ContextProvision {
+	const granted = new Map<string, unknown>();
+	for (const capability of plugin.capabilities) {
+		try {
+			granted.set(capability, providers[capability]?.());
+		} catch (error) {
+			const thrown = describeThrown(error);
+			return {
+				provided: false,
+				failure: {
+					plugin: plugin.name,
+					reason: "capability_unavailable",
+					detail: `plugin ${quote(plugin.name)} was not activated because the instance could not provide the capability ${quote(capability)} (${summarize(thrown)})`,
+					error: thrown,
+				},
+			};
+		}
+	}
 	return {
-		capability: (name) => {
-			if (!granted.has(name))
-				throw new UndeclaredCapabilityError(plugin.name, name);
-			return granted.get(name);
+		provided: true,
+		context: {
+			capability: (name) => {
+				if (!granted.has(name))
+					throw new UndeclaredCapabilityError(plugin.name, name);
+				return granted.get(name);
+			},
 		},
 	};
 }

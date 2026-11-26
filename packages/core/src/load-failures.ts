@@ -10,6 +10,7 @@ export type LoadFailureReason =
 	| "version_mismatch"
 	| "dependency_not_loaded"
 	| "dependency_cycle"
+	| "capability_unavailable"
 	| "activation_failed"
 	| "activation_timed_out";
 
@@ -19,7 +20,7 @@ export type LoadFailure = {
 	readonly plugin: string;
 	readonly reason: LoadFailureReason;
 	readonly detail: string;
-	/** What the plugin threw, if that is why it was not loaded. */
+	/** What the plugin or a capability provider threw, if that is why it was not loaded. */
 	readonly error?: ThrownError;
 };
 

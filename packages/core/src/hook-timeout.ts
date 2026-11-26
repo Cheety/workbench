@@ -27,15 +27,17 @@ export function runWithin(
 ): Promise<HookOutcome> {
 	return new Promise((resolve, reject) => {
 		const cancel = timeout.setTimer(() => resolve("timed_out"), timeout.ms);
-		hook().then(
-			() => {
+		const fail = (error: unknown) => {
+			cancel();
+			reject(error);
+		};
+		try {
+			hook().then(() => {
 				cancel();
 				resolve("finished");
-			},
-			(error: unknown) => {
-				cancel();
-				reject(error);
-			},
-		);
+			}, fail);
+		} catch (error) {
+			fail(error);
+		}
 	});
 }

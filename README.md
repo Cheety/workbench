@@ -82,20 +82,21 @@ Jedes Plugin hat für das Laden seines Einstiegs, für `activate` und für `deac
 
 Ein Paket, dessen `package.json` nicht lesbar ist oder `workbench.plugin` in anderer Form angibt, überspringt der Kernel; das Log nennt es als Eintrag `plugin package ignored` mit Verzeichnis (`directory`) und Grund (`problem`). Die übrigen Plugin-Pakete sind davon nicht betroffen.
 
-Kann ein Plugin nicht geladen werden, startet die Instanz trotzdem. Das Log nennt jeden Ladefehler als Eintrag `plugin not loaded` mit `plugin`, `reason` und einer ausformulierten Meldung in `detail`; der Eintrag `plugins started` fasst aktive (`active`) und nicht geladene (`notLoaded`) Plugins zusammen. Hat Code des Plugins einen Fehler geworfen, steht er mit Name, Meldung und Stacktrace in `error`, ebenso im Eintrag `plugin failed to deactivate`. Fehlermeldungen eines Plugins stehen damit im Log und dürfen keine Secrets enthalten.
+Kann ein Plugin nicht geladen werden, startet die Instanz trotzdem. Das Log nennt jeden Ladefehler als Eintrag `plugin not loaded` mit `plugin`, `reason` und einer ausformulierten Meldung in `detail`; der Eintrag `plugins started` fasst aktive (`active`) und nicht geladene (`notLoaded`) Plugins zusammen. Hat Code des Plugins oder der Core beim Bereitstellen einer Capability einen Fehler geworfen, steht er mit Name, Meldung und Stacktrace in `error`, ebenso im Eintrag `plugin failed to deactivate`. Fehlermeldungen eines Plugins stehen damit im Log und dürfen keine Secrets enthalten.
 
-| `reason`                | Bedeutung                                                                                             |
-| ----------------------- | ----------------------------------------------------------------------------------------------------- |
-| `invalid_manifest`      | Manifest oder Paketversion ungültig, Einstieg nicht ladbar oder Name anders als im Paket.             |
-| `load_timed_out`        | Der Einstieg des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` geladen.                  |
-| `unknown_plugin`        | In `PLUGINS` genannt, aber kein Plugin-Paket stellt das Plugin bereit.                                |
-| `duplicate_plugin`      | Mehrere Plugin-Pakete deklarieren denselben Plugin-Namen; keines davon wird geladen.                  |
-| `missing_dependency`    | Kein Plugin-Paket stellt ein vorausgesetztes Plugin bereit, oder es ist nicht in `PLUGINS` aktiviert. |
-| `version_mismatch`      | Die Version eines vorausgesetzten Plugins erfüllt die Range nicht.                                    |
-| `dependency_not_loaded` | Ein vorausgesetztes Plugin wurde selbst nicht geladen; `detail` nennt dessen Ursache.                 |
-| `dependency_cycle`      | Plugins setzen einander im Kreis voraus; jedes Plugin des Kreises erhält diesen Grund.                |
-| `activation_failed`     | `activate` des Plugins ist fehlgeschlagen.                                                            |
-| `activation_timed_out`  | `activate` des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` fertig.                     |
+| `reason`                 | Bedeutung                                                                                             |
+| ------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `invalid_manifest`       | Manifest oder Paketversion ungültig, Einstieg nicht ladbar oder Name anders als im Paket.             |
+| `load_timed_out`         | Der Einstieg des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` geladen.                  |
+| `unknown_plugin`         | In `PLUGINS` genannt, aber kein Plugin-Paket stellt das Plugin bereit.                                |
+| `duplicate_plugin`       | Mehrere Plugin-Pakete deklarieren denselben Plugin-Namen; keines davon wird geladen.                  |
+| `missing_dependency`     | Kein Plugin-Paket stellt ein vorausgesetztes Plugin bereit, oder es ist nicht in `PLUGINS` aktiviert. |
+| `version_mismatch`       | Die Version eines vorausgesetzten Plugins erfüllt die Range nicht.                                    |
+| `dependency_not_loaded`  | Ein vorausgesetztes Plugin wurde selbst nicht geladen; `detail` nennt dessen Ursache.                 |
+| `dependency_cycle`       | Plugins setzen einander im Kreis voraus; jedes Plugin des Kreises erhält diesen Grund.                |
+| `capability_unavailable` | Der Core konnte eine deklarierte Capability nicht bereitstellen; `activate` wurde nicht aufgerufen.   |
+| `activation_failed`      | `activate` des Plugins ist fehlgeschlagen.                                                            |
+| `activation_timed_out`   | `activate` des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` fertig.                     |
 
 ## Umgebungsvariablen
 

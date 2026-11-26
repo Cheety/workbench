@@ -1234,4 +1234,87 @@ describe("plugin kernel", () => {
 		expect(plugins.active).toEqual([]);
 		expect(plugins.failures).toEqual([]);
 	});
+
+	test("stops the clock of a plugin entry whose loading throws at once", async () => {
+		const timers = manualTimers();
+
+		const { plugins } = await start({
+			packages: [
+				{
+					packageName: "@workbench/plugin-notes",
+					pluginName: "notes",
+					version: "1.0.0",
+					loadDefinition: () => {
+						throw new SyntaxError("Unexpected token '}'");
+					},
+				},
+			],
+			enabledPlugins: ["notes"],
+			hookTimeout: { ms: 5000, setTimer: timers.setTimer },
+		});
+
+		expect(plugins.failures.map((failure) => failure.reason)).toEqual([
+			"invalid_manifest",
+		]);
+		expect(timers.delaysMs).toEqual([5000]);
+		expect(timers.cancelled()).toBe(1);
+	});
+
+	test("does not blame a plugin for a capability the instance fails to provide", async () => {
+		const journal: string[] = [];
+		const timers = manualTimers();
+
+		const { plugins, entries } = await start({
+			packages: [
+				packageOf(
+					recordingPlugin(journal, { name: "notes", capabilities: ["clock"] }),
+				),
+				packageOf(
+					recordingPlugin(journal, {
+						name: "board",
+						requires: { notes: "^1.0.0" },
+					}),
+				),
+				packageOf(recordingPlugin(journal, { name: "cards" })),
+			],
+			enabledPlugins: ["notes", "board", "cards"],
+			capabilityProviders: {
+				clock: () => {
+					throw new RangeError("clock offline");
+				},
+			},
+			hookTimeout: { ms: 5000, setTimer: timers.setTimer },
+		});
+
+		const detail =
+			'plugin "notes" was not activated because the instance could not provide the capability "clock" (RangeError: clock offline)';
+		expect(plugins.failures).toEqual([
+			{
+				plugin: "notes",
+				reason: "capability_unavailable",
+				detail,
+				error: {
+					name: "RangeError",
+					message: "clock offline",
+					stack: expect.stringContaining("kernel.test.ts"),
+				},
+			},
+			{
+				plugin: "board",
+				reason: "dependency_not_loaded",
+				detail: `plugin "board" requires plugin "notes", which was not loaded: ${detail}`,
+			},
+		]);
+		expect(plugins.active).toEqual(["cards"]);
+		expect(journal).toEqual(["activate cards"]);
+		expect(timers.cancelled()).toBe(timers.delaysMs.length);
+		expect(entries).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				message: "plugin not loaded",
+				plugin: "notes",
+				reason: "capability_unavailable",
+			}),
+		);
+	});
 });
