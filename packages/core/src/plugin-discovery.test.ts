@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discoverPluginPackages } from "./plugin-discovery.ts";
@@ -184,6 +184,32 @@ describe("plugin discovery", () => {
 				},
 			],
 		});
+	});
+
+	test("finds and loads a plugin package that is linked into the directory", async () => {
+		const directory = await temporaryDirectory();
+		const elsewhere = await temporaryDirectory();
+		await writeNotesPlugin(join(elsewhere, "notes"), "./src/plugin.ts");
+		await symlink(join(elsewhere, "notes"), join(directory, "plugin-notes"));
+
+		const { packages, unreadable } = await discoverPluginPackages(directory)();
+		const definition = await packages[0]?.loadDefinition();
+
+		expect(packages.map(({ pluginName }) => pluginName)).toEqual(["notes"]);
+		expect(unreadable).toEqual([]);
+		expect(definition).toEqual({ manifest: { name: "notes" } });
+	});
+
+	test("skips links that do not lead to a package", async () => {
+		const directory = await temporaryDirectory();
+		await writeFile(join(directory, "README.md"), "not a directory");
+		await symlink(join(directory, "README.md"), join(directory, "to-a-file"));
+		await symlink(join(directory, "gone"), join(directory, "to-nothing"));
+		await symlink(join(directory, "to-itself"), join(directory, "to-itself"));
+
+		const discovery = await discoverPluginPackages(directory)();
+
+		expect(discovery).toEqual({ packages: [], unreadable: [] });
 	});
 
 	test("fails when the directory cannot be read", async () => {

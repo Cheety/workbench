@@ -27,7 +27,7 @@ export function discoverPluginPackages(
 	return async () => {
 		const entries = await readdir(packagesDirectory, { withFileTypes: true });
 		const directories = entries
-			.filter((entry) => entry.isDirectory())
+			.filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
 			.map((entry) => entry.name)
 			.sort();
 		const found = await Promise.all(
