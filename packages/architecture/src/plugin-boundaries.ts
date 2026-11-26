@@ -17,7 +17,7 @@ type ContractExportViolation = {
 type PluginPackage = {
 	readonly root: string;
 	readonly packageName: string;
-	readonly contractDirectory: string | undefined;
+	readonly contractFile: string | undefined;
 	readonly contractProblem: ContractExportViolation["rule"] | undefined;
 };
 
@@ -83,14 +83,7 @@ function violatedRule(
 	if (target === undefined || isContractImport(target, importPath))
 		return undefined;
 	if (target !== plugin) return "foreign_plugin_internals";
-	const { contractDirectory } = plugin;
-	const isFromContract =
-		contractDirectory !== undefined && isWithin(file, contractDirectory);
-	const staysInContract =
-		contractDirectory !== undefined &&
-		importedFile !== undefined &&
-		isWithin(importedFile, contractDirectory);
-	return isFromContract && !staysInContract
+	return file === plugin.contractFile && importedFile !== file
 		? "contract_imports_plugin_code"
 		: undefined;
 }
@@ -128,24 +121,24 @@ async function readPluginPackage(
 	const contract = isRecord(packageJson.exports)
 		? packageJson.exports[`./${CONTRACT_SUBPATH}`]
 		: undefined;
-	const contractDirectory =
-		typeof contract === "string" ? dirname(resolve(root, contract)) : undefined;
+	const contractFile =
+		typeof contract === "string" ? resolve(root, contract) : undefined;
 	return {
 		root,
 		packageName: packageJson.name,
-		contractDirectory,
-		contractProblem: contractProblemOf(contract, contractDirectory, entry),
+		contractFile,
+		contractProblem: contractProblemOf(contract, contractFile, entry),
 	};
 }
 
 function contractProblemOf(
 	contract: unknown,
-	contractDirectory: string | undefined,
+	contractFile: string | undefined,
 	entry: string | undefined,
 ): ContractExportViolation["rule"] | undefined {
 	if (contract === undefined) return undefined;
-	if (contractDirectory === undefined) return "contract_export_not_a_path";
-	if (entry !== undefined && isWithin(entry, contractDirectory))
+	if (contractFile === undefined) return "contract_export_not_a_path";
+	if (entry !== undefined && isWithin(entry, dirname(contractFile)))
 		return "contract_beside_entry";
 	return undefined;
 }

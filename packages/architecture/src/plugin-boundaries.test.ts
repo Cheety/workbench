@@ -161,33 +161,62 @@ describe("imports between plugins", () => {
 
 describe("the contract export of a plugin", () => {
 	test.each([
-		["plugin-notes/src/contract/index.ts", "../store.ts"],
-		["plugin-notes/src/contract/index.ts", "../plugin.ts"],
-		["plugin-notes/src/contract/note.ts", "../store.ts"],
-		[
-			"plugin-notes/src/contract/index.ts",
-			"@fixture/plugin-notes/src/store.ts",
-		],
-	])(
-		"rejects code of its own plugin imported by %s from %s",
-		async (file, importPath) => {
-			const packages = await packagesDirectoryWith({
-				...NOTES_PLUGIN,
-				[file]: `import { store } from "${importPath}";`,
-			});
-
-			expect(await findPluginBoundaryViolations(packages)).toEqual([
-				{ rule: "contract_imports_plugin_code", file, importPath },
-			]);
-		},
-	);
-
-	test("allows other files of the contract", async () => {
+		['import { store } from "../store.ts";', "../store.ts"],
+		['import plugin from "../plugin.ts";', "../plugin.ts"],
+		['export type { Note } from "./note.ts";', "./note.ts"],
+		['/// <reference path="note.ts" />', "note.ts"],
+		[`import { store } from "${STORE}";`, STORE],
+	])("rejects any file of its own package: %s", async (source, importPath) => {
 		const packages = await packagesDirectoryWith({
 			...NOTES_PLUGIN,
-			"plugin-notes/src/contract/index.ts":
-				'export type { Note } from "./note.ts";',
-			"plugin-notes/src/contract/note.ts": "export type Note = { id: string };",
+			"plugin-notes/src/contract/note.ts": "export type Note = {};",
+			"plugin-notes/src/contract/index.ts": source,
+		});
+
+		expect(await findPluginBoundaryViolations(packages)).toEqual([
+			{
+				rule: "contract_imports_plugin_code",
+				file: "plugin-notes/src/contract/index.ts",
+				importPath,
+			},
+		]);
+	});
+
+	test("rejects client code that lies beside a contract outside the directory of the entry", async () => {
+		const packages = await packagesDirectoryWith({
+			"plugin-notes/package.json": JSON.stringify({
+				name: "@fixture/plugin-notes",
+				exports: { "./contract": "./src/contract.ts" },
+				workbench: { plugin: { name: "notes", entry: "./server/plugin.ts" } },
+			}),
+			"plugin-notes/server/plugin.ts": "export default {};",
+			"plugin-notes/src/client/ui.tsx": "export const Ui = () => null;",
+			"plugin-notes/src/contract.ts": 'import { Ui } from "./client/ui.tsx";',
+		});
+
+		expect(await findPluginBoundaryViolations(packages)).toEqual([
+			{
+				rule: "contract_imports_plugin_code",
+				file: "plugin-notes/src/contract.ts",
+				importPath: "./client/ui.tsx",
+			},
+		]);
+	});
+
+	test("allows other packages and the contracts of foreign plugins", async () => {
+		const packages = await packagesDirectoryWith({
+			...boardPluginImporting(""),
+			"plugin-board/package.json": JSON.stringify({
+				name: "@fixture/plugin-board",
+				exports: { "./contract": "./src/contract/index.ts" },
+				workbench: { plugin: { name: "board", entry: "./src/plugin.ts" } },
+			}),
+			"plugin-board/src/contract/index.ts": [
+				'import type { Note } from "@fixture/plugin-notes/contract";',
+				'import { z } from "zod";',
+				'import type { PluginManifest } from "@workbench/sdk";',
+				'export type { Board } from "@fixture/plugin-board/contract";',
+			].join("\n"),
 		});
 
 		expect(await findPluginBoundaryViolations(packages)).toEqual([]);

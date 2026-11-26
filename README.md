@@ -138,13 +138,13 @@ Ein Plugin importiert aus einem anderen Plugin nur dessen Contract (ADR-0004). E
 }
 ```
 
-Andere Plugins importieren ihn als `@workbench/plugin-board/contract`; das Referenz-Plugin veröffentlicht so `@workbench/plugin-reference/contract`. Der Contract enthält nur Typen, Schemas, Event-Definitionen und Werte-Typen.
+Andere Plugins importieren ihn als `@workbench/plugin-board/contract`; das Referenz-Plugin veröffentlicht so `@workbench/plugin-reference/contract`. Der Contract ist genau diese eine Datei und enthält nur Typen, Schemas, Event-Definitionen und Werte-Typen.
 
 Die Architekturtests in `packages/architecture` lassen `bun run check` scheitern, wenn
 
 - ein Plugin aus einem anderen Plugin etwas anderes als `<Paket>/contract` importiert, auch als reinen Typ-Import oder über einen relativen Pfad in dessen Verzeichnis,
-- eine Datei im Verzeichnis des Contracts aus dem eigenen Paket etwas außerhalb dieses Verzeichnisses importiert, also Server- oder Client-Code des Plugins,
-- das Verzeichnis des Contracts den Einstieg des Plugins enthält oder `./contract` keine einzelne Datei nennt,
+- der Contract eine Datei seines eigenen Pakets importiert, etwa Server- oder Client-Code des Plugins; erlaubt sind andere Pakete und die Contracts fremder Plugins,
+- das Verzeichnis der Contract-Datei den Einstieg des Plugins enthält oder `./contract` keine einzelne Datei nennt,
 - der Core außerhalb seiner Tests Begriffe der fachlichen Plugins enthält, etwa `kanban`, `issue tracker` oder `note`; die Liste steht in `packages/architecture/src/domain-language.ts`.
 
 ## Umgebungsvariablen
