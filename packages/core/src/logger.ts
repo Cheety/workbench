@@ -3,25 +3,17 @@ export type LogLevel = (typeof LOG_LEVELS)[number];
 
 export type LogFields = Readonly<Record<string, unknown>>;
 
-/**
- * Writes structured log entries: one JSON object per line with `time`
- * (RFC 3339, UTC), `level`, `message` and the given fields. Fields must be
- * JSON-serializable; secrets belong in a `Secret`, which serializes redacted.
- */
 export type Logger = {
 	debug(message: string, fields?: LogFields): void;
 	info(message: string, fields?: LogFields): void;
 	warn(message: string, fields?: LogFields): void;
 	error(message: string, fields?: LogFields): void;
-	/** Returns a logger that adds the given fields to every entry. */
 	with(fields: LogFields): Logger;
 };
 
 export type LoggerOptions = {
-	/** Entries below this level are dropped. */
 	readonly level: LogLevel;
 	readonly now: () => Date;
-	/** Receives one serialized entry without a trailing newline. */
 	readonly write: (line: string) => void;
 };
 
@@ -38,8 +30,6 @@ function bindLogger(options: LoggerOptions, bound: LogFields): Logger {
 	): void => {
 		if (LOG_LEVELS.indexOf(level) < threshold) return;
 		const reserved = { time: options.now().toISOString(), level, message };
-		// Spread twice: first for a stable key order, last so that no field
-		// can overwrite a reserved key.
 		options.write(
 			JSON.stringify({ ...reserved, ...bound, ...fields, ...reserved }),
 		);

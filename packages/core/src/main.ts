@@ -18,8 +18,6 @@ function loadConfigOrExit(): Config {
 		return loadConfigFromEnvironment();
 	} catch (error) {
 		if (!(error instanceof InvalidConfigError)) throw error;
-		// The log level is part of the configuration that just failed, so this
-		// entry goes out unconditionally, and to stderr.
 		const logger = createLogger({
 			level: "error",
 			now,
@@ -38,8 +36,6 @@ function startServerOrExit(options: ServerOptions): RunningServer {
 	try {
 		return startServer(options);
 	} catch (error) {
-		// Only the system error code (e.g. EADDRINUSE) is reported: message
-		// and stack trace of the runtime are internals.
 		options.logger.error("server failed to start", {
 			port: options.port,
 			reason: systemErrorCode(error) ?? UNKNOWN_START_FAILURE,

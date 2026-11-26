@@ -26,7 +26,6 @@ function spawnInstance(env: Record<string, string>) {
 	return instance;
 }
 
-/** Listens on a free port until the test is over and returns the port. */
 function occupyPort(): number {
 	occupiedPort = Bun.listen({
 		hostname: "0.0.0.0",

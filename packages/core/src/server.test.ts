@@ -5,7 +5,6 @@ import { createPostgresCheck } from "./postgres.ts";
 import { type RunningServer, startServer } from "./server.ts";
 import { PostgresGate } from "./testing/postgres.ts";
 
-/** Well above the `max_connections` of 100 of a default Postgres. */
 const PARALLEL_PROBES = 300;
 
 type LogEntry = Record<string, unknown>;
@@ -20,7 +19,6 @@ afterEach(async () => {
 	openGate = undefined;
 });
 
-/** Starts a server whose database is a gate that refuses connections. */
 function startTestServer() {
 	const gate = PostgresGate.create();
 	openGate = gate;

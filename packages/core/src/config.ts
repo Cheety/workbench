@@ -4,10 +4,6 @@ import { LOG_LEVELS, type LogLevel } from "./logger.ts";
 
 const REDACTED = "[redacted]";
 
-/**
- * A configuration value that must never reach logs, error messages or
- * serialized output. Only `reveal()` hands out the raw value.
- */
 export class Secret {
 	readonly #value: string;
 
@@ -28,7 +24,6 @@ export class Secret {
 	}
 }
 
-/** Validated configuration of one instance. Durations are in milliseconds. */
 export type Config = {
 	readonly databaseUrl: Secret;
 	readonly port: number;
@@ -38,11 +33,9 @@ export type Config = {
 
 export type ConfigSource = {
 	readonly env: Readonly<Record<string, string | undefined>>;
-	/** Returns the content of a secret file; throws when it cannot be read. */
 	readonly readSecretFile: (path: string) => string;
 };
 
-/** One rejected variable. `problem` never contains the variable's value. */
 export type ConfigIssue = {
 	readonly variable: string;
 	readonly problem: string;
@@ -78,8 +71,6 @@ function isPostgresUrl(value: string): boolean {
 	);
 }
 
-// Number() would also take hexadecimal, exponents and blank strings, which
-// are far more likely a mistake than an intended port or duration.
 const DECIMAL_INTEGER = /^(0|[1-9][0-9]*)$/;
 
 function integerIn(range: IntegerRange) {
@@ -105,8 +96,6 @@ const schema = z.object({
 
 type Variable = keyof z.input<typeof schema>;
 
-// Problems are reported from this table instead of from the validator's own
-// messages, so that no rejected value can ever end up in the output.
 const EXPECTATIONS: Record<Variable, string> = {
 	DATABASE_URL: `must be a ${POSTGRES_SCHEMES.map((scheme) => `${scheme}://`).join(" or ")} URL with a host`,
 	PORT: integerExpectation(PORT_RANGE),
@@ -123,7 +112,6 @@ const PLAIN_VARIABLES = [
 	"READINESS_TIMEOUT_MS",
 ] as const satisfies readonly Variable[];
 
-/** Where the operator provided a value: in the variable itself or in a secret file. */
 type ValueOrigin = "variable" | "secretFile";
 
 const MISSING_PROBLEMS: Record<ValueOrigin, string> = {
@@ -133,7 +121,6 @@ const MISSING_PROBLEMS: Record<ValueOrigin, string> = {
 
 type ResolvedValue = {
 	readonly origin: ValueOrigin;
-	/** The variable the operator actually set, used when reporting problems. */
 	readonly reportedAs: string;
 	readonly value: string | undefined;
 };
@@ -146,10 +133,6 @@ function readVariable(
 	return value === undefined || value === "" ? undefined : value;
 }
 
-/**
- * Resolves a secret from `NAME` or, following the Docker secrets convention,
- * from the file named by `NAME_FILE`.
- */
 function resolveSecret(
 	source: ConfigSource,
 	variable: Variable,
@@ -186,11 +169,6 @@ function isIssue(
 	return "problem" in resolved;
 }
 
-/**
- * Builds the typed configuration from the given source.
- *
- * @throws InvalidConfigError naming every missing or invalid variable.
- */
 export function loadConfig(source: ConfigSource): Config {
 	const issues: ConfigIssue[] = [];
 	const resolved = new Map<Variable, ResolvedValue>();
@@ -238,7 +216,6 @@ export function loadConfig(source: ConfigSource): Config {
 	};
 }
 
-/** Reads the configuration of this process from its environment. */
 export function loadConfigFromEnvironment(): Config {
 	return loadConfig({
 		env: process.env,

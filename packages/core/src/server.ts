@@ -8,7 +8,6 @@ const HEALTH_PATH_PREFIX = "/health/";
 const LIVENESS_PATH = "/health/live";
 const READINESS_PATH = "/health/ready";
 
-/** The `status` values of the health responses; part of the HTTP contract. */
 const HEALTH_STATUS = {
 	alive: "alive",
 	ready: "ready",
@@ -16,25 +15,17 @@ const HEALTH_STATUS = {
 } as const;
 
 export type ServerOptions = {
-	/** TCP port to listen on; 0 picks a free one. */
 	readonly port: number;
 	readonly logger: Logger;
 	readonly checkDatabase: DatabaseCheck;
-	/** Generates the correlation ID for requests that do not bring a valid one. */
 	readonly newCorrelationId: () => string;
 };
 
 export type RunningServer = {
 	readonly port: number;
-	/** Stops listening and closes open connections. */
 	stop(): Promise<void>;
 };
 
-/**
- * Starts the HTTP server. It does not need the database to start: liveness
- * (`/health/live`) reports on the process only, readiness (`/health/ready`)
- * answers 503 while the database is unreachable.
- */
 export function startServer(options: ServerOptions): RunningServer {
 	const server = Bun.serve({
 		port: options.port,
@@ -67,7 +58,6 @@ async function handleRequest(
 	});
 	response.headers.set(CORRELATION_ID_HEADER, correlationId);
 	const entry = { method: request.method, path, status: response.status };
-	// Health probes arrive every few seconds; at info they would drown the log.
 	if (path.startsWith(HEALTH_PATH_PREFIX))
 		logger.debug("request completed", entry);
 	else logger.info("request completed", entry);
@@ -104,7 +94,6 @@ async function readiness(
 	return Response.json({ status: HEALTH_STATUS.notReady }, { status: 503 });
 }
 
-/** An RFC 9457 problem response without internals. */
 function problem(status: number, title: string): Response {
 	return Response.json(
 		{ type: "about:blank", title, status },
