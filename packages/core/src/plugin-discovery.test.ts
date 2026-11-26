@@ -1,0 +1,88 @@
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { discoverPluginPackages } from "./plugin-discovery.ts";
+
+let packagesDirectory: string;
+
+async function writePackage(
+	directory: string,
+	packageJson: Record<string, unknown>,
+	entrySource?: string,
+): Promise<void> {
+	const root = join(packagesDirectory, directory);
+	await mkdir(join(root, "src"), { recursive: true });
+	await writeFile(join(root, "package.json"), JSON.stringify(packageJson));
+	if (entrySource !== undefined)
+		await writeFile(join(root, "src", "plugin.ts"), entrySource);
+}
+
+beforeAll(async () => {
+	packagesDirectory = await mkdtemp(join(tmpdir(), "workbench-discovery-"));
+	await writePackage(
+		"plugin-notes",
+		{
+			name: "@fixture/plugin-notes",
+			version: "1.2.3",
+			workbench: { plugin: "./src/plugin.ts" },
+		},
+		'export default { manifest: { name: "notes" } };',
+	);
+	await writePackage(
+		"plugin-broken",
+		{
+			name: "@fixture/plugin-broken",
+			version: "0.1.0",
+			workbench: { plugin: "./src/plugin.ts" },
+		},
+		'throw new TypeError("broken on import");',
+	);
+	await writePackage("library", {
+		name: "@fixture/library",
+		version: "3.0.0",
+	});
+	await mkdir(join(packagesDirectory, "not-a-package"));
+	await writeFile(join(packagesDirectory, "README.md"), "not a directory");
+});
+
+afterAll(async () => {
+	await rm(packagesDirectory, { recursive: true, force: true });
+});
+
+describe("plugin discovery", () => {
+	test("finds the packages that name a plugin entry, in a stable order", async () => {
+		const packages = await discoverPluginPackages(packagesDirectory)();
+
+		expect(
+			packages.map(({ packageName, version }) => ({ packageName, version })),
+		).toEqual([
+			{ packageName: "@fixture/plugin-broken", version: "0.1.0" },
+			{ packageName: "@fixture/plugin-notes", version: "1.2.3" },
+		]);
+	});
+
+	test("loads the default export of the plugin entry on demand", async () => {
+		const packages = await discoverPluginPackages(packagesDirectory)();
+
+		const definition = await packages[1]?.loadDefinition();
+
+		expect(definition).toEqual({ manifest: { name: "notes" } });
+	});
+
+	test("leaves a plugin entry that fails on import to the caller", async () => {
+		const packages = await discoverPluginPackages(packagesDirectory)();
+
+		const loading = packages[0]?.loadDefinition();
+
+		await expect(loading).rejects.toThrow(TypeError);
+	});
+
+	test("fails when the directory cannot be read", async () => {
+		const discover = discoverPluginPackages(
+			join(packagesDirectory, "does-not-exist"),
+		);
+
+		await expect(discover()).rejects.toMatchObject({ code: "ENOENT" });
+	});
+});
