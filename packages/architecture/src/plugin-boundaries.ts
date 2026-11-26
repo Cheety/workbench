@@ -17,9 +17,16 @@ type ContractExportViolation = {
 type PluginPackage = {
 	readonly root: string;
 	readonly packageName: string;
-	readonly contractFile: string | undefined;
-	readonly contractProblem: ContractExportViolation["rule"] | undefined;
+	readonly contract: ContractExport;
 };
+
+type ContractExport =
+	| { readonly kind: "absent" }
+	| { readonly kind: "published"; readonly file: string }
+	| {
+			readonly kind: "rejected";
+			readonly rule: ContractExportViolation["rule"];
+	  };
 
 type Import = {
 	readonly file: string;
@@ -45,9 +52,9 @@ export async function findPluginBoundaryViolations(
 	const plugins = await findPluginPackages(packagesDirectory);
 	const violations: PluginBoundaryViolation[] = [];
 	for (const plugin of plugins) {
-		if (plugin.contractProblem !== undefined)
+		if (plugin.contract.kind === "rejected")
 			violations.push({
-				rule: plugin.contractProblem,
+				rule: plugin.contract.rule,
 				file: relative(packagesDirectory, join(plugin.root, PACKAGE_JSON)),
 			});
 		for await (const path of SOURCE_FILES.scan(plugin.root)) {
@@ -83,7 +90,9 @@ function violatedRule(
 	if (target === undefined || isContractImport(target, importPath))
 		return undefined;
 	if (target !== plugin) return "foreign_plugin_internals";
-	return file === plugin.contractFile && importedFile !== file
+	const isFromContract =
+		plugin.contract.kind === "published" && plugin.contract.file === file;
+	return isFromContract && importedFile !== file
 		? "contract_imports_plugin_code"
 		: undefined;
 }
@@ -118,29 +127,28 @@ async function readPluginPackage(
 		isRecord(plugin) && typeof plugin.entry === "string"
 			? resolve(root, plugin.entry)
 			: undefined;
-	const contract = isRecord(packageJson.exports)
+	const exported = isRecord(packageJson.exports)
 		? packageJson.exports[`./${CONTRACT_SUBPATH}`]
 		: undefined;
-	const contractFile =
-		typeof contract === "string" ? resolve(root, contract) : undefined;
 	return {
 		root,
 		packageName: packageJson.name,
-		contractFile,
-		contractProblem: contractProblemOf(contract, contractFile, entry),
+		contract: contractExportOf(root, exported, entry),
 	};
 }
 
-function contractProblemOf(
-	contract: unknown,
-	contractFile: string | undefined,
+function contractExportOf(
+	root: string,
+	exported: unknown,
 	entry: string | undefined,
-): ContractExportViolation["rule"] | undefined {
-	if (contract === undefined) return undefined;
-	if (contractFile === undefined) return "contract_export_not_a_path";
-	if (entry !== undefined && isWithin(entry, dirname(contractFile)))
-		return "contract_beside_entry";
-	return undefined;
+): ContractExport {
+	if (exported === undefined) return { kind: "absent" };
+	if (typeof exported !== "string")
+		return { kind: "rejected", rule: "contract_export_not_a_path" };
+	const file = resolve(root, exported);
+	if (entry !== undefined && isWithin(entry, dirname(file)))
+		return { kind: "rejected", rule: "contract_beside_entry" };
+	return { kind: "published", file };
 }
 
 function importsIn(source: string): Omit<Import, "file">[] {
