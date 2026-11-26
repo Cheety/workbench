@@ -243,13 +243,21 @@ describe("schema migrations", () => {
 	});
 });
 
+const BLOCKED_SESSIONS_DEADLINE_MS = 2_000;
+
 async function untilBlockedSessions(
 	database: FreshDatabase,
 	count: number,
 ): Promise<void> {
-	for (;;) {
+	const deadline = performance.now() + BLOCKED_SESSIONS_DEADLINE_MS;
+	let blocked = 0;
+	while (performance.now() < deadline) {
 		const [row] =
 			await database.sql`SELECT count(*)::int AS blocked FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`;
-		if (row.blocked >= count) return;
+		blocked = row.blocked;
+		if (blocked >= count) return;
 	}
+	throw new Error(
+		`expected ${count} sessions waiting for a lock within ${BLOCKED_SESSIONS_DEADLINE_MS} ms, saw ${blocked}`,
+	);
 }
