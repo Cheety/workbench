@@ -1,4 +1,5 @@
 import { describeThrown, summarize } from "./failure-reason.ts";
+import { type HookTimeout, runWithin } from "./hook-timeout.ts";
 import type { LoadFailure } from "./load-failures.ts";
 import { type ValidPlugin, validatePlugin } from "./plugin-manifest.ts";
 import { quote } from "./quote.ts";
@@ -35,7 +36,8 @@ export type PluginCatalog = {
 	/**
 	 * Loads and validates the entry of the plugin package that declares `name`.
 	 * A name that no plugin package or more than one declares is a load failure,
-	 * and no entry is loaded for it.
+	 * and no entry is loaded for it. An entry that does not finish loading
+	 * within the hook timeout is a load failure, too.
 	 */
 	load(name: string): Promise<PluginLoad>;
 };
@@ -43,6 +45,7 @@ export type PluginCatalog = {
 export function catalogPlugins(
 	packages: readonly PluginPackage[],
 	offeredCapabilities: readonly string[],
+	loadTimeout: HookTimeout,
 ): PluginCatalog {
 	const declaring = Map.groupBy(
 		packages,
@@ -55,7 +58,7 @@ export function catalogPlugins(
 			if (pluginPackage === undefined) return notLoaded(unknownPlugin(name));
 			if (others.length > 0)
 				return notLoaded(duplicatePlugin(name, [pluginPackage, ...others]));
-			return loadPlugin(pluginPackage, offeredCapabilities);
+			return loadPlugin(pluginPackage, offeredCapabilities, loadTimeout);
 		},
 	};
 }
@@ -63,11 +66,20 @@ export function catalogPlugins(
 async function loadPlugin(
 	pluginPackage: PluginPackage,
 	offeredCapabilities: readonly string[],
+	loadTimeout: HookTimeout,
 ): Promise<PluginLoad> {
 	const { pluginName: declaredName, version } = pluginPackage;
 	let definition: unknown;
 	try {
-		definition = await pluginPackage.loadDefinition();
+		const outcome = await runWithin(
+			() =>
+				pluginPackage.loadDefinition().then((loaded) => {
+					definition = loaded;
+				}),
+			loadTimeout,
+		);
+		if (outcome === "timed_out")
+			return notLoaded(loadTimedOut(pluginPackage, loadTimeout));
 	} catch (error) {
 		const thrown = describeThrown(error);
 		return notLoaded({
@@ -98,6 +110,17 @@ function invalidManifest(
 		plugin: pluginPackage.pluginName,
 		reason: "invalid_manifest",
 		detail: `plugin package ${quote(pluginPackage.packageName)} has an invalid manifest: ${problems.join("; ")}`,
+	};
+}
+
+function loadTimedOut(
+	pluginPackage: PluginPackage,
+	loadTimeout: HookTimeout,
+): LoadFailure {
+	return {
+		plugin: pluginPackage.pluginName,
+		reason: "load_timed_out",
+		detail: `plugin package ${quote(pluginPackage.packageName)} did not finish loading its plugin entry within ${loadTimeout.ms} ms`,
 	};
 }
 

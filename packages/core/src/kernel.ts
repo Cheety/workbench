@@ -66,8 +66,9 @@ export class UndeclaredCapabilityError extends Error {
  * Plugins the instance config does not enable are left alone: their entries
  * are not loaded and their defects are not reported.
  *
- * A plugin whose `activate` throws or does not finish within the hook timeout
- * is not loaded and is not deactivated later.
+ * A plugin whose entry does not finish loading within the hook timeout is not
+ * loaded. A plugin whose `activate` throws or does not finish within the hook
+ * timeout is not loaded and is not deactivated later.
  *
  * Never rejects because of a plugin: every plugin that cannot be loaded is
  * logged as "plugin not loaded" and listed in `failures`, the others run. A
@@ -82,7 +83,11 @@ export async function startPlugins(
 
 	const packages = await discoverPackages(options);
 	const activationOrder = await resolvePlugins(
-		catalogPlugins(packages, Object.keys(options.capabilityProviders)),
+		catalogPlugins(
+			packages,
+			Object.keys(options.capabilityProviders),
+			options.hookTimeout,
+		),
 		options.enabledPlugins,
 		failures,
 	);

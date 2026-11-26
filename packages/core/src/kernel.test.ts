@@ -54,8 +54,10 @@ function manualTimers() {
 	const delaysMs: number[] = [];
 	let cancelled = 0;
 	let announce: ((expire: () => void) => void) | undefined;
+	let latest: (() => void) | undefined;
 	const setTimer: HookTimeout["setTimer"] = (expire, delayMs) => {
 		delaysMs.push(delayMs);
+		latest = expire;
 		announce?.(expire);
 		announce = undefined;
 		return () => {
@@ -66,6 +68,7 @@ function manualTimers() {
 		setTimer,
 		delaysMs,
 		cancelled: () => cancelled,
+		expireLatest: () => latest?.(),
 		/** Resolves with the expiry of the next timer that is set. */
 		next: () =>
 			new Promise<() => void>((resolve) => {
@@ -763,14 +766,17 @@ describe("plugin kernel", () => {
 	test("gives up on a plugin that does not finish activating and starts the others", async () => {
 		const journal: string[] = [];
 		const timers = manualTimers();
-		const timeUp = timers.next();
+		const activating = Promise.withResolvers<void>();
 
 		const starting = start({
 			packages: [
 				packageOf(
 					definePlugin({
 						manifest: { name: "notes" },
-						activate: hanging,
+						activate: () => {
+							activating.resolve();
+							return hanging();
+						},
 						deactivate: () => {
 							journal.push("deactivate notes");
 						},
@@ -787,7 +793,8 @@ describe("plugin kernel", () => {
 			enabledPlugins: ["notes", "board", "cards"],
 			hookTimeout: { ms: 5000, setTimer: timers.setTimer },
 		});
-		(await timeUp)();
+		await activating.promise;
+		timers.expireLatest();
 		const { plugins } = await starting;
 		await plugins.deactivate();
 
@@ -810,7 +817,7 @@ describe("plugin kernel", () => {
 
 	test("ignores an activation that fails after it has timed out", async () => {
 		const timers = manualTimers();
-		const timeUp = timers.next();
+		const activating = Promise.withResolvers<void>();
 		const activation = Promise.withResolvers<void>();
 
 		const starting = start({
@@ -818,14 +825,18 @@ describe("plugin kernel", () => {
 				packageOf(
 					definePlugin({
 						manifest: { name: "notes" },
-						activate: () => activation.promise,
+						activate: () => {
+							activating.resolve();
+							return activation.promise;
+						},
 					}),
 				),
 			],
 			enabledPlugins: ["notes"],
 			hookTimeout: { ms: 5000, setTimer: timers.setTimer },
 		});
-		(await timeUp)();
+		await activating.promise;
+		timers.expireLatest();
 		const { plugins } = await starting;
 		activation.reject(new Error("too late"));
 
@@ -865,7 +876,7 @@ describe("plugin kernel", () => {
 		);
 	});
 
-	test("stops the clock of every activation and deactivation that finishes in time", async () => {
+	test("stops the clock of every load, activation and deactivation that finishes in time", async () => {
 		const timers = manualTimers();
 		const { plugins } = await start({
 			packages: [
@@ -878,8 +889,8 @@ describe("plugin kernel", () => {
 
 		await plugins.deactivate();
 
-		expect(timers.delaysMs).toEqual([5000, 5000, 5000, 5000]);
-		expect(timers.cancelled()).toBe(4);
+		expect(timers.delaysMs).toEqual([5000, 5000, 5000, 5000, 5000, 5000]);
+		expect(timers.cancelled()).toBe(6);
 	});
 
 	test("hands a plugin the capabilities its manifest declares and no others", async () => {
@@ -1078,6 +1089,81 @@ describe("plugin kernel", () => {
 				message: "plugin deactivated",
 				plugin: "notes",
 			}),
+		]);
+	});
+
+	test("gives up on a plugin entry that does not finish loading and starts the others", async () => {
+		const journal: string[] = [];
+		const timers = manualTimers();
+		const timeUp = timers.next();
+
+		const starting = start({
+			packages: [
+				{
+					packageName: "@workbench/plugin-notes",
+					pluginName: "notes",
+					version: "1.0.0",
+					loadDefinition: () => new Promise(() => {}),
+				},
+				packageOf(
+					recordingPlugin(journal, {
+						name: "board",
+						requires: { notes: "^1.0.0" },
+					}),
+				),
+				packageOf(recordingPlugin(journal, { name: "cards" })),
+			],
+			enabledPlugins: ["notes", "board", "cards"],
+			hookTimeout: { ms: 5000, setTimer: timers.setTimer },
+		});
+		(await timeUp)();
+		const { plugins, entries } = await starting;
+
+		const detail =
+			'plugin package "@workbench/plugin-notes" did not finish loading its plugin entry within 5000 ms';
+		expect(plugins.failures).toEqual([
+			{ plugin: "notes", reason: "load_timed_out", detail },
+			{
+				plugin: "board",
+				reason: "dependency_not_loaded",
+				detail: `plugin "board" requires plugin "notes", which was not loaded: ${detail}`,
+			},
+		]);
+		expect(plugins.active).toEqual(["cards"]);
+		expect(journal).toEqual(["activate cards"]);
+		expect(entries).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				message: "plugin not loaded",
+				plugin: "notes",
+				reason: "load_timed_out",
+			}),
+		);
+	});
+
+	test("ignores a plugin entry that fails to load after it has timed out", async () => {
+		const timers = manualTimers();
+		const timeUp = timers.next();
+		const loading = Promise.withResolvers<unknown>();
+
+		const starting = start({
+			packages: [
+				{
+					packageName: "@workbench/plugin-notes",
+					pluginName: "notes",
+					version: "1.0.0",
+					loadDefinition: () => loading.promise,
+				},
+			],
+			enabledPlugins: ["notes"],
+			hookTimeout: { ms: 5000, setTimer: timers.setTimer },
+		});
+		(await timeUp)();
+		const { plugins } = await starting;
+		loading.reject(new Error("too late"));
+
+		expect(plugins.failures.map((failure) => failure.reason)).toEqual([
+			"load_timed_out",
 		]);
 	});
 });
