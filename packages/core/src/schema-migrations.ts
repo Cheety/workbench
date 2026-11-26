@@ -53,13 +53,26 @@ export async function migrateSchemas(
 					outcomes.push(await migrateSchema(connection, schema, logger));
 				return outcomes;
 			} finally {
-				await connection`SELECT pg_advisory_unlock(${MIGRATION_LOCK_KEY})`;
+				await releaseLock(connection, logger);
 			}
 		} finally {
 			connection.release();
 		}
 	} finally {
 		await sql.close();
+	}
+}
+
+async function releaseLock(
+	connection: ReservedSQL,
+	logger: Logger,
+): Promise<void> {
+	try {
+		await connection`SELECT pg_advisory_unlock(${MIGRATION_LOCK_KEY})`;
+	} catch (error) {
+		logger.warn("migration lock not released", {
+			error: describeThrown(error),
+		});
 	}
 }
 

@@ -176,6 +176,42 @@ describe("schema migrations", () => {
 		);
 	});
 
+	test("report the outcome and log why the lock could not be released when the connection is lost during a migration", async () => {
+		const database = await freshDatabase();
+		const { logger, entries } = recordingLogger();
+
+		const outcomes = await migrateSchemas(
+			new Secret(database.url),
+			[
+				{
+					schema: "plugin_notes",
+					migrations: [
+						{
+							name: "0001_lose_connection.sql",
+							sql: "SELECT pg_terminate_backend(pg_backend_pid());",
+						},
+					],
+				},
+			],
+			logger,
+		);
+
+		expect(outcomes).toEqual([
+			expect.objectContaining({
+				schema: "plugin_notes",
+				migrated: false,
+				applied: [],
+			}),
+		]);
+		expect(entries).toContainEqual(
+			expect.objectContaining({
+				level: "warn",
+				message: "migration lock not released",
+				error: expect.objectContaining({ name: "PostgresError" }),
+			}),
+		);
+	});
+
 	test.each([
 		["longer than Postgres keeps", `plugin_${"a".repeat(57)}`],
 		["not a plain lowercase identifier", 'plugin_x"; DROP SCHEMA core; --'],
