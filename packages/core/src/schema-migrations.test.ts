@@ -4,6 +4,7 @@ import { Secret } from "./config.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import { createLogger, type Logger } from "./logger.ts";
 import { type MigrationRunner, migrateSchemas } from "./schema-migrations.ts";
+import { schemaName } from "./schema-name.ts";
 import {
 	createFreshDatabase,
 	type FreshDatabase,
@@ -85,7 +86,7 @@ async function gatedMigration(database: FreshDatabase) {
 }
 
 const NOTES = {
-	schema: "plugin_notes",
+	schema: schemaName("plugin_notes"),
 	migrations: [
 		{
 			name: "0001_create_notes.sql",
@@ -109,7 +110,7 @@ describe("schema migrations", () => {
 			stopped: false,
 			outcomes: [
 				{
-					schema: "plugin_notes",
+					schema: schemaName("plugin_notes"),
 					migrated: true,
 					applied: ["0001_create_notes.sql"],
 				},
@@ -119,7 +120,7 @@ describe("schema migrations", () => {
 			await database.sql`SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema IN ('core', 'plugin_notes') ORDER BY table_schema, table_name`,
 		).toEqual([
 			{ table_schema: "core", table_name: "migrations" },
-			{ table_schema: "plugin_notes", table_name: "notes" },
+			{ table_schema: schemaName("plugin_notes"), table_name: "notes" },
 		]);
 	});
 
@@ -141,7 +142,9 @@ describe("schema migrations", () => {
 
 		expect(run).toEqual({
 			stopped: false,
-			outcomes: [{ schema: "plugin_notes", migrated: true, applied: [] }],
+			outcomes: [
+				{ schema: schemaName("plugin_notes"), migrated: true, applied: [] },
+			],
 		});
 		expect(entries).toEqual([]);
 	});
@@ -160,7 +163,7 @@ describe("schema migrations", () => {
 			runnerFor(url, logger),
 			[
 				{
-					schema: "plugin_notes",
+					schema: schemaName("plugin_notes"),
 					migrations: [
 						{
 							name: "0003_add_pinned.sql",
@@ -181,7 +184,7 @@ describe("schema migrations", () => {
 			stopped: false,
 			outcomes: [
 				{
-					schema: "plugin_notes",
+					schema: schemaName("plugin_notes"),
 					migrated: true,
 					applied: ["0002_add_body.sql", "0003_add_pinned.sql"],
 				},
@@ -205,7 +208,7 @@ describe("schema migrations", () => {
 			runnerFor(database.url, logger),
 			[
 				{
-					schema: "plugin_board",
+					schema: schemaName("plugin_board"),
 					migrations: [
 						{
 							name: "0001_create_cards.sql",
@@ -226,7 +229,7 @@ describe("schema migrations", () => {
 			stopped: false,
 			outcomes: [
 				{
-					schema: "plugin_board",
+					schema: schemaName("plugin_board"),
 					migrated: false,
 					applied: [],
 					detail:
@@ -234,7 +237,7 @@ describe("schema migrations", () => {
 					error: expect.objectContaining({ name: "PostgresError" }),
 				},
 				{
-					schema: "plugin_notes",
+					schema: schemaName("plugin_notes"),
 					migrated: true,
 					applied: ["0001_create_notes.sql"],
 				},
@@ -242,12 +245,14 @@ describe("schema migrations", () => {
 		});
 		expect(
 			await database.sql`SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema LIKE 'plugin_%' ORDER BY table_schema`,
-		).toEqual([{ table_schema: "plugin_notes", table_name: "notes" }]);
+		).toEqual([
+			{ table_schema: schemaName("plugin_notes"), table_name: "notes" },
+		]);
 		expect(entries).toContainEqual(
 			expect.objectContaining({
 				level: "error",
 				message: "migration failed",
-				schema: "plugin_board",
+				schema: schemaName("plugin_board"),
 				migration: "0001_create_cards.sql",
 			}),
 		);
@@ -261,7 +266,7 @@ describe("schema migrations", () => {
 			runnerFor(database.url, logger),
 			[
 				{
-					schema: "plugin_notes",
+					schema: schemaName("plugin_notes"),
 					migrations: [
 						{
 							name: "0001_lose_connection.sql",
@@ -277,7 +282,7 @@ describe("schema migrations", () => {
 			stopped: false,
 			outcomes: [
 				expect.objectContaining({
-					schema: "plugin_notes",
+					schema: schemaName("plugin_notes"),
 					migrated: false,
 					applied: [],
 				}),
@@ -291,38 +296,6 @@ describe("schema migrations", () => {
 			}),
 		);
 	});
-
-	test.each([
-		["longer than Postgres keeps", `plugin_${"a".repeat(57)}`],
-		["not a plain lowercase identifier", 'plugin_x"; DROP SCHEMA core; --'],
-	])(
-		"reject a schema name %s without touching the database",
-		async (_, schema) => {
-			const database = await freshDatabase();
-			const { logger } = recordingLogger();
-
-			const run = await migrateSchemas(
-				runnerFor(database.url, logger),
-				[{ schema, migrations: NOTES.migrations }],
-				NOT_STOPPED,
-			);
-
-			expect(run).toMatchObject({
-				stopped: false,
-				outcomes: [
-					{
-						schema,
-						migrated: false,
-						applied: [],
-						detail: `schema name ${JSON.stringify(schema)} must consist of at most 63 lowercase letters, digits and underscores and start with a letter`,
-					},
-				],
-			});
-			expect(
-				await database.sql`SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 'plugin_%'`,
-			).toEqual([]);
-		},
-	);
 
 	test("give up connecting when the database does not answer within the connection timeout", async () => {
 		const gate = PostgresGate.create();
@@ -343,7 +316,7 @@ describe("schema migrations", () => {
 		const gate = await gatedMigration(database);
 		const holding = migrateSchemas(
 			runnerFor(database.url, recordingLogger().logger),
-			[{ schema: "plugin_notes", migrations: [gate.migration] }],
+			[{ schema: schemaName("plugin_notes"), migrations: [gate.migration] }],
 			NOT_STOPPED,
 		);
 		await untilBlockedSessions(database, 1);
@@ -379,7 +352,7 @@ describe("schema migrations", () => {
 			runnerFor(database.url, recordingLogger().logger),
 			[
 				{
-					schema: "plugin_notes",
+					schema: schemaName("plugin_notes"),
 					migrations: [
 						gate.migration,
 						...NOTES.migrations.map((migration) => ({
@@ -405,7 +378,10 @@ describe("schema migrations", () => {
 	test("apply each migration exactly once when two runs start at the same time", async () => {
 		const database = await freshDatabase();
 		const gate = await gatedMigration(database);
-		const gated = { schema: "plugin_notes", migrations: [gate.migration] };
+		const gated = {
+			schema: schemaName("plugin_notes"),
+			migrations: [gate.migration],
+		};
 		await migrateSchemas(
 			runnerFor(database.url, recordingLogger().logger),
 			[{ schema: gated.schema, migrations: [] }],
@@ -427,7 +403,7 @@ describe("schema migrations", () => {
 				stopped: false,
 				outcomes: [
 					{
-						schema: "plugin_notes",
+						schema: schemaName("plugin_notes"),
 						migrated: true,
 						applied: ["0001_wait_at_gate.sql"],
 					},
@@ -435,7 +411,9 @@ describe("schema migrations", () => {
 			},
 			{
 				stopped: false,
-				outcomes: [{ schema: "plugin_notes", migrated: true, applied: [] }],
+				outcomes: [
+					{ schema: schemaName("plugin_notes"), migrated: true, applied: [] },
+				],
 			},
 		]);
 		expect(

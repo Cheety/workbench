@@ -9,6 +9,7 @@ import {
 import type { SetTimer } from "./hook-timeout.ts";
 import type { Logger } from "./logger.ts";
 import { quote } from "./quote.ts";
+import type { SchemaName } from "./schema-name.ts";
 
 export type Migration = {
 	readonly name: string;
@@ -16,18 +17,18 @@ export type Migration = {
 };
 
 export type SchemaMigrations = {
-	readonly schema: string;
+	readonly schema: SchemaName;
 	readonly migrations: readonly Migration[];
 };
 
 export type SchemaMigrationOutcome =
 	| {
-			readonly schema: string;
+			readonly schema: SchemaName;
 			readonly migrated: true;
 			readonly applied: readonly string[];
 	  }
 	| {
-			readonly schema: string;
+			readonly schema: SchemaName;
 			readonly migrated: false;
 			readonly applied: readonly string[];
 			readonly detail: string;
@@ -50,8 +51,6 @@ export type MigrationRunner = {
 };
 
 const MIGRATION_LOCK_KEY = 0x776f726b62656e63n;
-
-const SCHEMA_NAME = /^[a-z][a-z0-9_]{0,62}$/;
 
 const STOPPED: MigrationRun = { stopped: true };
 
@@ -143,11 +142,6 @@ async function migrateSchema(
 	logger: Logger,
 	stopSignal: AbortSignal,
 ): Promise<SchemaMigrationOutcome | "stopped"> {
-	if (!SCHEMA_NAME.test(schema)) {
-		const detail = `schema name ${quote(schema)} must consist of at most 63 lowercase letters, digits and underscores and start with a letter`;
-		logger.error("schema not migrated", { schema, detail });
-		return { schema, migrated: false, applied: [], detail };
-	}
 	await connection.unsafe(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
 	const alreadyApplied = await appliedMigrations(connection, schema);
 	const pending = migrations
@@ -187,7 +181,7 @@ async function migrateSchema(
 
 async function appliedMigrations(
 	connection: ReservedSQL,
-	schema: string,
+	schema: SchemaName,
 ): Promise<ReadonlySet<string>> {
 	const rows: { migration: string }[] =
 		await connection`SELECT migration FROM core.migrations WHERE schema_name = ${schema}`;

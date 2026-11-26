@@ -19,6 +19,7 @@ import type {
 	MigrationRun,
 	SchemaMigrations,
 } from "./schema-migrations.ts";
+import { schemaName } from "./schema-name.ts";
 
 type LogEntry = Record<string, unknown>;
 
@@ -1523,8 +1524,11 @@ describe("plugin schemas", () => {
 
 		expect(migrated).toEqual([
 			[
-				{ schema: "plugin_sticky_notes", migrations: [CREATE_NOTES] },
-				{ schema: "plugin_board", migrations: [] },
+				{
+					schema: schemaName("plugin_sticky_notes"),
+					migrations: [CREATE_NOTES],
+				},
+				{ schema: schemaName("plugin_board"), migrations: [] },
 			],
 		]);
 		expect(journal).toEqual([
@@ -1562,7 +1566,7 @@ describe("plugin schemas", () => {
 		});
 
 		expect(contexts.get("sticky-notes")?.capability("database")).toEqual({
-			schema: "plugin_sticky_notes",
+			schema: schemaName("plugin_sticky_notes"),
 		});
 		expect(() => contexts.get("cards")?.capability("database")).toThrow(
 			new UndeclaredCapabilityError("cards", "database"),
@@ -1604,13 +1608,13 @@ describe("plugin schemas", () => {
 				stopped: false,
 				outcomes: [
 					{
-						schema: "plugin_notes",
+						schema: schemaName("plugin_notes"),
 						migrated: false,
 						applied: [],
 						detail,
 						error,
 					},
-					{ schema: "plugin_cards", migrated: true, applied: [] },
+					{ schema: schemaName("plugin_cards"), migrated: true, applied: [] },
 				],
 			}),
 		});
@@ -1697,8 +1701,13 @@ describe("plugin schemas", () => {
 			migrateSchemas: async () => ({
 				stopped: false,
 				outcomes: [
-					{ schema: "plugin_cards", migrated: true, applied: [] },
-					{ schema: "plugin_notes", migrated: false, applied: [], detail },
+					{ schema: schemaName("plugin_cards"), migrated: true, applied: [] },
+					{
+						schema: schemaName("plugin_notes"),
+						migrated: false,
+						applied: [],
+						detail,
+					},
 				],
 			}),
 		});
@@ -1734,7 +1743,9 @@ describe("plugin schemas", () => {
 			enabledPlugins: ["notes", "cards"],
 			migrateSchemas: async () => ({
 				stopped: false,
-				outcomes: [{ schema: "plugin_cards", migrated: true, applied: [] }],
+				outcomes: [
+					{ schema: schemaName("plugin_cards"), migrated: true, applied: [] },
+				],
 			}),
 		});
 

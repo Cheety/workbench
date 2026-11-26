@@ -25,6 +25,7 @@ import type {
 	SchemaMigrationOutcome,
 	SchemaMigrations,
 } from "./schema-migrations.ts";
+import { pluginSchemaName, type SchemaName } from "./schema-name.ts";
 import { systemFailureReason } from "./system-error.ts";
 
 export type { HookTimeout } from "./hook-timeout.ts";
@@ -149,12 +150,12 @@ async function migratePluginSchemas(
 	{ migrateSchemas }: KernelOptions,
 	failures: LoadFailures,
 ): Promise<readonly ValidPlugin[]> {
-	const owners = new Map<string, ValidPlugin>();
+	const owners = new Map<SchemaName, ValidPlugin>();
 	const schemas: SchemaMigrations[] = [];
 	for (const plugin of plugins) {
 		if (!plugin.capabilities.includes(DATABASE_CAPABILITY)) continue;
 		try {
-			const schema = pluginSchema(plugin.name);
+			const schema = pluginSchemaName(plugin.name);
 			schemas.push({ schema, migrations: await plugin.loadMigrations() });
 			owners.set(schema, plugin);
 		} catch (error) {
@@ -176,7 +177,7 @@ async function migratePluginSchemas(
 }
 
 function rejectUnmigrated(
-	owners: ReadonlyMap<string, ValidPlugin>,
+	owners: ReadonlyMap<SchemaName, ValidPlugin>,
 	outcomes: readonly SchemaMigrationOutcome[],
 	failures: LoadFailures,
 ): void {
@@ -210,10 +211,6 @@ function migrationFailed(
 		detail: `plugin ${quote(plugin.name)} was not activated because its schema could not be migrated: ${cause}`,
 	};
 	return error === undefined ? failure : { ...failure, error };
-}
-
-function pluginSchema(plugin: string): string {
-	return `plugin_${plugin.replaceAll("-", "_")}`;
 }
 
 async function discoverPackages(
@@ -316,7 +313,7 @@ function provide(
 	providers: CapabilityProviders,
 ): unknown {
 	if (capability === DATABASE_CAPABILITY) {
-		const database: DatabaseCapability = { schema: pluginSchema(plugin) };
+		const database: DatabaseCapability = { schema: pluginSchemaName(plugin) };
 		return database;
 	}
 	return providers[capability]?.();
