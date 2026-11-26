@@ -5,6 +5,29 @@ import { join } from "node:path";
 import { discoverPluginPackages } from "./plugin-discovery.ts";
 
 let packagesDirectory: string;
+const temporaryDirectories: string[] = [];
+
+async function temporaryDirectory(): Promise<string> {
+	const directory = await mkdtemp(join(tmpdir(), "workbench-discovery-"));
+	temporaryDirectories.push(directory);
+	return directory;
+}
+
+async function writeNotesPlugin(root: string, entry: string): Promise<void> {
+	await mkdir(join(root, "src"), { recursive: true });
+	await writeFile(
+		join(root, "package.json"),
+		JSON.stringify({
+			name: "@fixture/plugin-notes",
+			version: "1.2.3",
+			workbench: { plugin: { name: "notes", entry } },
+		}),
+	);
+	await writeFile(
+		join(root, "src", "plugin.ts"),
+		'export default { manifest: { name: "notes" } };',
+	);
+}
 
 async function writePackage(
 	directory: string,
@@ -63,6 +86,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
 	await rm(packagesDirectory, { recursive: true, force: true });
+	for (const directory of temporaryDirectories)
+		await rm(directory, { recursive: true, force: true });
 });
 
 describe("plugin discovery", () => {
@@ -129,6 +154,36 @@ describe("plugin discovery", () => {
 			"broken",
 			"notes",
 		]);
+	});
+
+	test.each([
+		["is empty", () => ""],
+		["names the package itself", () => "."],
+		["leaves the package", () => "../outside/plugin.ts"],
+		["leaves the package midway", () => "src/../../outside/plugin.ts"],
+		["is absolute", (root: string) => join(root, "src", "plugin.ts")],
+	])("reports a package whose plugin entry %s", async (_case, entryOf) => {
+		const directory = await temporaryDirectory();
+		const root = join(directory, "plugin-notes");
+		await writeNotesPlugin(root, entryOf(root));
+		await mkdir(join(directory, "outside"));
+		await writeFile(
+			join(directory, "outside", "plugin.ts"),
+			'export default { manifest: { name: "notes" } };',
+		);
+
+		const discovery = await discoverPluginPackages(directory)();
+
+		expect(discovery).toEqual({
+			packages: [],
+			unreadable: [
+				{
+					directory: root,
+					problem:
+						'workbench.plugin "entry" must be a relative path to a file inside the package',
+				},
+			],
+		});
 	});
 
 	test("fails when the directory cannot be read", async () => {
