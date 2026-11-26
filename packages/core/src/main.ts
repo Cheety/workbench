@@ -88,10 +88,10 @@ const plugins = startPlugins({
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
 	process.once(signal, () => {
 		logger.info("shutting down", { signal });
-		// A signal during startup waits for the plugins, so that every activated
-		// plugin is deactivated. The hook timeout bounds that wait.
-		void plugins
-			.then((running) => shutDownInstance({ server, plugins: running }, logger))
-			.then((exitCode) => process.exit(exitCode));
+		// A signal during startup waits for the plugins; the hook timeout bounds
+		// that wait.
+		void shutDownInstance({ server, plugins }, logger).then((exitCode) =>
+			process.exit(exitCode),
+		);
 	});
 }

@@ -1,13 +1,13 @@
 export const UNKNOWN_FAILURE_REASON = "unknown";
 
-/** What plugin code threw, as the log records it. */
+/** What was thrown, as the log records it. */
 export type ThrownError = {
 	readonly name: string;
 	readonly message: string;
 	readonly stack?: string;
 };
 
-/** Plugin code may throw anything, so a value that is no `Error` is named "unknown". */
+/** Anything can be thrown, so a value that is no `Error` is named "unknown". */
 export function describeThrown(thrown: unknown): ThrownError {
 	if (thrown instanceof Error) {
 		const { name, message, stack } = thrown;

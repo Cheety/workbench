@@ -122,4 +122,80 @@ describe("instance shutdown", () => {
 		expect(exitCode).toBe(1);
 		expect(journal).toEqual(["plugins deactivated"]);
 	});
+
+	test("waits for plugins that are still starting and deactivates them", async () => {
+		const { logger } = recordingLogger();
+		const journal: string[] = [];
+		const starting = Promise.withResolvers<{
+			deactivate: () => Promise<"clean">;
+		}>();
+
+		const shuttingDown = shutDownInstance(
+			{ server: { stop: async () => {} }, plugins: starting.promise },
+			logger,
+		);
+		starting.resolve({
+			deactivate: async () => {
+				journal.push("plugins deactivated");
+				return "clean";
+			},
+		});
+		const exitCode = await shuttingDown;
+
+		expect(exitCode).toBe(0);
+		expect(journal).toEqual(["plugins deactivated"]);
+	});
+
+	test("stops the server, reports it and exits with 1 when the plugins failed to start", async () => {
+		const { logger, lines } = recordingLogger();
+		const journal: string[] = [];
+
+		const exitCode = await shutDownInstance(
+			{
+				server: {
+					stop: async () => {
+						journal.push("server stopped");
+					},
+				},
+				plugins: Promise.reject(new TypeError("kernel defect")),
+			},
+			logger,
+		);
+
+		expect(exitCode).toBe(1);
+		expect(journal).toEqual(["server stopped"]);
+		expect(lines.map((line) => JSON.parse(line))).toEqual([
+			expect.objectContaining({
+				level: "error",
+				message: "plugins failed to shut down",
+				error: expect.objectContaining({
+					name: "TypeError",
+					message: "kernel defect",
+				}),
+			}),
+		]);
+	});
+
+	test("reports it and exits with 1 when deactivating the plugins fails as a whole", async () => {
+		const { logger, lines } = recordingLogger();
+
+		const exitCode = await shutDownInstance(
+			{
+				server: { stop: async () => {} },
+				plugins: {
+					deactivate: () => Promise.reject(new TypeError("kernel defect")),
+				},
+			},
+			logger,
+		);
+
+		expect(exitCode).toBe(1);
+		expect(lines.map((line) => JSON.parse(line))).toEqual([
+			expect.objectContaining({
+				level: "error",
+				message: "plugins failed to shut down",
+				error: expect.objectContaining({ message: "kernel defect" }),
+			}),
+		]);
+	});
 });
