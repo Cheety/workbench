@@ -73,12 +73,12 @@ export async function resolvePlugins(
 		}
 		if (!enabled.has(required)) {
 			const state = catalog.isDiscovered(required)
-				? "not enabled in the instance config"
-				: "not installed";
+				? "is not enabled in the instance config"
+				: "no plugin package provides";
 			return {
 				plugin: plugin.name,
 				reason: "missing_dependency",
-				detail: `${requirement} (${range}), which is ${state}`,
+				detail: `${requirement} (${range}), which ${state}`,
 			};
 		}
 		const requiredPlugin = await resolve(required);
@@ -93,7 +93,7 @@ export async function resolvePlugins(
 			return {
 				plugin: plugin.name,
 				reason: "version_mismatch",
-				detail: `${requirement} in a version matching ${range}, but ${version} is installed`,
+				detail: `${requirement} in a version matching ${range}, but its version is ${version}`,
 			};
 		}
 		return undefined;

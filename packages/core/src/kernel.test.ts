@@ -381,7 +381,7 @@ describe("plugin kernel", () => {
 		},
 	);
 
-	test("does not load a plugin whose required plugin is not installed", async () => {
+	test("does not load a plugin that requires a plugin no plugin package provides", async () => {
 		const journal: string[] = [];
 
 		const { plugins } = await start({
@@ -401,7 +401,7 @@ describe("plugin kernel", () => {
 				plugin: "board",
 				reason: "missing_dependency",
 				detail:
-					'plugin "board" requires plugin "notes" (^1.0.0), which is not installed',
+					'plugin "board" requires plugin "notes" (^1.0.0), which no plugin package provides',
 			},
 		]);
 		expect(plugins.active).toEqual([]);
@@ -453,7 +453,7 @@ describe("plugin kernel", () => {
 				plugin: "board",
 				reason: "version_mismatch",
 				detail:
-					'plugin "board" requires plugin "notes" in a version matching ^2.0.0, but 1.4.0 is installed',
+					'plugin "board" requires plugin "notes" in a version matching ^2.0.0, but its version is 1.4.0',
 			},
 		]);
 		expect(plugins.active).toEqual(["notes"]);
@@ -485,7 +485,7 @@ describe("plugin kernel", () => {
 			plugin: "cards",
 			reason: "dependency_not_loaded",
 			detail:
-				'plugin "cards" requires plugin "board", which was not loaded: plugin "board" requires plugin "notes" in a version matching ^2.0.0, but 1.4.0 is installed',
+				'plugin "cards" requires plugin "board", which was not loaded: plugin "board" requires plugin "notes" in a version matching ^2.0.0, but its version is 1.4.0',
 		});
 		expect(plugins.failures.map((failure) => failure.plugin)).toEqual([
 			"board",
