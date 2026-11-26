@@ -513,12 +513,41 @@ describe("plugin kernel", () => {
 			},
 			{
 				plugin: "board",
-				reason: "dependency_not_loaded",
+				reason: "dependency_cycle",
 				detail:
-					'plugin "board" requires plugin "notes", which was not loaded: plugin "notes" is part of a dependency cycle: board -> notes -> board',
+					'plugin "board" is part of a dependency cycle: board -> notes -> board',
 			},
 		]);
 		expect(journal).toEqual([]);
+	});
+
+	test("reports the cycle for each of its plugins and the cause for a plugin that requires one of them", async () => {
+		const requiring = (name: string, required: string): PluginPackage =>
+			packageOf(
+				definePlugin({ manifest: { name, requires: { [required]: "*" } } }),
+			);
+
+		const { plugins } = await start({
+			packages: [
+				requiring("cards", "board"),
+				requiring("board", "notes"),
+				requiring("notes", "tags"),
+				requiring("tags", "board"),
+			],
+			enabledPlugins: ["cards", "board", "notes", "tags"],
+		});
+
+		expect(
+			plugins.failures.map(({ plugin, reason }) => ({ plugin, reason })),
+		).toEqual([
+			{ plugin: "tags", reason: "dependency_cycle" },
+			{ plugin: "notes", reason: "dependency_cycle" },
+			{ plugin: "board", reason: "dependency_cycle" },
+			{ plugin: "cards", reason: "dependency_not_loaded" },
+		]);
+		expect(plugins.failures[2]?.detail).toBe(
+			'plugin "board" is part of a dependency cycle: board -> notes -> tags -> board',
+		);
 	});
 
 	test("loads none of several plugin packages that declare the same plugin name", async () => {

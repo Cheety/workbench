@@ -7,7 +7,8 @@ import { quote } from "./quote.ts";
  * Decides which of the enabled plugins can be loaded and returns them with
  * every required plugin before the plugins that require it. Everything else
  * is rejected with the reason; a plugin that requires a rejected plugin is
- * rejected too, and its reason quotes the cause.
+ * rejected too, and its reason quotes the cause. Plugins that require each
+ * other in a cycle are each rejected for the cycle.
  *
  * Only enabled plugins are loaded from the catalog, so no code of any other
  * plugin runs and none of them is rejected.
@@ -21,6 +22,8 @@ export async function resolvePlugins(
 	const activationOrder: ValidPlugin[] = [];
 	const resolved = new Map<string, ValidPlugin>();
 	const resolving: string[] = [];
+	/** Plugin name → the dependency cycle the plugin was found in. */
+	const cycles = new Map<string, string>();
 
 	const rejected = (failure: LoadFailure): PluginLoad => {
 		failures.reject(failure);
@@ -63,12 +66,10 @@ export async function resolvePlugins(
 	): Promise<LoadFailure | undefined> => {
 		const requirement = `plugin ${quote(plugin.name)} requires plugin ${quote(required)}`;
 		if (resolving.includes(required)) {
-			const cycle = [...resolving.slice(resolving.indexOf(required)), required];
-			return {
-				plugin: plugin.name,
-				reason: "dependency_cycle",
-				detail: `plugin ${quote(plugin.name)} is part of a dependency cycle: ${cycle.join(" -> ")}`,
-			};
+			const members = resolving.slice(resolving.indexOf(required));
+			const cycle = [...members, required].join(" -> ");
+			for (const member of members) cycles.set(member, cycle);
+			return dependencyCycle(plugin, cycle);
 		}
 		if (!enabled.has(required)) {
 			const state = catalog.isDiscovered(required)
@@ -81,8 +82,12 @@ export async function resolvePlugins(
 			};
 		}
 		const requiredPlugin = await resolve(required);
-		if (!requiredPlugin.loaded)
-			return dependencyNotLoaded(plugin, required, requiredPlugin.failure);
+		if (!requiredPlugin.loaded) {
+			const cycle = cycles.get(plugin.name);
+			return cycle === undefined
+				? dependencyNotLoaded(plugin, required, requiredPlugin.failure)
+				: dependencyCycle(plugin, cycle);
+		}
 		const { version } = requiredPlugin.plugin;
 		if (!Bun.semver.satisfies(version, range)) {
 			return {
@@ -96,6 +101,14 @@ export async function resolvePlugins(
 
 	for (const name of enabledPlugins) await resolve(name);
 	return activationOrder;
+}
+
+function dependencyCycle(plugin: ValidPlugin, cycle: string): LoadFailure {
+	return {
+		plugin: plugin.name,
+		reason: "dependency_cycle",
+		detail: `plugin ${quote(plugin.name)} is part of a dependency cycle: ${cycle}`,
+	};
 }
 
 export function dependencyNotLoaded(

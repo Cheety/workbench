@@ -90,7 +90,7 @@ Kann ein Plugin nicht geladen werden, startet die Instanz trotzdem. Das Log nenn
 | `missing_dependency`    | Ein vorausgesetztes Plugin ist nicht installiert oder nicht in `PLUGINS` aktiviert.       |
 | `version_mismatch`      | Die Version eines vorausgesetzten Plugins erfüllt die Range nicht.                        |
 | `dependency_not_loaded` | Ein vorausgesetztes Plugin wurde selbst nicht geladen; `detail` nennt dessen Ursache.     |
-| `dependency_cycle`      | Plugins setzen einander im Kreis voraus.                                                  |
+| `dependency_cycle`      | Plugins setzen einander im Kreis voraus; jedes Plugin des Kreises erhält diesen Grund.    |
 | `activation_failed`     | `activate` des Plugins ist fehlgeschlagen.                                                |
 
 ## Umgebungsvariablen
