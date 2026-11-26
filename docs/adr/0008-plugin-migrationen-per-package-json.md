@@ -6,6 +6,8 @@ Die Migrationen laufen beim Start mit dem Migrations-Runner des Cores unter eine
 
 Schlägt die Migration eines Plugins fehl, wird dieses Plugin nicht geladen (`migration_failed`), die übrigen laufen weiter (ADR-0007), aber die Instanz meldet nicht „bereit“, bis ein Neustart gelingt. Erwogen wurde, wie bei anderen Ladefehlern bereit zu melden; dann ginge ein Upgrade mit kaputter Migration unbemerkt in Betrieb, obwohl Story 80 verlangt, dass „bereit“ eine gelungene Migration bedeutet.
 
+Ist Postgres beim Start nicht erreichbar, prüft die Instanz ohne Obergrenze erneut, mit exponentiellem Backoff und Full Jitter bis höchstens 10 s, und meldet bis dahin „nicht bereit“. Ebenso wartet ein Migrationslauf ohne Obergrenze auf die Advisory-Lock, die ein anderer Lauf hält. Das weicht bewusst von der Regel ab, Wiederholungen zu begrenzen: Nach der Regel für Health-Checks heißt eine fehlende Abhängigkeit „nicht bereit“, nicht Absturz, und die Migration einer anderen Instanz darf so lange dauern, wie sie braucht. Erwogen wurde, nach einer Frist abzubrechen; dann entschiede ein Wettlauf zwischen Datenbankstart und Frist, ob die Instanz startet, und ein Neustart durch Compose begänne das Warten nur von vorn. Ein Signal beendet beide Wartezeiten jederzeit.
+
 ## Consequences
 
 - Die Grenze zwischen den Schemas ist eine Konvention, keine Durchsetzung: Eine Migration läuft mit den Rechten der Instanz und kann fremde Schemas ansprechen. Eigene Postgres-Rollen je Plugin wären der nächste Schritt.
