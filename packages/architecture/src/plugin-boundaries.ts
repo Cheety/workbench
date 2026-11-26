@@ -1,17 +1,32 @@
 import { readdir } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-export type PluginBoundaryViolation = {
-	readonly rule: "foreign_plugin_internals";
+export type PluginBoundaryViolation = ImportViolation | ContractExportViolation;
+
+type ImportViolation = {
+	readonly rule: "foreign_plugin_internals" | "contract_imports_plugin_code";
 	readonly file: string;
 	readonly importPath: string;
 };
 
-type PluginPackage = {
-	readonly directory: string;
-	readonly packageName: string;
+type ContractExportViolation = {
+	readonly rule: "contract_beside_entry" | "contract_export_not_a_path";
+	readonly file: string;
 };
 
+type PluginPackage = {
+	readonly root: string;
+	readonly packageName: string;
+	readonly contractDirectory: string | undefined;
+	readonly contractProblem: ContractExportViolation["rule"] | undefined;
+};
+
+type Import = {
+	readonly file: string;
+	readonly importPath: string;
+};
+
+const PACKAGE_JSON = "package.json";
 const CONTRACT_SUBPATH = "contract";
 const INSTALLED_DEPENDENCIES = "node_modules";
 const SOURCE_FILES = new Bun.Glob("**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}");
@@ -24,24 +39,20 @@ export async function findPluginBoundaryViolations(
 	const plugins = await findPluginPackages(packagesDirectory);
 	const violations: PluginBoundaryViolation[] = [];
 	for (const plugin of plugins) {
-		const foreignPlugins = plugins.filter((other) => other !== plugin);
-		for await (const path of SOURCE_FILES.scan(
-			join(packagesDirectory, plugin.directory),
-		)) {
+		if (plugin.contractProblem !== undefined)
+			violations.push({
+				rule: plugin.contractProblem,
+				file: relative(packagesDirectory, join(plugin.root, PACKAGE_JSON)),
+			});
+		for await (const path of SOURCE_FILES.scan(plugin.root)) {
 			if (path.split(sep).includes(INSTALLED_DEPENDENCIES)) continue;
-			const file = join(plugin.directory, path);
-			const source = await Bun.file(join(packagesDirectory, file)).text();
-			for (const importPath of importPathsIn(source)) {
-				const target = importedPlugin(
-					packagesDirectory,
-					file,
-					importPath,
-					foreignPlugins,
-				);
-				if (target !== undefined && !isContractOf(target, importPath))
+			const file = join(plugin.root, path);
+			for (const importPath of importPathsIn(await Bun.file(file).text())) {
+				const rule = brokenRule({ file, importPath }, plugin, plugins);
+				if (rule !== undefined)
 					violations.push({
-						rule: "foreign_plugin_internals",
-						file,
+						rule,
+						file: relative(packagesDirectory, file),
 						importPath,
 					});
 			}
@@ -50,24 +61,88 @@ export async function findPluginBoundaryViolations(
 	return violations;
 }
 
+function brokenRule(
+	{ file, importPath }: Import,
+	plugin: PluginPackage,
+	plugins: readonly PluginPackage[],
+): ImportViolation["rule"] | undefined {
+	const importedFile = isPathImport(importPath)
+		? resolve(dirname(file), importPath)
+		: undefined;
+	const target = plugins.find((candidate) =>
+		importedFile === undefined
+			? importPath === candidate.packageName ||
+				importPath.startsWith(`${candidate.packageName}/`)
+			: isInside(importedFile, candidate.root),
+	);
+	if (target === undefined || isContractImport(target, importPath))
+		return undefined;
+	if (target !== plugin) return "foreign_plugin_internals";
+	const { contractDirectory } = plugin;
+	const isFromContract =
+		contractDirectory !== undefined && isInside(file, contractDirectory);
+	const staysInContract =
+		contractDirectory !== undefined &&
+		importedFile !== undefined &&
+		isInside(importedFile, contractDirectory);
+	return isFromContract && !staysInContract
+		? "contract_imports_plugin_code"
+		: undefined;
+}
+
 async function findPluginPackages(
 	packagesDirectory: string,
 ): Promise<readonly PluginPackage[]> {
 	const entries = await readdir(packagesDirectory, { withFileTypes: true });
-	const found: PluginPackage[] = [];
-	for (const entry of entries) {
-		const file = Bun.file(join(packagesDirectory, entry.name, "package.json"));
-		if (!(await file.exists())) continue;
-		const packageJson: unknown = await file.json();
-		if (
-			isRecord(packageJson) &&
-			typeof packageJson.name === "string" &&
-			isRecord(packageJson.workbench) &&
-			packageJson.workbench.plugin !== undefined
-		)
-			found.push({ directory: entry.name, packageName: packageJson.name });
-	}
-	return found;
+	const found = await Promise.all(
+		entries.map((entry) =>
+			readPluginPackage(join(packagesDirectory, entry.name)),
+		),
+	);
+	return found.filter((plugin) => plugin !== undefined);
+}
+
+async function readPluginPackage(
+	root: string,
+): Promise<PluginPackage | undefined> {
+	const file = Bun.file(join(root, PACKAGE_JSON));
+	if (!(await file.exists())) return undefined;
+	const packageJson: unknown = await file.json();
+	if (
+		!isRecord(packageJson) ||
+		typeof packageJson.name !== "string" ||
+		!isRecord(packageJson.workbench) ||
+		packageJson.workbench.plugin === undefined
+	)
+		return undefined;
+	const { plugin } = packageJson.workbench;
+	const entry =
+		isRecord(plugin) && typeof plugin.entry === "string"
+			? resolve(root, plugin.entry)
+			: undefined;
+	const contract = isRecord(packageJson.exports)
+		? packageJson.exports[`./${CONTRACT_SUBPATH}`]
+		: undefined;
+	const contractDirectory =
+		typeof contract === "string" ? dirname(resolve(root, contract)) : undefined;
+	return {
+		root,
+		packageName: packageJson.name,
+		contractDirectory,
+		contractProblem: contractProblemOf(contract, contractDirectory, entry),
+	};
+}
+
+function contractProblemOf(
+	contract: unknown,
+	contractDirectory: string | undefined,
+	entry: string | undefined,
+): ContractExportViolation["rule"] | undefined {
+	if (contract === undefined) return undefined;
+	if (contractDirectory === undefined) return "contract_export_not_a_path";
+	if (entry !== undefined && isInside(entry, contractDirectory))
+		return "contract_beside_entry";
+	return undefined;
 }
 
 function importPathsIn(source: string): string[] {
@@ -76,32 +151,22 @@ function importPathsIn(source: string): string[] {
 	);
 }
 
-function importedPlugin(
-	packagesDirectory: string,
-	file: string,
-	importPath: string,
-	plugins: readonly PluginPackage[],
-): PluginPackage | undefined {
-	if (isPathImport(importPath)) {
-		const [directory] = relative(
-			packagesDirectory,
-			resolve(packagesDirectory, dirname(file), importPath),
-		).split(sep);
-		return plugins.find((plugin) => plugin.directory === directory);
-	}
-	return plugins.find(
-		(plugin) =>
-			importPath === plugin.packageName ||
-			importPath.startsWith(`${plugin.packageName}/`),
-	);
-}
-
-function isContractOf(plugin: PluginPackage, importPath: string): boolean {
+function isContractImport(plugin: PluginPackage, importPath: string): boolean {
 	return importPath === `${plugin.packageName}/${CONTRACT_SUBPATH}`;
 }
 
 function isPathImport(importPath: string): boolean {
-	return importPath.startsWith(".") || importPath.startsWith("/");
+	return importPath.startsWith(".") || isAbsolute(importPath);
+}
+
+function isInside(path: string, directory: string): boolean {
+	const fromDirectory = relative(directory, path);
+	return (
+		fromDirectory !== "" &&
+		fromDirectory !== ".." &&
+		!fromDirectory.startsWith(`..${sep}`) &&
+		!isAbsolute(fromDirectory)
+	);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

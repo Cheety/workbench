@@ -145,8 +145,78 @@ describe("imports between plugins", () => {
 	});
 });
 
+describe("the contract export of a plugin", () => {
+	test.each([
+		["plugin-notes/src/contract/index.ts", "../store.ts"],
+		["plugin-notes/src/contract/index.ts", "../plugin.ts"],
+		["plugin-notes/src/contract/note.ts", "../store.ts"],
+		[
+			"plugin-notes/src/contract/index.ts",
+			"@fixture/plugin-notes/src/store.ts",
+		],
+	])(
+		"rejects code of its own plugin imported by %s from %s",
+		async (file, importPath) => {
+			const packages = await packagesDirectoryWith({
+				...NOTES_PLUGIN,
+				[file]: `import { store } from "${importPath}";`,
+			});
+
+			expect(await findPluginBoundaryViolations(packages)).toEqual([
+				{ rule: "contract_imports_plugin_code", file, importPath },
+			]);
+		},
+	);
+
+	test("allows other files of the contract", async () => {
+		const packages = await packagesDirectoryWith({
+			...NOTES_PLUGIN,
+			"plugin-notes/src/contract/index.ts":
+				'export type { Note } from "./note.ts";',
+			"plugin-notes/src/contract/note.ts": "export type Note = { id: string };",
+		});
+
+		expect(await findPluginBoundaryViolations(packages)).toEqual([]);
+	});
+
+	test.each([
+		["./src/contract.ts", "./src/plugin.ts"],
+		["./src/index.ts", "./src/server/plugin.ts"],
+	])(
+		"rejects the contract %s in a directory that holds the entry %s",
+		async (contract, entry) => {
+			const packages = await packagesDirectoryWith({
+				"plugin-notes/package.json": JSON.stringify({
+					name: "@fixture/plugin-notes",
+					exports: { "./contract": contract },
+					workbench: { plugin: { name: "notes", entry } },
+				}),
+			});
+
+			expect(await findPluginBoundaryViolations(packages)).toEqual([
+				{ rule: "contract_beside_entry", file: "plugin-notes/package.json" },
+			]);
+		},
+	);
+
+	test("rejects a contract export that does not name one file", async () => {
+		const packages = await packagesDirectoryWith({
+			...NOTES_PLUGIN,
+			"plugin-notes/package.json": JSON.stringify({
+				name: "@fixture/plugin-notes",
+				exports: { "./contract": { default: "./src/plugin.ts" } },
+				workbench: { plugin: { name: "notes", entry: "./src/plugin.ts" } },
+			}),
+		});
+
+		expect(await findPluginBoundaryViolations(packages)).toEqual([
+			{ rule: "contract_export_not_a_path", file: "plugin-notes/package.json" },
+		]);
+	});
+});
+
 describe("the plugin packages of this repository", () => {
-	test("import from one another only through contracts", async () => {
+	test("import one another only through contracts that hold no plugin code", async () => {
 		expect(
 			await findPluginBoundaryViolations(join(import.meta.dir, "..", "..")),
 		).toEqual([]);
