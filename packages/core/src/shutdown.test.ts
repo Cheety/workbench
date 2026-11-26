@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createLogger } from "./logger.ts";
-import { shutDown } from "./shutdown.ts";
+import { shutDown, shutDownInstance } from "./shutdown.ts";
 
 function recordingLogger() {
 	const lines: string[] = [];
@@ -59,5 +59,67 @@ describe("shutdown", () => {
 				reason: "unknown",
 			}),
 		]);
+	});
+});
+
+describe("instance shutdown", () => {
+	test("stops the server before it deactivates the plugins and exits with 0", async () => {
+		const { logger } = recordingLogger();
+		const journal: string[] = [];
+
+		const exitCode = await shutDownInstance(
+			{
+				server: {
+					stop: async () => {
+						journal.push("server stopped");
+					},
+				},
+				plugins: {
+					deactivate: async () => {
+						journal.push("plugins deactivated");
+						return "clean";
+					},
+				},
+			},
+			logger,
+		);
+
+		expect(exitCode).toBe(0);
+		expect(journal).toEqual(["server stopped", "plugins deactivated"]);
+	});
+
+	test("exits with 1 when a plugin could not be deactivated", async () => {
+		const { logger } = recordingLogger();
+
+		const exitCode = await shutDownInstance(
+			{
+				server: { stop: async () => {} },
+				plugins: { deactivate: async () => "incomplete" },
+			},
+			logger,
+		);
+
+		expect(exitCode).toBe(1);
+	});
+
+	test("deactivates the plugins even when the server fails to stop", async () => {
+		const { logger } = recordingLogger();
+		const journal: string[] = [];
+
+		const exitCode = await shutDownInstance(
+			{
+				server: { stop: () => Promise.reject(new Error("stuck")) },
+				plugins: {
+					deactivate: async () => {
+						journal.push("plugins deactivated");
+						return "clean";
+					},
+				},
+			},
+			logger,
+		);
+
+		expect(exitCode).toBe(1);
+		expect(journal).toEqual(["plugins deactivated"]);
 	});
 });
