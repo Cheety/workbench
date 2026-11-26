@@ -1,5 +1,9 @@
 import type { PluginContext } from "@workbench/sdk";
-import { describeThrown, summarize } from "./failure-reason.ts";
+import {
+	describeThrown,
+	summarize,
+	UNKNOWN_FAILURE_REASON,
+} from "./failure-reason.ts";
 import { type HookTimeout, runWithin } from "./hook-timeout.ts";
 import { type LoadFailure, LoadFailures } from "./load-failures.ts";
 import type { Logger } from "./logger.ts";
@@ -33,6 +37,11 @@ export type KernelOptions = {
 	readonly enabledPlugins: readonly string[];
 	readonly capabilityProviders: CapabilityProviders;
 	readonly hookTimeout: HookTimeout;
+	/**
+	 * Once aborted, the start loads and activates no further plugin; a hook
+	 * that is already running is still waited for.
+	 */
+	readonly stopSignal?: AbortSignal;
 	readonly logger: Logger;
 };
 
@@ -66,13 +75,18 @@ export class UndeclaredCapabilityError extends Error {
  * Plugins the instance config does not enable are left alone: their entries
  * are not loaded and their defects are not reported.
  *
- * A plugin whose `activate` throws or does not finish within the hook timeout
- * is not loaded and is not deactivated later.
+ * A plugin whose entry does not finish loading within the hook timeout is not
+ * loaded. A plugin for which a capability provider throws is not loaded and
+ * its `activate` is not called. A plugin whose `activate` throws or does not finish within the hook
+ * timeout is not loaded and is not deactivated later.
  *
  * Never rejects because of a plugin: every plugin that cannot be loaded is
  * logged as "plugin not loaded" and listed in `failures`, the others run. A
  * package whose `package.json` discovery could not use is logged as "plugin
  * package ignored" with its directory.
+ *
+ * A start that is told to stop logs "plugin start stopped" with the plugins it
+ * did not activate; these are no load failures.
  */
 export async function startPlugins(
 	options: KernelOptions,
@@ -81,28 +95,7 @@ export async function startPlugins(
 	const failures = new LoadFailures(logger);
 
 	const packages = await discoverPackages(options);
-	const activationOrder = await resolvePlugins(
-		catalogPlugins(packages, Object.keys(options.capabilityProviders)),
-		options.enabledPlugins,
-		failures,
-	);
-	logger.info("plugins resolved", {
-		activationOrder: activationOrder.map((plugin) => plugin.name),
-	});
-
-	const active: ValidPlugin[] = [];
-	for (const plugin of activationOrder) {
-		const failure = await activate(plugin, options, failures);
-		if (failure !== undefined) {
-			failures.reject(failure);
-			continue;
-		}
-		active.push(plugin);
-		logger.info("plugin activated", {
-			plugin: plugin.name,
-			version: plugin.version,
-		});
-	}
+	const active = await activateEnabledPlugins(packages, options, failures);
 	const activeNames = active.map((plugin) => plugin.name);
 	logger.info("plugins started", {
 		active: activeNames,
@@ -120,6 +113,54 @@ export async function startPlugins(
 	};
 }
 
+async function activateEnabledPlugins(
+	packages: readonly PluginPackage[],
+	options: KernelOptions,
+	failures: LoadFailures,
+): Promise<readonly ValidPlugin[]> {
+	const { logger, stopSignal } = options;
+	const active: ValidPlugin[] = [];
+	if (stopSignal?.aborted) {
+		logger.info("plugin start stopped", {
+			notActivated: options.enabledPlugins,
+		});
+		return active;
+	}
+	const activationOrder = await resolvePlugins(
+		catalogPlugins(
+			packages,
+			Object.keys(options.capabilityProviders),
+			options.hookTimeout,
+		),
+		options.enabledPlugins,
+		failures,
+	);
+	logger.info("plugins resolved", {
+		activationOrder: activationOrder.map((plugin) => plugin.name),
+	});
+	for (const [position, plugin] of activationOrder.entries()) {
+		if (stopSignal?.aborted) {
+			logger.info("plugin start stopped", {
+				notActivated: activationOrder
+					.slice(position)
+					.map((remaining) => remaining.name),
+			});
+			break;
+		}
+		const failure = await activate(plugin, options, failures);
+		if (failure !== undefined) {
+			failures.reject(failure);
+			continue;
+		}
+		active.push(plugin);
+		logger.info("plugin activated", {
+			plugin: plugin.name,
+			version: plugin.version,
+		});
+	}
+	return active;
+}
+
 async function discoverPackages(
 	options: KernelOptions,
 ): Promise<readonly PluginPackage[]> {
@@ -132,9 +173,13 @@ async function discoverPackages(
 		});
 		return packages;
 	} catch (error) {
-		options.logger.error("plugin discovery failed", {
-			reason: systemFailureReason(error),
-		});
+		const reason = systemFailureReason(error);
+		options.logger.error(
+			"plugin discovery failed",
+			reason === UNKNOWN_FAILURE_REASON
+				? { reason, error: describeThrown(error) }
+				: { reason },
+		);
 		return [];
 	}
 }
@@ -149,9 +194,11 @@ async function activate(
 		if (cause !== undefined)
 			return dependencyNotLoaded(plugin, required, cause);
 	}
+	const provision = provideContext(plugin, capabilityProviders);
+	if (!provision.provided) return provision.failure;
 	try {
 		const outcome = await runWithin(
-			() => plugin.activate(contextFor(plugin, capabilityProviders)),
+			() => plugin.activate(provision.context),
 			hookTimeout,
 		);
 		if (outcome === "finished") return undefined;
@@ -171,21 +218,39 @@ async function activate(
 	}
 }
 
-function contextFor(
+type ContextProvision =
+	| { readonly provided: true; readonly context: PluginContext }
+	| { readonly provided: false; readonly failure: LoadFailure };
+
+function provideContext(
 	plugin: ValidPlugin,
 	providers: CapabilityProviders,
-): PluginContext {
-	const granted = new Map(
-		plugin.capabilities.map((capability) => [
-			capability,
-			providers[capability]?.(),
-		]),
-	);
+): ContextProvision {
+	const granted = new Map<string, unknown>();
+	for (const capability of plugin.capabilities) {
+		try {
+			granted.set(capability, providers[capability]?.());
+		} catch (error) {
+			const thrown = describeThrown(error);
+			return {
+				provided: false,
+				failure: {
+					plugin: plugin.name,
+					reason: "capability_unavailable",
+					detail: `plugin ${quote(plugin.name)} was not activated because the instance could not provide the capability ${quote(capability)} (${summarize(thrown)})`,
+					error: thrown,
+				},
+			};
+		}
+	}
 	return {
-		capability: (name) => {
-			if (!granted.has(name))
-				throw new UndeclaredCapabilityError(plugin.name, name);
-			return granted.get(name);
+		provided: true,
+		context: {
+			capability: (name) => {
+				if (!granted.has(name))
+					throw new UndeclaredCapabilityError(plugin.name, name);
+				return granted.get(name);
+			},
 		},
 	};
 }

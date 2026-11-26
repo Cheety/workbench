@@ -3,12 +3,14 @@ import type { Logger } from "./logger.ts";
 
 export type LoadFailureReason =
 	| "invalid_manifest"
+	| "load_timed_out"
 	| "unknown_plugin"
 	| "duplicate_plugin"
 	| "missing_dependency"
 	| "version_mismatch"
 	| "dependency_not_loaded"
 	| "dependency_cycle"
+	| "capability_unavailable"
 	| "activation_failed"
 	| "activation_timed_out";
 
@@ -18,7 +20,7 @@ export type LoadFailure = {
 	readonly plugin: string;
 	readonly reason: LoadFailureReason;
 	readonly detail: string;
-	/** What the plugin threw, if that is why it was not loaded. */
+	/** What the plugin or a capability provider threw, if that is why it was not loaded. */
 	readonly error?: ThrownError;
 };
 
