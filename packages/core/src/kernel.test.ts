@@ -16,7 +16,7 @@ import {
 import { createLogger } from "./logger.ts";
 import type {
 	Migration,
-	SchemaMigrationOutcome,
+	MigrationRun,
 	SchemaMigrations,
 } from "./schema-migrations.ts";
 
@@ -46,14 +46,16 @@ function packageOf(
 
 type MigrateSchemas = (
 	schemas: readonly SchemaMigrations[],
-) => Promise<readonly SchemaMigrationOutcome[]>;
+) => Promise<MigrationRun>;
 
-const migrateAll: MigrateSchemas = async (schemas) =>
-	schemas.map(({ schema, migrations }) => ({
+const migrateAll: MigrateSchemas = async (schemas) => ({
+	stopped: false,
+	outcomes: schemas.map(({ schema, migrations }) => ({
 		schema,
 		migrated: true,
 		applied: migrations.map((migration) => migration.name),
-	}));
+	})),
+});
 
 function withMigrations(
 	pluginPackage: PluginPackage,
@@ -1598,10 +1600,19 @@ describe("plugin schemas", () => {
 				),
 			],
 			enabledPlugins: ["notes", "board", "cards"],
-			migrateSchemas: async () => [
-				{ schema: "plugin_notes", migrated: false, applied: [], detail, error },
-				{ schema: "plugin_cards", migrated: true, applied: [] },
-			],
+			migrateSchemas: async () => ({
+				stopped: false,
+				outcomes: [
+					{
+						schema: "plugin_notes",
+						migrated: false,
+						applied: [],
+						detail,
+						error,
+					},
+					{ schema: "plugin_cards", migrated: true, applied: [] },
+				],
+			}),
 		});
 
 		const failure: LoadFailure = {

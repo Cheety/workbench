@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { SQL } from "bun";
 import { Secret } from "./config.ts";
-import { createLogger } from "./logger.ts";
-import { migrateSchemas } from "./schema-migrations.ts";
+import { setSystemTimer } from "./hook-timeout.ts";
+import { createLogger, type Logger } from "./logger.ts";
+import { type MigrationRunner, migrateSchemas } from "./schema-migrations.ts";
 import { createFreshDatabase, type FreshDatabase } from "./testing/postgres.ts";
 
 type LogEntry = Record<string, unknown>;
@@ -29,6 +30,18 @@ async function freshDatabase(): Promise<FreshDatabase> {
 	return database;
 }
 
+const NOT_STOPPED = new AbortController().signal;
+
+function runnerFor(url: string, logger: Logger): MigrationRunner {
+	return {
+		databaseUrl: new Secret(url),
+		connectionTimeoutMs: 2_000,
+		lockRetryDelayMs: () => 10,
+		setTimer: setSystemTimer,
+		logger,
+	};
+}
+
 const NOTES = {
 	schema: "plugin_notes",
 	migrations: [
@@ -44,19 +57,22 @@ describe("schema migrations", () => {
 		const database = await freshDatabase();
 		const { logger } = recordingLogger();
 
-		const outcomes = await migrateSchemas(
-			new Secret(database.url),
+		const run = await migrateSchemas(
+			runnerFor(database.url, logger),
 			[NOTES],
-			logger,
+			NOT_STOPPED,
 		);
 
-		expect(outcomes).toEqual([
-			{
-				schema: "plugin_notes",
-				migrated: true,
-				applied: ["0001_create_notes.sql"],
-			},
-		]);
+		expect(run).toEqual({
+			stopped: false,
+			outcomes: [
+				{
+					schema: "plugin_notes",
+					migrated: true,
+					applied: ["0001_create_notes.sql"],
+				},
+			],
+		});
 		expect(
 			await database.sql`SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema IN ('core', 'plugin_notes') ORDER BY table_schema, table_name`,
 		).toEqual([
@@ -67,26 +83,39 @@ describe("schema migrations", () => {
 
 	test("apply nothing when every migration was applied before", async () => {
 		const database = await freshDatabase();
-		const url = new Secret(database.url);
-		await migrateSchemas(url, [NOTES], recordingLogger().logger);
+		const url = database.url;
+		await migrateSchemas(
+			runnerFor(url, recordingLogger().logger),
+			[NOTES],
+			NOT_STOPPED,
+		);
 		const { logger, entries } = recordingLogger();
 
-		const outcomes = await migrateSchemas(url, [NOTES], logger);
+		const run = await migrateSchemas(
+			runnerFor(url, logger),
+			[NOTES],
+			NOT_STOPPED,
+		);
 
-		expect(outcomes).toEqual([
-			{ schema: "plugin_notes", migrated: true, applied: [] },
-		]);
+		expect(run).toEqual({
+			stopped: false,
+			outcomes: [{ schema: "plugin_notes", migrated: true, applied: [] }],
+		});
 		expect(entries).toEqual([]);
 	});
 
 	test("apply only the migrations added since the last run, in the order of their names", async () => {
 		const database = await freshDatabase();
-		const url = new Secret(database.url);
-		await migrateSchemas(url, [NOTES], recordingLogger().logger);
+		const url = database.url;
+		await migrateSchemas(
+			runnerFor(url, recordingLogger().logger),
+			[NOTES],
+			NOT_STOPPED,
+		);
 		const { logger } = recordingLogger();
 
-		const outcomes = await migrateSchemas(
-			url,
+		const run = await migrateSchemas(
+			runnerFor(url, logger),
 			[
 				{
 					schema: "plugin_notes",
@@ -103,16 +132,19 @@ describe("schema migrations", () => {
 					],
 				},
 			],
-			logger,
+			NOT_STOPPED,
 		);
 
-		expect(outcomes).toEqual([
-			{
-				schema: "plugin_notes",
-				migrated: true,
-				applied: ["0002_add_body.sql", "0003_add_pinned.sql"],
-			},
-		]);
+		expect(run).toEqual({
+			stopped: false,
+			outcomes: [
+				{
+					schema: "plugin_notes",
+					migrated: true,
+					applied: ["0002_add_body.sql", "0003_add_pinned.sql"],
+				},
+			],
+		});
 		expect(
 			await database.sql`SELECT column_name FROM information_schema.columns WHERE table_schema = 'plugin_notes' AND table_name = 'notes' ORDER BY ordinal_position`,
 		).toEqual([
@@ -127,8 +159,8 @@ describe("schema migrations", () => {
 		const database = await freshDatabase();
 		const { logger, entries } = recordingLogger();
 
-		const outcomes = await migrateSchemas(
-			new Secret(database.url),
+		const run = await migrateSchemas(
+			runnerFor(database.url, logger),
 			[
 				{
 					schema: "plugin_board",
@@ -145,24 +177,27 @@ describe("schema migrations", () => {
 				},
 				NOTES,
 			],
-			logger,
+			NOT_STOPPED,
 		);
 
-		expect(outcomes).toEqual([
-			{
-				schema: "plugin_board",
-				migrated: false,
-				applied: [],
-				detail:
-					'migration "0001_create_cards.sql" of schema "plugin_board" failed (PostgresError: relation "cards" already exists)',
-				error: expect.objectContaining({ name: "PostgresError" }),
-			},
-			{
-				schema: "plugin_notes",
-				migrated: true,
-				applied: ["0001_create_notes.sql"],
-			},
-		]);
+		expect(run).toEqual({
+			stopped: false,
+			outcomes: [
+				{
+					schema: "plugin_board",
+					migrated: false,
+					applied: [],
+					detail:
+						'migration "0001_create_cards.sql" of schema "plugin_board" failed (PostgresError: relation "cards" already exists)',
+					error: expect.objectContaining({ name: "PostgresError" }),
+				},
+				{
+					schema: "plugin_notes",
+					migrated: true,
+					applied: ["0001_create_notes.sql"],
+				},
+			],
+		});
 		expect(
 			await database.sql`SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema LIKE 'plugin_%' ORDER BY table_schema`,
 		).toEqual([{ table_schema: "plugin_notes", table_name: "notes" }]);
@@ -180,8 +215,8 @@ describe("schema migrations", () => {
 		const database = await freshDatabase();
 		const { logger, entries } = recordingLogger();
 
-		const outcomes = await migrateSchemas(
-			new Secret(database.url),
+		const run = await migrateSchemas(
+			runnerFor(database.url, logger),
 			[
 				{
 					schema: "plugin_notes",
@@ -193,16 +228,19 @@ describe("schema migrations", () => {
 					],
 				},
 			],
-			logger,
+			NOT_STOPPED,
 		);
 
-		expect(outcomes).toEqual([
-			expect.objectContaining({
-				schema: "plugin_notes",
-				migrated: false,
-				applied: [],
-			}),
-		]);
+		expect(run).toEqual({
+			stopped: false,
+			outcomes: [
+				expect.objectContaining({
+					schema: "plugin_notes",
+					migrated: false,
+					applied: [],
+				}),
+			],
+		});
 		expect(entries).toContainEqual(
 			expect.objectContaining({
 				level: "warn",
@@ -221,17 +259,22 @@ describe("schema migrations", () => {
 			const database = await freshDatabase();
 			const { logger } = recordingLogger();
 
-			const [outcome] = await migrateSchemas(
-				new Secret(database.url),
+			const run = await migrateSchemas(
+				runnerFor(database.url, logger),
 				[{ schema, migrations: NOTES.migrations }],
-				logger,
+				NOT_STOPPED,
 			);
 
-			expect(outcome).toMatchObject({
-				schema,
-				migrated: false,
-				applied: [],
-				detail: `schema name ${JSON.stringify(schema)} must consist of at most 63 lowercase letters, digits and underscores and start with a letter`,
+			expect(run).toMatchObject({
+				stopped: false,
+				outcomes: [
+					{
+						schema,
+						migrated: false,
+						applied: [],
+						detail: `schema name ${JSON.stringify(schema)} must consist of at most 63 lowercase letters, digits and underscores and start with a letter`,
+					},
+				],
 			});
 			expect(
 				await database.sql`SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 'plugin_%'`,
@@ -241,7 +284,7 @@ describe("schema migrations", () => {
 
 	test("apply each migration exactly once when two runs start at the same time", async () => {
 		const database = await freshDatabase();
-		const url = new Secret(database.url);
+		const url = database.url;
 		await database.sql.unsafe(`
 			CREATE TABLE public.gate (id int PRIMARY KEY);
 			INSERT INTO public.gate VALUES (1);
@@ -257,30 +300,39 @@ describe("schema migrations", () => {
 			],
 		};
 		await migrateSchemas(
-			url,
+			runnerFor(url, recordingLogger().logger),
 			[{ schema: gated.schema, migrations: [] }],
-			recordingLogger().logger,
+			NOT_STOPPED,
 		);
 		const holder = new SQL(database.url, { max: 1 });
 		await holder.unsafe("BEGIN; SELECT id FROM public.gate FOR UPDATE;");
 		const { logger } = recordingLogger();
 
 		const runs = Promise.all([
-			migrateSchemas(url, [gated], logger),
-			migrateSchemas(url, [gated], logger),
+			migrateSchemas(runnerFor(url, logger), [gated], NOT_STOPPED),
+			migrateSchemas(runnerFor(url, logger), [gated], NOT_STOPPED),
 		]);
 		await untilBlockedSessions(database, 2);
 		await holder.unsafe("COMMIT");
 		await holder.close();
-		const outcomes = await runs;
+		const results = await runs;
 
-		expect(outcomes.flat().map((outcome) => outcome.migrated)).toEqual([
-			true,
-			true,
+		expect(results).toContainAllValues([
+			{
+				stopped: false,
+				outcomes: [
+					{
+						schema: "plugin_notes",
+						migrated: true,
+						applied: ["0001_wait_at_gate.sql"],
+					},
+				],
+			},
+			{
+				stopped: false,
+				outcomes: [{ schema: "plugin_notes", migrated: true, applied: [] }],
+			},
 		]);
-		expect(
-			outcomes.flat().map((outcome) => outcome.applied),
-		).toContainAllValues([["0001_wait_at_gate.sql"], []]);
 		expect(
 			await database.sql`SELECT migration FROM public.applications`,
 		).toEqual([{ migration: "0001_wait_at_gate.sql" }]);

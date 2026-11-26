@@ -5,6 +5,7 @@ import {
 	summarize,
 	type ThrownError,
 } from "./failure-reason.ts";
+import type { SetTimer } from "./hook-timeout.ts";
 import type { Logger } from "./logger.ts";
 import { quote } from "./quote.ts";
 
@@ -32,16 +33,32 @@ export type SchemaMigrationOutcome =
 			readonly error?: ThrownError;
 	  };
 
+export type MigrationRun =
+	| {
+			readonly stopped: false;
+			readonly outcomes: readonly SchemaMigrationOutcome[];
+	  }
+	| { readonly stopped: true };
+
+export type MigrationRunner = {
+	readonly databaseUrl: Secret;
+	readonly connectionTimeoutMs: number;
+	readonly lockRetryDelayMs: (attempt: number) => number;
+	readonly setTimer: SetTimer;
+	readonly logger: Logger;
+};
+
 const MIGRATION_LOCK_KEY = 0x776f726b62656e63n;
 
 const SCHEMA_NAME = /^[a-z][a-z0-9_]{0,62}$/;
 
 export async function migrateSchemas(
-	databaseUrl: Secret,
+	runner: MigrationRunner,
 	schemas: readonly SchemaMigrations[],
-	logger: Logger,
-): Promise<readonly SchemaMigrationOutcome[]> {
-	const sql = new SQL(databaseUrl.reveal(), { max: 1 });
+	_stopSignal: AbortSignal,
+): Promise<MigrationRun> {
+	const { logger } = runner;
+	const sql = new SQL(runner.databaseUrl.reveal(), { max: 1 });
 	try {
 		const connection = await sql.reserve();
 		try {
@@ -51,7 +68,7 @@ export async function migrateSchemas(
 				const outcomes: SchemaMigrationOutcome[] = [];
 				for (const schema of schemas)
 					outcomes.push(await migrateSchema(connection, schema, logger));
-				return outcomes;
+				return { stopped: false, outcomes };
 			} finally {
 				await releaseLock(connection, logger);
 			}

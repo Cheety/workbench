@@ -11,7 +11,7 @@ import { type RunningPlugins, startPlugins } from "./kernel.ts";
 import { createLogger } from "./logger.ts";
 import { discoverPluginPackages } from "./plugin-discovery.ts";
 import { createPostgresCheck } from "./postgres.ts";
-import { migrateSchemas } from "./schema-migrations.ts";
+import { type MigrationRunner, migrateSchemas } from "./schema-migrations.ts";
 import {
 	type RunningServer,
 	type ServerOptions,
@@ -26,6 +26,10 @@ const PACKAGES_DIRECTORY = fileURLToPath(new URL("../../", import.meta.url));
 const CLOSED_PIPE = "EPIPE";
 
 const DATABASE_RETRY = { baseMs: 250, capMs: 10_000 } as const;
+
+const MIGRATION_CONNECTION_TIMEOUT_MS = 10_000;
+
+const MIGRATION_LOCK_RETRY = { baseMs: 250, capMs: 2_000 } as const;
 
 type StartedPlugins = Pick<RunningPlugins, "deactivate">;
 
@@ -88,6 +92,17 @@ logger.info("server started", { port: server.port });
 
 const instanceStart = new AbortController();
 
+const migrationRunner: MigrationRunner = {
+	databaseUrl: config.databaseUrl,
+	connectionTimeoutMs: MIGRATION_CONNECTION_TIMEOUT_MS,
+	lockRetryDelayMs: fullJitterBackoff({
+		...MIGRATION_LOCK_RETRY,
+		random: Math.random,
+	}),
+	setTimer: setSystemTimer,
+	logger,
+};
+
 type StartFailure = "core_schema_not_migrated" | "plugin_schema_not_migrated";
 
 function failStart(
@@ -108,7 +123,7 @@ async function startInstance(): Promise<StartedPlugins> {
 	});
 	if (database === "stopped") return NO_PLUGINS;
 	try {
-		await migrateSchemas(config.databaseUrl, [], logger);
+		await migrateSchemas(migrationRunner, [], instanceStart.signal);
 	} catch (error) {
 		failStart("core_schema_not_migrated", { error: describeThrown(error) });
 		return NO_PLUGINS;
@@ -118,7 +133,7 @@ async function startInstance(): Promise<StartedPlugins> {
 		enabledPlugins: config.enabledPlugins,
 		capabilityProviders: {},
 		migrateSchemas: (schemas) =>
-			migrateSchemas(config.databaseUrl, schemas, logger),
+			migrateSchemas(migrationRunner, schemas, instanceStart.signal),
 		hookTimeout: { ms: config.pluginHookTimeoutMs, setTimer: setSystemTimer },
 		stopSignal: instanceStart.signal,
 		logger,

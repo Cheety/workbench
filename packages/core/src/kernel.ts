@@ -20,10 +20,7 @@ import {
 import type { ValidPlugin } from "./plugin-manifest.ts";
 import { dependencyNotLoaded, resolvePlugins } from "./plugin-resolution.ts";
 import { quote } from "./quote.ts";
-import type {
-	SchemaMigrationOutcome,
-	SchemaMigrations,
-} from "./schema-migrations.ts";
+import type { MigrationRun, SchemaMigrations } from "./schema-migrations.ts";
 import { systemFailureReason } from "./system-error.ts";
 
 export type { HookTimeout } from "./hook-timeout.ts";
@@ -40,7 +37,7 @@ export type CapabilityProviders = Readonly<
 
 export type MigrateSchemas = (
 	schemas: readonly SchemaMigrations[],
-) => Promise<readonly SchemaMigrationOutcome[]>;
+) => Promise<MigrationRun>;
 
 export type KernelOptions = {
 	readonly discover: () => Promise<PluginDiscovery>;
@@ -167,7 +164,8 @@ async function migratePluginSchemas(
 	}
 	if (schemas.length > 0) {
 		try {
-			const outcomes = await migrateSchemas(schemas);
+			const run = await migrateSchemas(schemas);
+			const outcomes = run.stopped ? [] : run.outcomes;
 			for (const [index, outcome] of outcomes.entries()) {
 				const owner = owners[index];
 				if (owner === undefined || outcome.migrated) continue;
