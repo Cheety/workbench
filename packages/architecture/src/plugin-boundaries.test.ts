@@ -25,6 +25,8 @@ const NOTES_PLUGIN = {
 	"plugin-notes/src/contract/index.ts": "export type Note = { id: string };",
 };
 
+const STORE = "@fixture/plugin-notes/src/store.ts";
+
 const BOARD_PACKAGE_JSON = JSON.stringify({
 	name: "@fixture/plugin-board",
 	workbench: { plugin: { name: "board", entry: "./src/plugin.ts" } },
@@ -68,14 +70,24 @@ describe("imports between plugins", () => {
 	});
 
 	test.each([
-		['import type { Store } from "@fixture/plugin-notes/src/store.ts";'],
-		['export type { Store } from "@fixture/plugin-notes/src/store.ts";'],
-		['type Store = import("@fixture/plugin-notes/src/store.ts").Store;'],
-		['const notes = await import("@fixture/plugin-notes/src/store.ts");'],
-		['import "@fixture/plugin-notes/src/store.ts";'],
+		[`import type { Store } from "${STORE}";`, STORE],
+		[`export type { Store } from "${STORE}";`, STORE],
+		[`type Store = import("${STORE}").Store;`, STORE],
+		[`const notes = await import("${STORE}");`, STORE],
+		[`import "${STORE}";`, STORE],
+		[`const notes = await import(/* lazy */ "${STORE}");`, STORE],
+		[`const notes = await import(\n\t// lazy\n\t"${STORE}"\n);`, STORE],
+		[`const path = require.resolve("${STORE}");`, STORE],
+		[`const url = import.meta.resolve("${STORE}");`, STORE],
+		[`mock.module("${STORE}", () => ({}));`, STORE],
+		[`/// <reference types="${STORE}" />`, STORE],
+		[
+			'/// <reference path="../../plugin-notes/src/store.ts" />',
+			"../../plugin-notes/src/store.ts",
+		],
 	])(
 		"rejects every form of import from the inside of a foreign plugin: %s",
-		async (source) => {
+		async (source, importPath) => {
 			const packages = await packagesDirectoryWith(
 				boardPluginImporting(source),
 			);
@@ -84,7 +96,7 @@ describe("imports between plugins", () => {
 				{
 					rule: "foreign_plugin_internals",
 					file: "plugin-board/src/plugin.ts",
-					importPath: "@fixture/plugin-notes/src/store.ts",
+					importPath,
 				},
 			]);
 		},

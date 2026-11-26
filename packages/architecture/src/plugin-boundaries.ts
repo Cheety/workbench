@@ -24,14 +24,20 @@ type PluginPackage = {
 type Import = {
 	readonly file: string;
 	readonly importPath: string;
+	readonly isPath: boolean;
 };
 
 const PACKAGE_JSON = "package.json";
 const CONTRACT_SUBPATH = "contract";
 const INSTALLED_DEPENDENCIES = "node_modules";
 const SOURCE_FILES = new Bun.Glob("**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}");
-const MODULE_SPECIFIER =
-	/(?<![\w$.])(?:from|import\s*\(?|require\s*\()\s*(["'`])([^"'`\r\n]+)\1/g;
+const GAP = String.raw`(?:\s|/\*[\s\S]*?\*/|//[^\n]*\n)*`;
+const MODULE_SPECIFIER = new RegExp(
+	String.raw`(?<![\w$.])(?:import\.meta\.resolve|require\.resolve|mock\.module|from|import|require)${GAP}\(?${GAP}(["'\x60])([^"'\x60\r\n]+)\1`,
+	"g",
+);
+const REFERENCE_DIRECTIVE =
+	/^[ \t]*\/\/\/[ \t]*<reference[ \t]+(path|types)[ \t]*=[ \t]*(["'])([^"'\r\n]+)\2/gm;
 
 export async function findPluginBoundaryViolations(
 	packagesDirectory: string,
@@ -47,8 +53,14 @@ export async function findPluginBoundaryViolations(
 		for await (const path of SOURCE_FILES.scan(plugin.root)) {
 			if (path.split(sep).includes(INSTALLED_DEPENDENCIES)) continue;
 			const file = join(plugin.root, path);
-			for (const importPath of importPathsIn(await Bun.file(file).text())) {
-				const rule = violatedRule({ file, importPath }, plugin, plugins);
+			for (const { importPath, isPath } of importsIn(
+				await Bun.file(file).text(),
+			)) {
+				const rule = violatedRule(
+					{ file, importPath, isPath },
+					plugin,
+					plugins,
+				);
 				if (rule !== undefined)
 					violations.push({
 						rule,
@@ -62,13 +74,11 @@ export async function findPluginBoundaryViolations(
 }
 
 function violatedRule(
-	{ file, importPath }: Import,
+	{ file, importPath, isPath }: Import,
 	plugin: PluginPackage,
 	plugins: readonly PluginPackage[],
 ): ImportViolation["rule"] | undefined {
-	const importedFile = isPathImport(importPath)
-		? resolve(dirname(file), importPath)
-		: undefined;
+	const importedFile = isPath ? resolve(dirname(file), importPath) : undefined;
 	const target = plugins.find((candidate) =>
 		importedFile === undefined
 			? importPath === candidate.packageName ||
@@ -145,10 +155,18 @@ function contractProblemOf(
 	return undefined;
 }
 
-function importPathsIn(source: string): string[] {
-	return Array.from(source.matchAll(MODULE_SPECIFIER)).flatMap(
-		([, , importPath]) => (importPath === undefined ? [] : [importPath]),
+function importsIn(source: string): Omit<Import, "file">[] {
+	const modules = Array.from(source.matchAll(MODULE_SPECIFIER)).flatMap(
+		([, , importPath]) =>
+			importPath === undefined
+				? []
+				: [{ importPath, isPath: isPathImport(importPath) }],
 	);
+	const references = Array.from(source.matchAll(REFERENCE_DIRECTIVE)).flatMap(
+		([, kind, , importPath]) =>
+			importPath === undefined ? [] : [{ importPath, isPath: kind === "path" }],
+	);
+	return [...modules, ...references];
 }
 
 function isContractImport(plugin: PluginPackage, importPath: string): boolean {
