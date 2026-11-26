@@ -37,6 +37,18 @@ export async function shutDownInstance(
 	return serverExitCode === 0 ? pluginsExitCode : 1;
 }
 
+export function reportFailedStart(
+	starting: Promise<Deactivatable>,
+	logger: Logger,
+): Promise<Deactivatable> {
+	return starting.catch((error: unknown) => {
+		logger.error("plugins failed to start", {
+			error: describeThrown(error),
+		});
+		return { deactivate: async () => "incomplete" };
+	});
+}
+
 async function deactivatePlugins(
 	plugins: Promise<Deactivatable>,
 	logger: Logger,

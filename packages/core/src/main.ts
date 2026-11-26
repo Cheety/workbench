@@ -14,7 +14,7 @@ import {
 	type ServerOptions,
 	startServer,
 } from "./server.ts";
-import { shutDownInstance } from "./shutdown.ts";
+import { reportFailedStart, shutDownInstance } from "./shutdown.ts";
 import { systemFailureReason } from "./system-error.ts";
 
 // The image holds the core and every plugin package of the repository side by
@@ -78,14 +78,17 @@ const server = startServerOrExit({
 logger.info("server started", { port: server.port });
 
 const pluginStart = new AbortController();
-const plugins = startPlugins({
-	discover: discoverPluginPackages(PACKAGES_DIRECTORY),
-	enabledPlugins: config.enabledPlugins,
-	capabilityProviders: {},
-	hookTimeout: { ms: config.pluginHookTimeoutMs, setTimer: setSystemTimer },
-	stopSignal: pluginStart.signal,
+const plugins = reportFailedStart(
+	startPlugins({
+		discover: discoverPluginPackages(PACKAGES_DIRECTORY),
+		enabledPlugins: config.enabledPlugins,
+		capabilityProviders: {},
+		hookTimeout: { ms: config.pluginHookTimeoutMs, setTimer: setSystemTimer },
+		stopSignal: pluginStart.signal,
+		logger,
+	}),
 	logger,
-});
+);
 
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
 	process.once(signal, () => {

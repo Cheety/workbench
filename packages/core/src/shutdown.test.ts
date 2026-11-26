@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createLogger } from "./logger.ts";
-import { shutDown, shutDownInstance } from "./shutdown.ts";
+import { reportFailedStart, shutDown, shutDownInstance } from "./shutdown.ts";
 
 function recordingLogger() {
 	const lines: string[] = [];
@@ -242,5 +242,66 @@ describe("instance shutdown", () => {
 			"server stopped",
 			"plugins deactivated",
 		]);
+	});
+});
+
+describe("failed plugin start", () => {
+	test("is reported when it fails, without waiting for a shutdown", async () => {
+		const { logger, lines } = recordingLogger();
+
+		await reportFailedStart(
+			Promise.reject(new TypeError("kernel defect")),
+			logger,
+		);
+
+		expect(lines.map((line) => JSON.parse(line))).toEqual([
+			expect.objectContaining({
+				level: "error",
+				message: "plugins failed to start",
+				error: {
+					name: "TypeError",
+					message: "kernel defect",
+					stack: expect.stringContaining("shutdown.test.ts"),
+				},
+			}),
+		]);
+	});
+
+	test("is not reported a second time by the shutdown, which exits with 1", async () => {
+		const { logger, lines } = recordingLogger();
+		const journal: string[] = [];
+		const plugins = reportFailedStart(
+			Promise.reject(new TypeError("kernel defect")),
+			logger,
+		);
+
+		const exitCode = await shutDownInstance(
+			{
+				stopStartingPlugins: () => {},
+				server: {
+					stop: async () => {
+						journal.push("server stopped");
+					},
+				},
+				plugins,
+			},
+			logger,
+		);
+
+		expect(exitCode).toBe(1);
+		expect(journal).toEqual(["server stopped"]);
+		expect(lines.map((line) => JSON.parse(line).message as unknown)).toEqual([
+			"plugins failed to start",
+		]);
+	});
+
+	test("leaves plugins that started as they are", async () => {
+		const { logger, lines } = recordingLogger();
+		const started = { deactivate: async () => "clean" as const };
+
+		const plugins = await reportFailedStart(Promise.resolve(started), logger);
+
+		expect(plugins).toBe(started);
+		expect(lines).toEqual([]);
 	});
 });
