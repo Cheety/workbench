@@ -119,6 +119,8 @@ describe("imports between plugins", () => {
 	test.each([
 		["../../plugin-notes/src/store.ts"],
 		["../../plugin-notes/src/contract/index.ts"],
+		["../../plugin-notes"],
+		["../../plugin-notes/"],
 	])(
 		"rejects a relative import into a foreign plugin: %s",
 		async (importPath) => {

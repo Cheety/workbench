@@ -83,18 +83,18 @@ function violatedRule(
 		importedFile === undefined
 			? importPath === candidate.packageName ||
 				importPath.startsWith(`${candidate.packageName}/`)
-			: isInside(importedFile, candidate.root),
+			: isWithin(importedFile, candidate.root),
 	);
 	if (target === undefined || isContractImport(target, importPath))
 		return undefined;
 	if (target !== plugin) return "foreign_plugin_internals";
 	const { contractDirectory } = plugin;
 	const isFromContract =
-		contractDirectory !== undefined && isInside(file, contractDirectory);
+		contractDirectory !== undefined && isWithin(file, contractDirectory);
 	const staysInContract =
 		contractDirectory !== undefined &&
 		importedFile !== undefined &&
-		isInside(importedFile, contractDirectory);
+		isWithin(importedFile, contractDirectory);
 	return isFromContract && !staysInContract
 		? "contract_imports_plugin_code"
 		: undefined;
@@ -150,7 +150,7 @@ function contractProblemOf(
 ): ContractExportViolation["rule"] | undefined {
 	if (contract === undefined) return undefined;
 	if (contractDirectory === undefined) return "contract_export_not_a_path";
-	if (entry !== undefined && isInside(entry, contractDirectory))
+	if (entry !== undefined && isWithin(entry, contractDirectory))
 		return "contract_beside_entry";
 	return undefined;
 }
@@ -177,10 +177,9 @@ function isPathImport(importPath: string): boolean {
 	return importPath.startsWith(".") || isAbsolute(importPath);
 }
 
-function isInside(path: string, directory: string): boolean {
+function isWithin(path: string, directory: string): boolean {
 	const fromDirectory = relative(directory, path);
 	return (
-		fromDirectory !== "" &&
 		fromDirectory !== ".." &&
 		!fromDirectory.startsWith(`..${sep}`) &&
 		!isAbsolute(fromDirectory)
