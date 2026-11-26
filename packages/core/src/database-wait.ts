@@ -24,14 +24,15 @@ export async function untilDatabaseReachable(
 			reason: status.reason,
 			retryInMs,
 		});
-		await pause(retryInMs, wait);
+		await pauseUnlessStopped(retryInMs, wait.setTimer, wait.stopSignal);
 	}
 	return "stopped";
 }
 
-function pause(
+export function pauseUnlessStopped(
 	delayMs: number,
-	{ setTimer, stopSignal }: DatabaseWait,
+	setTimer: SetTimer,
+	stopSignal: AbortSignal,
 ): Promise<void> {
 	return new Promise((resolve) => {
 		const stop = () => {
