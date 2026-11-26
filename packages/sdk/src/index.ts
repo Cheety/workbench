@@ -1,6 +1,6 @@
 /**
  * What a plugin states about itself before it runs. The version is not part of
- * the manifest: it is the `version` of the plugin package (ADR-0004).
+ * the manifest: it is the `version` of the plugin package (ADR-0007).
  */
 export type PluginManifest = {
 	/**

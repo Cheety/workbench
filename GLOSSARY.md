@@ -26,6 +26,10 @@ _Avoid_: Modul, Extension, Add-on
 Das Paket im Repository, das ein Plugin samt Manifest, Server- und Client-Teil, Migrationen und Contract enthält.
 _Avoid_: Workspace-Paket
 
+**Kernel**:
+Der Teil des Core, der die Plugin-Pakete entdeckt, Manifeste prüft, `requires` auflöst und die in der Instanz-Config aktivierten Plugins aktiviert und beim Shutdown deaktiviert.
+_Avoid_: Plugin-Manager, Loader, Plugin-Host
+
 **Manifest**:
 Die Selbstbeschreibung eines Plugins, die der Kernel vor der Aktivierung prüft: Name, vorausgesetzte Plugins (`requires`) und Capabilities.
 _Avoid_: Plugin-Config, Descriptor

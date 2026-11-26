@@ -6,9 +6,10 @@ Der Kernel muss die Plugin-Pakete des Repos finden, ohne dass der Core von ihnen
 
 Ein Plugin, das nicht geladen werden kann, bricht den Start der Instanz nicht ab. Der Kernel protokolliert den Ladefehler und lädt die übrigen Plugins. Erwogen wurde, den Start wie bei ungültiger Konfiguration abzubrechen; dann nähme ein einzelnes fehlerhaftes Plugin die ganze Instanz mit, und der Betreiber sähe von mehreren Ladefehlern nur den ersten.
 
+Die Version eines Plugins ist die `version` seiner `package.json`; das Manifest nennt keine eigene, und `requires` prüft seine SemVer-Ranges gegen sie. Erwogen wurde ein Versionsfeld im Manifest; dann hätte ein Plugin-Paket zwei Versionen, die auseinanderlaufen können, obwohl sein Contract schon mit dem Paket versioniert wird (ADR-0004).
+
 ## Consequences
 
-- Die Version eines Plugins ist die `version` seiner `package.json` und steht nicht noch einmal im Manifest; `requires` bezieht sich darauf (ADR-0004).
 - Der Name des Plugins steht zweimal da: in der `package.json` und im Manifest. Der Kernel braucht ihn, bevor er Code des Plugins ausführt, denn er lädt nur die Einstiege der Plugins, die die Instanz-Config aktiviert; Code eines nicht aktivierten Plugins läuft nie, und seine Mängel sind kein Ladefehler. Weichen die beiden Namen voneinander ab, ist das Manifest ungültig. Erwogen wurde, den Namen nur im Manifest zu führen; dann müsste der Kernel jeden Einstieg laden, um zu erfahren, welches Plugin er vor sich hat.
 - Deklarieren mehrere Plugin-Pakete denselben Plugin-Namen, lädt der Kernel keines davon und meldet für ein aktiviertes Plugin den Ladefehler `duplicate_plugin` mit allen beteiligten Paketen. Erwogen wurde, das erste Paket in Verzeichnisreihenfolge zu nehmen; dann entschiede ein Verzeichnisname stillschweigend, welcher Code läuft, und ein defektes Paket könnte ein intaktes verdecken.
 - Das Container-Image muss die Plugin-Pakete neben dem Core in derselben Verzeichnisstruktur enthalten.
