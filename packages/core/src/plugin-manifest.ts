@@ -9,13 +9,14 @@ const SEMVER_VERSION =
 
 const VERSION_PART = String.raw`(?:0|[1-9]\d*|[xX*])`;
 const PARTIAL_VERSION = String.raw`${VERSION_PART}(?:\.${VERSION_PART}(?:\.${VERSION_PART}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)?)?`;
-const COMPARATOR = String.raw`(?:\^|~|>=|<=|>|<|=)?\s*${PARTIAL_VERSION}`;
+const COMPARATOR = String.raw`(?:(?:\^|~|>=|<=|>|<|=)\s*)?${PARTIAL_VERSION}`;
 const COMPARATOR_SET = String.raw`${COMPARATOR}(?:\s+${COMPARATOR})*`;
 // Bun.semver.satisfies treats a range it cannot parse as satisfied, so a range
 // has to be recognised before it is evaluated.
 const SEMVER_RANGE = new RegExp(
 	String.raw`^\s*${COMPARATOR_SET}(?:\s*\|\|\s*${COMPARATOR_SET})*\s*$`,
 );
+const MAX_SEMVER_RANGE_LENGTH = 256;
 
 export function isPluginName(value: unknown): value is string {
 	return typeof value === "string" && PLUGIN_NAME.test(value);
@@ -126,7 +127,7 @@ function readRequires(manifest: unknown): Read<ReadonlyMap<string, string>> {
 			problems.push(
 				`manifest.requires names ${quote(required)}, which is not a plugin name`,
 			);
-		} else if (typeof range !== "string" || !SEMVER_RANGE.test(range)) {
+		} else if (!isSemVerRange(range)) {
 			problems.push(
 				`manifest.requires.${required} must be a SemVer range such as "^1.2.0"`,
 			);
@@ -172,6 +173,14 @@ function hookProblems(
 	return value === undefined || typeof value === "function"
 		? []
 		: [`${hook} must be a function`];
+}
+
+function isSemVerRange(value: unknown): value is string {
+	return (
+		typeof value === "string" &&
+		value.length <= MAX_SEMVER_RANGE_LENGTH &&
+		SEMVER_RANGE.test(value)
+	);
 }
 
 function isSemVerVersion(value: unknown): value is string {

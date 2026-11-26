@@ -381,6 +381,59 @@ describe("plugin kernel", () => {
 		},
 	);
 
+	test.each([
+		">= 1.0.0",
+		"  ^1.2.0  ",
+		"1.x||2.x",
+		">=1.0.0   <2.0.0",
+		"~ 1.4 || >2",
+		"<= 1.4.0",
+		"1 || 2 || X",
+	])("accepts the SemVer range %p with optional whitespace", async (range) => {
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: { name: "board", requires: { notes: range } },
+					}),
+				),
+				packageOf(definePlugin({ manifest: { name: "notes" } }), "1.4.0"),
+			],
+			enabledPlugins: ["board", "notes"],
+		});
+
+		expect(plugins.failures).toEqual([]);
+	});
+
+	test.each([
+		["longer than 256 characters", `1${" 1".repeat(128)}`],
+		[
+			"crafted to make a backtracking matcher run forever",
+			`1${"  1".repeat(40)}!`,
+		],
+	])("rejects a requires range %s", async (_case, range) => {
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: { name: "board", requires: { notes: range } },
+					}),
+				),
+				packageOf(definePlugin({ manifest: { name: "notes" } }), "1.4.0"),
+			],
+			enabledPlugins: ["board", "notes"],
+		});
+
+		expect(plugins.failures).toEqual([
+			expect.objectContaining({
+				plugin: "board",
+				reason: "invalid_manifest",
+				detail:
+					'plugin package "@workbench/plugin-board" has an invalid manifest: manifest.requires.notes must be a SemVer range such as "^1.2.0"',
+			}),
+		]);
+	});
+
 	test("does not load a plugin that requires a plugin no plugin package provides", async () => {
 		const journal: string[] = [];
 
