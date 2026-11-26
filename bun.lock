@@ -18,6 +18,13 @@
         "zod": "4.6.7",
       },
     },
+    "packages/plugin-reference": {
+      "name": "@workbench/plugin-reference",
+      "version": "0.1.0",
+      "dependencies": {
+        "@workbench/sdk": "workspace:*",
+      },
+    },
     "packages/sdk": {
       "name": "@workbench/sdk",
       "version": "0.0.0",
@@ -91,6 +98,8 @@
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
 
     "@workbench/core": ["@workbench/core@workspace:packages/core"],
+
+    "@workbench/plugin-reference": ["@workbench/plugin-reference@workspace:packages/plugin-reference"],
 
     "@workbench/sdk": ["@workbench/sdk@workspace:packages/sdk"],
 

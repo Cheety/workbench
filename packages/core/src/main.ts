@@ -1,19 +1,34 @@
+import { fileURLToPath } from "node:url";
 import {
 	type Config,
 	InvalidConfigError,
 	loadConfigFromEnvironment,
 } from "./config.ts";
+import { startPlugins } from "./kernel.ts";
 import { createLogger } from "./logger.ts";
+import { discoverPluginPackages } from "./plugin-discovery.ts";
 import { createPostgresCheck } from "./postgres.ts";
 import {
 	type RunningServer,
 	type ServerOptions,
 	startServer,
 } from "./server.ts";
-import { shutDown } from "./shutdown.ts";
+import { shutDownInstance } from "./shutdown.ts";
 import { systemFailureReason } from "./system-error.ts";
 
+// The image holds the core and every plugin package of the repository side by
+// side, so the plugin packages are the siblings of this package.
+const PACKAGES_DIRECTORY = fileURLToPath(new URL("../../", import.meta.url));
+
+const CLOSED_PIPE = "EPIPE";
+
 const now = (): Date => new Date();
+
+// The instance outlives whoever reads its log: once stdout is closed there is
+// nowhere left to report that, and it is no reason to stop serving.
+process.stdout.on("error", (error) => {
+	if (systemFailureReason(error) !== CLOSED_PIPE) throw error;
+});
 
 function loadConfigOrExit(): Config {
 	try {
@@ -61,9 +76,20 @@ const server = startServerOrExit({
 });
 logger.info("server started", { port: server.port });
 
+const plugins = startPlugins({
+	discover: discoverPluginPackages(PACKAGES_DIRECTORY),
+	enabledPlugins: config.enabledPlugins,
+	capabilityProviders: {},
+	logger,
+});
+
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
 	process.once(signal, () => {
 		logger.info("shutting down", { signal });
-		void shutDown(server, logger).then((exitCode) => process.exit(exitCode));
+		// A signal during startup waits for the plugins, so that every activated
+		// plugin is deactivated.
+		void plugins
+			.then((running) => shutDownInstance({ server, plugins: running }, logger))
+			.then((exitCode) => process.exit(exitCode));
 	});
 }
