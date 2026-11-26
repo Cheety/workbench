@@ -10,6 +10,8 @@ import {
 	type ServerOptions,
 	startServer,
 } from "./server.ts";
+import { shutDown } from "./shutdown.ts";
+import { systemFailureReason } from "./system-error.ts";
 
 const now = (): Date => new Date();
 
@@ -30,23 +32,16 @@ function loadConfigOrExit(): Config {
 	}
 }
 
-const UNKNOWN_START_FAILURE = "unknown";
-
 function startServerOrExit(options: ServerOptions): RunningServer {
 	try {
 		return startServer(options);
 	} catch (error) {
 		options.logger.error("server failed to start", {
 			port: options.port,
-			reason: systemErrorCode(error) ?? UNKNOWN_START_FAILURE,
+			reason: systemFailureReason(error),
 		});
 		process.exit(1);
 	}
-}
-
-function systemErrorCode(error: unknown): string | undefined {
-	if (!(error instanceof Error) || !("code" in error)) return undefined;
-	return typeof error.code === "string" ? error.code : undefined;
 }
 
 const config = loadConfigOrExit();
@@ -70,6 +65,6 @@ logger.info("server started", { port: server.port });
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
 	process.once(signal, () => {
 		logger.info("shutting down", { signal });
-		void server.stop().then(() => process.exit(0));
+		void shutDown(server, logger).then((exitCode) => process.exit(exitCode));
 	});
 }
