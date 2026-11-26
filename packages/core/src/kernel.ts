@@ -20,7 +20,11 @@ import {
 import type { ValidPlugin } from "./plugin-manifest.ts";
 import { dependencyNotLoaded, resolvePlugins } from "./plugin-resolution.ts";
 import { quote } from "./quote.ts";
-import type { MigrationRun, SchemaMigrations } from "./schema-migrations.ts";
+import type {
+	MigrationRun,
+	SchemaMigrationOutcome,
+	SchemaMigrations,
+} from "./schema-migrations.ts";
 import { systemFailureReason } from "./system-error.ts";
 
 export type { HookTimeout } from "./hook-timeout.ts";
@@ -147,16 +151,14 @@ async function migratePluginSchemas(
 	{ migrateSchemas }: KernelOptions,
 	failures: LoadFailures,
 ): Promise<readonly ValidPlugin[]> {
-	const owners: ValidPlugin[] = [];
+	const owners = new Map<string, ValidPlugin>();
 	const schemas: SchemaMigrations[] = [];
 	for (const plugin of plugins) {
 		if (!plugin.capabilities.includes(DATABASE_CAPABILITY)) continue;
 		try {
-			schemas.push({
-				schema: pluginSchema(plugin.name),
-				migrations: await plugin.loadMigrations(),
-			});
-			owners.push(plugin);
+			const schema = pluginSchema(plugin.name);
+			schemas.push({ schema, migrations: await plugin.loadMigrations() });
+			owners.set(schema, plugin);
 		} catch (error) {
 			const thrown = describeThrown(error);
 			failures.reject(migrationFailed(plugin, summarize(thrown), thrown));
@@ -165,19 +167,38 @@ async function migratePluginSchemas(
 	if (schemas.length > 0) {
 		try {
 			const run = await migrateSchemas(schemas);
-			const outcomes = run.stopped ? [] : run.outcomes;
-			for (const [index, outcome] of outcomes.entries()) {
-				const owner = owners[index];
-				if (owner === undefined || outcome.migrated) continue;
-				failures.reject(migrationFailed(owner, outcome.detail, outcome.error));
-			}
+			if (!run.stopped) rejectUnmigrated(owners, run.outcomes, failures);
 		} catch (error) {
 			const thrown = describeThrown(error);
-			for (const owner of owners)
+			for (const owner of owners.values())
 				failures.reject(migrationFailed(owner, summarize(thrown), thrown));
 		}
 	}
 	return plugins.filter((plugin) => failures.find(plugin.name) === undefined);
+}
+
+function rejectUnmigrated(
+	owners: ReadonlyMap<string, ValidPlugin>,
+	outcomes: readonly SchemaMigrationOutcome[],
+	failures: LoadFailures,
+): void {
+	const outcomeOf = new Map(
+		outcomes.map((outcome) => [outcome.schema, outcome]),
+	);
+	for (const [schema, owner] of owners) {
+		const outcome = outcomeOf.get(schema);
+		if (outcome === undefined) {
+			failures.reject(
+				migrationFailed(
+					owner,
+					`the migration run reported no outcome for schema ${quote(schema)}`,
+					undefined,
+				),
+			);
+		} else if (!outcome.migrated) {
+			failures.reject(migrationFailed(owner, outcome.detail, outcome.error));
+		}
+	}
 }
 
 function migrationFailed(

@@ -1673,6 +1673,82 @@ describe("plugin schemas", () => {
 		expect(journal).toEqual(["activate cards"]);
 	});
 
+	test("attributes each migration outcome to the plugin owning its schema, whatever the order", async () => {
+		const journal: string[] = [];
+		const detail =
+			'migration "0001_create_notes.sql" of schema "plugin_notes" failed (PostgresError: syntax error)';
+
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					recordingPlugin(journal, {
+						name: "notes",
+						capabilities: ["database"],
+					}),
+				),
+				packageOf(
+					recordingPlugin(journal, {
+						name: "cards",
+						capabilities: ["database"],
+					}),
+				),
+			],
+			enabledPlugins: ["notes", "cards"],
+			migrateSchemas: async () => ({
+				stopped: false,
+				outcomes: [
+					{ schema: "plugin_cards", migrated: true, applied: [] },
+					{ schema: "plugin_notes", migrated: false, applied: [], detail },
+				],
+			}),
+		});
+
+		expect(plugins.failures).toEqual([
+			{
+				plugin: "notes",
+				reason: "migration_failed",
+				detail: `plugin "notes" was not activated because its schema could not be migrated: ${detail}`,
+			},
+		]);
+		expect(journal).toEqual(["activate cards"]);
+	});
+
+	test("does not load a plugin whose schema has no migration outcome", async () => {
+		const journal: string[] = [];
+
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					recordingPlugin(journal, {
+						name: "notes",
+						capabilities: ["database"],
+					}),
+				),
+				packageOf(
+					recordingPlugin(journal, {
+						name: "cards",
+						capabilities: ["database"],
+					}),
+				),
+			],
+			enabledPlugins: ["notes", "cards"],
+			migrateSchemas: async () => ({
+				stopped: false,
+				outcomes: [{ schema: "plugin_cards", migrated: true, applied: [] }],
+			}),
+		});
+
+		expect(plugins.failures).toEqual([
+			{
+				plugin: "notes",
+				reason: "migration_failed",
+				detail:
+					'plugin "notes" was not activated because its schema could not be migrated: the migration run reported no outcome for schema "plugin_notes"',
+			},
+		]);
+		expect(journal).toEqual(["activate cards"]);
+	});
+
 	test("does not load a plugin whose migrations cannot be read and migrates the others", async () => {
 		const migrated: string[] = [];
 
