@@ -1,8 +1,6 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
-
-export const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
-export type LogLevel = (typeof LOG_LEVELS)[number];
+import { LOG_LEVELS, type LogLevel } from "./logger.ts";
 
 const REDACTED = "[redacted]";
 
