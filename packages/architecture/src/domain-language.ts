@@ -5,7 +5,7 @@ export type DomainTermUse = {
 	readonly term: string;
 };
 
-const DOMAIN_TERMS = [
+const DOMAIN_TERMS: readonly string[] = [
 	"agent factory",
 	"backlog",
 	"board",
