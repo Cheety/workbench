@@ -88,7 +88,12 @@ logger.info("server started", { port: server.port });
 
 const instanceStart = new AbortController();
 
-function failStart(reason: string, details: Record<string, unknown> = {}) {
+type StartFailure = "core_schema_not_migrated" | "plugin_schema_not_migrated";
+
+function failStart(
+	reason: StartFailure,
+	details: Record<string, unknown> = {},
+): void {
 	startupStatus = "failed";
 	logger.error("instance failed to start", { reason, ...details });
 }
