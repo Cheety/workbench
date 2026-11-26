@@ -33,6 +33,11 @@ export type KernelOptions = {
 	readonly enabledPlugins: readonly string[];
 	readonly capabilityProviders: CapabilityProviders;
 	readonly hookTimeout: HookTimeout;
+	/**
+	 * Once aborted, the start loads and activates no further plugin; a hook
+	 * that is already running is still waited for.
+	 */
+	readonly stopSignal?: AbortSignal;
 	readonly logger: Logger;
 };
 
@@ -74,6 +79,9 @@ export class UndeclaredCapabilityError extends Error {
  * logged as "plugin not loaded" and listed in `failures`, the others run. A
  * package whose `package.json` discovery could not use is logged as "plugin
  * package ignored" with its directory.
+ *
+ * A start that is told to stop logs "plugin start stopped" with the plugins it
+ * did not activate; these are no load failures.
  */
 export async function startPlugins(
 	options: KernelOptions,
@@ -82,32 +90,7 @@ export async function startPlugins(
 	const failures = new LoadFailures(logger);
 
 	const packages = await discoverPackages(options);
-	const activationOrder = await resolvePlugins(
-		catalogPlugins(
-			packages,
-			Object.keys(options.capabilityProviders),
-			options.hookTimeout,
-		),
-		options.enabledPlugins,
-		failures,
-	);
-	logger.info("plugins resolved", {
-		activationOrder: activationOrder.map((plugin) => plugin.name),
-	});
-
-	const active: ValidPlugin[] = [];
-	for (const plugin of activationOrder) {
-		const failure = await activate(plugin, options, failures);
-		if (failure !== undefined) {
-			failures.reject(failure);
-			continue;
-		}
-		active.push(plugin);
-		logger.info("plugin activated", {
-			plugin: plugin.name,
-			version: plugin.version,
-		});
-	}
+	const active = await activateEnabledPlugins(packages, options, failures);
 	const activeNames = active.map((plugin) => plugin.name);
 	logger.info("plugins started", {
 		active: activeNames,
@@ -123,6 +106,54 @@ export async function startPlugins(
 			return deactivation;
 		},
 	};
+}
+
+async function activateEnabledPlugins(
+	packages: readonly PluginPackage[],
+	options: KernelOptions,
+	failures: LoadFailures,
+): Promise<readonly ValidPlugin[]> {
+	const { logger, stopSignal } = options;
+	const active: ValidPlugin[] = [];
+	if (stopSignal?.aborted) {
+		logger.info("plugin start stopped", {
+			notActivated: options.enabledPlugins,
+		});
+		return active;
+	}
+	const activationOrder = await resolvePlugins(
+		catalogPlugins(
+			packages,
+			Object.keys(options.capabilityProviders),
+			options.hookTimeout,
+		),
+		options.enabledPlugins,
+		failures,
+	);
+	logger.info("plugins resolved", {
+		activationOrder: activationOrder.map((plugin) => plugin.name),
+	});
+	for (const [position, plugin] of activationOrder.entries()) {
+		if (stopSignal?.aborted) {
+			logger.info("plugin start stopped", {
+				notActivated: activationOrder
+					.slice(position)
+					.map((remaining) => remaining.name),
+			});
+			break;
+		}
+		const failure = await activate(plugin, options, failures);
+		if (failure !== undefined) {
+			failures.reject(failure);
+			continue;
+		}
+		active.push(plugin);
+		logger.info("plugin activated", {
+			plugin: plugin.name,
+			version: plugin.version,
+		});
+	}
+	return active;
 }
 
 async function discoverPackages(

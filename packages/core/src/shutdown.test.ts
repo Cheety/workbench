@@ -69,6 +69,7 @@ describe("instance shutdown", () => {
 
 		const exitCode = await shutDownInstance(
 			{
+				stopStartingPlugins: () => {},
 				server: {
 					stop: async () => {
 						journal.push("server stopped");
@@ -93,6 +94,7 @@ describe("instance shutdown", () => {
 
 		const exitCode = await shutDownInstance(
 			{
+				stopStartingPlugins: () => {},
 				server: { stop: async () => {} },
 				plugins: { deactivate: async () => "incomplete" },
 			},
@@ -108,6 +110,7 @@ describe("instance shutdown", () => {
 
 		const exitCode = await shutDownInstance(
 			{
+				stopStartingPlugins: () => {},
 				server: { stop: () => Promise.reject(new Error("stuck")) },
 				plugins: {
 					deactivate: async () => {
@@ -131,7 +134,11 @@ describe("instance shutdown", () => {
 		}>();
 
 		const shuttingDown = shutDownInstance(
-			{ server: { stop: async () => {} }, plugins: starting.promise },
+			{
+				stopStartingPlugins: () => {},
+				server: { stop: async () => {} },
+				plugins: starting.promise,
+			},
 			logger,
 		);
 		starting.resolve({
@@ -152,6 +159,7 @@ describe("instance shutdown", () => {
 
 		const exitCode = await shutDownInstance(
 			{
+				stopStartingPlugins: () => {},
 				server: {
 					stop: async () => {
 						journal.push("server stopped");
@@ -181,6 +189,7 @@ describe("instance shutdown", () => {
 
 		const exitCode = await shutDownInstance(
 			{
+				stopStartingPlugins: () => {},
 				server: { stop: async () => {} },
 				plugins: {
 					deactivate: () => Promise.reject(new TypeError("kernel defect")),
@@ -196,6 +205,42 @@ describe("instance shutdown", () => {
 				message: "plugins failed to shut down",
 				error: expect.objectContaining({ message: "kernel defect" }),
 			}),
+		]);
+	});
+
+	test("tells plugins that are still starting to stop before it waits for them", async () => {
+		const { logger } = recordingLogger();
+		const journal: string[] = [];
+		const starting = Promise.withResolvers<{
+			deactivate: () => Promise<"clean">;
+		}>();
+
+		const exitCode = await shutDownInstance(
+			{
+				stopStartingPlugins: () => {
+					journal.push("start stopped");
+					starting.resolve({
+						deactivate: async () => {
+							journal.push("plugins deactivated");
+							return "clean";
+						},
+					});
+				},
+				server: {
+					stop: async () => {
+						journal.push("server stopped");
+					},
+				},
+				plugins: starting.promise,
+			},
+			logger,
+		);
+
+		expect(exitCode).toBe(0);
+		expect(journal).toEqual([
+			"start stopped",
+			"server stopped",
+			"plugins deactivated",
 		]);
 	});
 });

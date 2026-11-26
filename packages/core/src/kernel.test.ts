@@ -45,6 +45,7 @@ type Scenario = {
 	readonly enabledPlugins: readonly string[];
 	readonly capabilityProviders?: CapabilityProviders;
 	readonly hookTimeout?: HookTimeout;
+	readonly stopSignal?: AbortSignal;
 };
 
 const NEVER_EXPIRING: HookTimeout = { ms: 10_000, setTimer: () => () => {} };
@@ -91,6 +92,9 @@ async function start(scenario: Scenario) {
 		enabledPlugins: scenario.enabledPlugins,
 		capabilityProviders: scenario.capabilityProviders ?? {},
 		hookTimeout: scenario.hookTimeout ?? NEVER_EXPIRING,
+		...(scenario.stopSignal === undefined
+			? {}
+			: { stopSignal: scenario.stopSignal }),
 		logger,
 	});
 	return { plugins, entries };
@@ -1165,5 +1169,69 @@ describe("plugin kernel", () => {
 		expect(plugins.failures.map((failure) => failure.reason)).toEqual([
 			"load_timed_out",
 		]);
+	});
+
+	test("activates no further plugin once it is told to stop and deactivates the active ones", async () => {
+		const journal: string[] = [];
+		const stop = new AbortController();
+
+		const { plugins, entries } = await start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: { name: "notes" },
+						activate: () => {
+							journal.push("activate notes");
+							stop.abort();
+						},
+						deactivate: () => {
+							journal.push("deactivate notes");
+						},
+					}),
+				),
+				packageOf(recordingPlugin(journal, { name: "board" })),
+				packageOf(recordingPlugin(journal, { name: "cards" })),
+			],
+			enabledPlugins: ["notes", "board", "cards"],
+			stopSignal: stop.signal,
+		});
+		await plugins.deactivate();
+
+		expect(plugins.active).toEqual(["notes"]);
+		expect(plugins.failures).toEqual([]);
+		expect(journal).toEqual(["activate notes", "deactivate notes"]);
+		expect(entries).toContainEqual(
+			expect.objectContaining({
+				level: "info",
+				message: "plugin start stopped",
+				notActivated: ["board", "cards"],
+			}),
+		);
+	});
+
+	test("loads no plugin entry when it is told to stop before the plugins are resolved", async () => {
+		const loaded: string[] = [];
+		const stop = new AbortController();
+		stop.abort();
+
+		const { plugins } = await start({
+			packages: [
+				{
+					packageName: "@workbench/plugin-notes",
+					pluginName: "notes",
+					version: "1.0.0",
+					loadDefinition: async () => {
+						loaded.push("notes");
+						return definePlugin({ manifest: { name: "notes" } });
+					},
+				},
+			],
+			enabledPlugins: ["notes"],
+			stopSignal: stop.signal,
+		});
+
+		expect(loaded).toEqual([]);
+		expect(plugins.active).toEqual([]);
+		expect(plugins.failures).toEqual([]);
 	});
 });

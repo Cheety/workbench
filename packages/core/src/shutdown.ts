@@ -9,14 +9,16 @@ export type ExitCode = 0 | 1;
 type Deactivatable = Pick<RunningPlugins, "deactivate">;
 
 export type RunningInstance = {
+	/** Tells a plugin start that is still running to activate no further plugin. */
+	readonly stopStartingPlugins: () => void;
 	readonly server: Pick<RunningServer, "stop">;
 	/** The plugins of the instance, which may still be starting. */
 	readonly plugins: Deactivatable | Promise<Deactivatable>;
 };
 
 /**
- * Waits for the plugins to have started, so that every activated plugin is
- * deactivated. Then stops taking requests and deactivates the plugins, so
+ * Tells the plugin start to stop and waits for it to end, so that every
+ * activated plugin is deactivated. Then stops taking requests and deactivates the plugins, so
  * that no request reaches a plugin that is already shutting down. Each step
  * runs even if the one before it failed.
  *
@@ -26,6 +28,7 @@ export async function shutDownInstance(
 	instance: RunningInstance,
 	logger: Logger,
 ): Promise<ExitCode> {
+	instance.stopStartingPlugins();
 	const plugins = Promise.resolve(instance.plugins);
 	// A failed start is reported by deactivatePlugins, after the server stopped.
 	await plugins.catch(() => {});
