@@ -45,7 +45,7 @@ export class PostgresGate {
 		this.#target = target;
 	}
 
-	static create(): PostgresGate {
+	static create(target: string = TEST_DATABASE_URL): PostgresGate {
 		const reservation = Bun.listen({
 			hostname: "127.0.0.1",
 			port: 0,
@@ -53,7 +53,7 @@ export class PostgresGate {
 		});
 		const port = reservation.port;
 		reservation.stop(true);
-		return new PostgresGate(port, new URL(TEST_DATABASE_URL));
+		return new PostgresGate(port, new URL(target));
 	}
 
 	get url(): string {

@@ -2,7 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { Secret } from "./config.ts";
 import { createLogger } from "./logger.ts";
 import { createPostgresCheck } from "./postgres.ts";
-import { type RunningServer, startServer } from "./server.ts";
+import {
+	type RunningServer,
+	type StartupStatus,
+	startServer,
+} from "./server.ts";
 import { PostgresGate } from "./testing/postgres.ts";
 
 const PARALLEL_PROBES = 300;
@@ -19,7 +23,7 @@ afterEach(async () => {
 	openGate = undefined;
 });
 
-function startTestServer() {
+function startTestServer(startupStatus: StartupStatus = "started") {
 	const gate = PostgresGate.create();
 	openGate = gate;
 	const lines: string[] = [];
@@ -37,6 +41,7 @@ function startTestServer() {
 			timeoutMs: 5000,
 		}),
 		newCorrelationId: () => `generated-${nextId++}`,
+		startupStatus: () => startupStatus,
 	});
 	running = server;
 	return {
@@ -103,6 +108,38 @@ describe("readiness", () => {
 		expect(
 			responses.filter((response) => response.status !== 200),
 		).toHaveLength(0);
+	});
+
+	test("reports not ready while the instance is still starting, even with Postgres reachable", async () => {
+		const { get, gate, logEntries } = startTestServer("starting");
+		gate.forward();
+
+		const response = await get("/health/ready");
+
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({ status: "not_ready" });
+		expect(logEntries()).toContainEqual(
+			expect.objectContaining({
+				level: "debug",
+				message: "not ready: instance starting",
+			}),
+		);
+	});
+
+	test("reports not ready and says so when the instance failed to start", async () => {
+		const { get, gate, logEntries } = startTestServer("failed");
+		gate.forward();
+
+		const response = await get("/health/ready");
+
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({ status: "not_ready" });
+		expect(logEntries()).toContainEqual(
+			expect.objectContaining({
+				level: "warn",
+				message: "not ready: instance failed to start",
+			}),
+		);
 	});
 
 	test("logs why it is not ready without leaking the database credentials", async () => {

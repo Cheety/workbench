@@ -4,8 +4,10 @@ import {
 	InvalidConfigError,
 	loadConfigFromEnvironment,
 } from "./config.ts";
+import { fullJitterBackoff, untilDatabaseReachable } from "./database-wait.ts";
+import { describeThrown } from "./failure-reason.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
-import { startPlugins } from "./kernel.ts";
+import { type RunningPlugins, startPlugins } from "./kernel.ts";
 import { createLogger } from "./logger.ts";
 import { discoverPluginPackages } from "./plugin-discovery.ts";
 import { createPostgresCheck } from "./postgres.ts";
@@ -13,6 +15,7 @@ import { migrateSchemas } from "./schema-migrations.ts";
 import {
 	type RunningServer,
 	type ServerOptions,
+	type StartupStatus,
 	startServer,
 } from "./server.ts";
 import { reportFailedStart, shutDownInstance } from "./shutdown.ts";
@@ -21,6 +24,12 @@ import { systemFailureReason } from "./system-error.ts";
 const PACKAGES_DIRECTORY = fileURLToPath(new URL("../../", import.meta.url));
 
 const CLOSED_PIPE = "EPIPE";
+
+const DATABASE_RETRY = { baseMs: 250, capMs: 10_000 } as const;
+
+type StartedPlugins = Pick<RunningPlugins, "deactivate">;
+
+const NO_PLUGINS: StartedPlugins = { deactivate: async () => "clean" };
 
 const now = (): Date => new Date();
 
@@ -63,28 +72,68 @@ const logger = createLogger({
 	now,
 	write: (line) => process.stdout.write(`${line}\n`),
 });
+let startupStatus: StartupStatus = "starting";
+const checkDatabase = createPostgresCheck({
+	url: config.databaseUrl,
+	timeoutMs: config.readinessTimeoutMs,
+});
 const server = startServerOrExit({
 	port: config.port,
 	logger,
-	checkDatabase: createPostgresCheck({
-		url: config.databaseUrl,
-		timeoutMs: config.readinessTimeoutMs,
-	}),
+	checkDatabase,
 	newCorrelationId: () => crypto.randomUUID(),
+	startupStatus: () => startupStatus,
 });
 logger.info("server started", { port: server.port });
 
-const pluginStart = new AbortController();
-const plugins = reportFailedStart(
-	startPlugins({
+const instanceStart = new AbortController();
+
+function failStart(reason: string, details: Record<string, unknown> = {}) {
+	startupStatus = "failed";
+	logger.error("instance failed to start", { reason, ...details });
+}
+
+async function startInstance(): Promise<StartedPlugins> {
+	const database = await untilDatabaseReachable({
+		check: checkDatabase,
+		retryDelayMs: fullJitterBackoff({ ...DATABASE_RETRY, random: Math.random }),
+		setTimer: setSystemTimer,
+		stopSignal: instanceStart.signal,
+		logger,
+	});
+	if (database === "stopped") return NO_PLUGINS;
+	try {
+		await migrateSchemas(config.databaseUrl, [], logger);
+	} catch (error) {
+		failStart("core_schema_not_migrated", { error: describeThrown(error) });
+		return NO_PLUGINS;
+	}
+	const plugins = await startPlugins({
 		discover: discoverPluginPackages(PACKAGES_DIRECTORY),
 		enabledPlugins: config.enabledPlugins,
 		capabilityProviders: {},
 		migrateSchemas: (schemas) =>
 			migrateSchemas(config.databaseUrl, schemas, logger),
 		hookTimeout: { ms: config.pluginHookTimeoutMs, setTimer: setSystemTimer },
-		stopSignal: pluginStart.signal,
+		stopSignal: instanceStart.signal,
 		logger,
+	});
+	const unmigrated = plugins.failures
+		.filter((failure) => failure.reason === "migration_failed")
+		.map((failure) => failure.plugin);
+	if (unmigrated.length > 0) {
+		failStart("plugin_schema_not_migrated", { plugins: unmigrated });
+	} else if (!instanceStart.signal.aborted) {
+		startupStatus = "started";
+		logger.info("instance started");
+	}
+	return plugins;
+}
+
+const plugins = reportFailedStart(
+	startInstance().catch((error: unknown) => {
+		startupStatus = "failed";
+		throw error;
 	}),
 	logger,
 );
@@ -93,7 +142,7 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 	process.once(signal, () => {
 		logger.info("shutting down", { signal });
 		void shutDownInstance(
-			{ stopStartingPlugins: () => pluginStart.abort(), server, plugins },
+			{ stopStartingPlugins: () => instanceStart.abort(), server, plugins },
 			logger,
 		).then((exitCode) => process.exit(exitCode));
 	});
