@@ -8,7 +8,7 @@ Ein Plugin-Paket ist wie beim Kernel ein Paket, dessen `package.json` `workbench
 
 Importe findet die Prüfung über die Modulpfade im Quelltext, reine Typ-Importe eingeschlossen. Erwogen wurde `Bun.Transpiler.scanImports`; es lässt Typ-Importe weg, und gerade sie sind zwischen Plugins der häufigste Weg ins Innere eines anderen.
 
-Fachsprache ist eine feste Liste von Begriffen der geplanten fachlichen Plugins und des Referenz-Plugins (etwa `kanban`, `issue tracker`, `note`). Die Prüfung zerlegt jede Datei des Core in Wörter (Bezeichner, Strings, SQL) und sucht die Begriffe darin, auch im Plural. Tests des Core sind ausgenommen, weil ihre Fixture-Plugins eigene Fachlichkeit haben. `issue` allein steht nicht auf der Liste, weil der Core das Wort für Befunde einer Validierung braucht (`ConfigIssue`, `error.issues` von zod); erfasst wird `issue tracker`.
+Fachsprache ist eine feste Liste von Begriffen der geplanten fachlichen Plugins und des Referenz-Plugins (etwa `kanban`, `issue tracker`, `note`). Die Prüfung zerlegt jede Datei des Core in Wörter (Bezeichner, Strings, SQL) und sucht die Begriffe darin; die Liste nennt zu jedem Begriff Einzahl und Mehrzahl (`agent factory`, `agent factories`), weil sich die Mehrzahl nicht verlässlich aus der Einzahl bilden lässt. Tests des Core sind ausgenommen, weil ihre Fixture-Plugins eigene Fachlichkeit haben. `issue` allein steht nicht auf der Liste, weil der Core das Wort für Befunde einer Validierung braucht (`ConfigIssue`, `error.issues` von zod); erfasst wird `issue tracker`.
 
 ## Consequences
 

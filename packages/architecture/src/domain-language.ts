@@ -5,21 +5,26 @@ export type DomainTermUse = {
 	readonly term: string;
 };
 
-const DOMAIN_TERMS: readonly string[] = [
-	"agent factory",
-	"backlog",
-	"board",
-	"chat",
-	"forge",
-	"graph view",
-	"issue tracker",
-	"kanban",
-	"milestone",
-	"note",
-	"sprint",
-	"swimlane",
-	"ticket",
-	"whiteboard",
+type DomainTerm = {
+	readonly singular: string;
+	readonly plural: string;
+};
+
+const DOMAIN_TERMS: readonly DomainTerm[] = [
+	{ singular: "agent factory", plural: "agent factories" },
+	{ singular: "backlog", plural: "backlogs" },
+	{ singular: "board", plural: "boards" },
+	{ singular: "chat", plural: "chats" },
+	{ singular: "forge", plural: "forges" },
+	{ singular: "graph view", plural: "graph views" },
+	{ singular: "issue tracker", plural: "issue trackers" },
+	{ singular: "kanban", plural: "kanbans" },
+	{ singular: "milestone", plural: "milestones" },
+	{ singular: "note", plural: "notes" },
+	{ singular: "sprint", plural: "sprints" },
+	{ singular: "swimlane", plural: "swimlanes" },
+	{ singular: "ticket", plural: "tickets" },
+	{ singular: "whiteboard", plural: "whiteboards" },
 ];
 
 const INSTALLED_DEPENDENCIES = "node_modules";
@@ -39,8 +44,9 @@ export async function findDomainLanguage(
 		)
 			continue;
 		const words = wordsOf(await Bun.file(join(directory, file)).text());
-		for (const term of DOMAIN_TERMS)
-			if (contains(words, term.split(" "))) uses.push({ file, term });
+		for (const { singular, plural } of DOMAIN_TERMS)
+			if (contains(words, singular) || contains(words, plural))
+				uses.push({ file, term: singular });
 	}
 	return uses.sort(
 		(a, b) => a.file.localeCompare(b.file) || a.term.localeCompare(b.term),
@@ -53,14 +59,9 @@ function wordsOf(text: string): string[] {
 	);
 }
 
-function contains(words: readonly string[], term: readonly string[]): boolean {
+function contains(words: readonly string[], phrase: string): boolean {
+	const phraseWords = phrase.split(" ");
 	return words.some((_, start) =>
-		term.every((termWord, offset) => {
-			const word = words[start + offset];
-			return (
-				word === termWord ||
-				(offset === term.length - 1 && word === `${termWord}s`)
-			);
-		}),
+		phraseWords.every((word, offset) => words[start + offset] === word),
 	);
 }

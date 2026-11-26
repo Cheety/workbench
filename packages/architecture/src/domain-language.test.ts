@@ -36,6 +36,8 @@ describe("domain language in the core", () => {
 		["export function closeTickets(): void {}", "ticket"],
 		["export type IssueTrackerSettings = {};", "issue tracker"],
 		["const AGENT_FACTORY_QUEUE = 'jobs';", "agent factory"],
+		["export function listAgentFactories(): void {}", "agent factory"],
+		["const swimlanes = [];", "swimlane"],
 		['router.get("/graph-views", list);', "graph view"],
 	])("is found in %s", async (source, term) => {
 		const core = await coreWith({ "src/columns.ts": source });
