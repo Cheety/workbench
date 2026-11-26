@@ -1317,4 +1317,29 @@ describe("plugin kernel", () => {
 			}),
 		);
 	});
+
+	test("tells the operator what discovery threw when it fails for no system reason", async () => {
+		const { logger, entries } = recordingLogger();
+
+		await startPlugins({
+			discover: () => Promise.reject(new TypeError("packages is not iterable")),
+			enabledPlugins: [],
+			capabilityProviders: {},
+			hookTimeout: NEVER_EXPIRING,
+			logger,
+		});
+
+		expect(entries[0]).toEqual(
+			expect.objectContaining({
+				level: "error",
+				message: "plugin discovery failed",
+				reason: "unknown",
+				error: {
+					name: "TypeError",
+					message: "packages is not iterable",
+					stack: expect.stringContaining("kernel.test.ts"),
+				},
+			}),
+		);
+	});
 });

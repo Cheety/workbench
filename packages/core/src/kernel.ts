@@ -1,5 +1,9 @@
 import type { PluginContext } from "@workbench/sdk";
-import { describeThrown, summarize } from "./failure-reason.ts";
+import {
+	describeThrown,
+	summarize,
+	UNKNOWN_FAILURE_REASON,
+} from "./failure-reason.ts";
 import { type HookTimeout, runWithin } from "./hook-timeout.ts";
 import { type LoadFailure, LoadFailures } from "./load-failures.ts";
 import type { Logger } from "./logger.ts";
@@ -169,9 +173,13 @@ async function discoverPackages(
 		});
 		return packages;
 	} catch (error) {
-		options.logger.error("plugin discovery failed", {
-			reason: systemFailureReason(error),
-		});
+		const reason = systemFailureReason(error);
+		options.logger.error(
+			"plugin discovery failed",
+			reason === UNKNOWN_FAILURE_REASON
+				? { reason, error: describeThrown(error) }
+				: { reason },
+		);
 		return [];
 	}
 }
