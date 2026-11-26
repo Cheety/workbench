@@ -1,5 +1,6 @@
 import type { PluginContext } from "@workbench/sdk";
 import { describeThrown, summarize } from "./failure-reason.ts";
+import { type HookTimeout, runWithin } from "./hook-timeout.ts";
 import { type LoadFailure, LoadFailures } from "./load-failures.ts";
 import type { Logger } from "./logger.ts";
 import {
@@ -12,6 +13,7 @@ import { dependencyNotLoaded, resolvePlugins } from "./plugin-resolution.ts";
 import { quote } from "./quote.ts";
 import { systemFailureReason } from "./system-error.ts";
 
+export type { HookTimeout } from "./hook-timeout.ts";
 export type { LoadFailure } from "./load-failures.ts";
 export type {
 	PluginDiscovery,
@@ -30,6 +32,7 @@ export type KernelOptions = {
 	/** Plugin names from the instance config. */
 	readonly enabledPlugins: readonly string[];
 	readonly capabilityProviders: CapabilityProviders;
+	readonly hookTimeout: HookTimeout;
 	readonly logger: Logger;
 };
 
@@ -41,8 +44,9 @@ export type RunningPlugins = {
 	readonly failures: readonly LoadFailure[];
 	/**
 	 * Deactivates the active plugins in reverse activation order. A plugin that
-	 * fails to deactivate is logged and does not stop the others. Repeated calls
-	 * share one deactivation.
+	 * fails to deactivate, or does not finish within the hook timeout, is logged
+	 * and does not stop the others; the outcome is then "incomplete". Repeated
+	 * calls share one deactivation.
 	 */
 	deactivate(): Promise<DeactivationOutcome>;
 };
@@ -61,6 +65,9 @@ export class UndeclaredCapabilityError extends Error {
  * resolve what the instance config enables, activate in dependency order.
  * Plugins the instance config does not enable are left alone: their entries
  * are not loaded and their defects are not reported.
+ *
+ * A plugin whose `activate` throws or does not finish within the hook timeout
+ * is not loaded and is not deactivated later.
  *
  * Never rejects because of a plugin: every plugin that cannot be loaded is
  * logged as "plugin not loaded" and listed in `failures`, the others run. A
@@ -85,11 +92,7 @@ export async function startPlugins(
 
 	const active: ValidPlugin[] = [];
 	for (const plugin of activationOrder) {
-		const failure = await activate(
-			plugin,
-			options.capabilityProviders,
-			failures,
-		);
+		const failure = await activate(plugin, options, failures);
 		if (failure !== undefined) {
 			failures.reject(failure);
 			continue;
@@ -111,7 +114,7 @@ export async function startPlugins(
 		active: activeNames,
 		failures: failures.all,
 		deactivate: () => {
-			deactivation ??= deactivate(active, logger);
+			deactivation ??= deactivate(active, options);
 			return deactivation;
 		},
 	};
@@ -138,7 +141,7 @@ async function discoverPackages(
 
 async function activate(
 	plugin: ValidPlugin,
-	providers: CapabilityProviders,
+	{ capabilityProviders, hookTimeout }: KernelOptions,
 	failures: LoadFailures,
 ): Promise<LoadFailure | undefined> {
 	for (const required of plugin.requires.keys()) {
@@ -147,8 +150,16 @@ async function activate(
 			return dependencyNotLoaded(plugin, required, cause);
 	}
 	try {
-		await plugin.activate(contextFor(plugin, providers));
-		return undefined;
+		const outcome = await runWithin(
+			() => plugin.activate(contextFor(plugin, capabilityProviders)),
+			hookTimeout,
+		);
+		if (outcome === "finished") return undefined;
+		return {
+			plugin: plugin.name,
+			reason: "activation_timed_out",
+			detail: `plugin ${quote(plugin.name)} did not finish activating within ${hookTimeout.ms} ms`,
+		};
 	} catch (error) {
 		const thrown = describeThrown(error);
 		return {
@@ -181,20 +192,27 @@ function contextFor(
 
 async function deactivate(
 	active: readonly ValidPlugin[],
-	logger: Logger,
+	{ hookTimeout, logger }: KernelOptions,
 ): Promise<DeactivationOutcome> {
 	let outcome: DeactivationOutcome = "clean";
 	for (const plugin of active.toReversed()) {
 		try {
-			await plugin.deactivate();
-			logger.info("plugin deactivated", { plugin: plugin.name });
+			const hook = await runWithin(() => plugin.deactivate(), hookTimeout);
+			if (hook === "finished") {
+				logger.info("plugin deactivated", { plugin: plugin.name });
+				continue;
+			}
+			logger.error("plugin deactivation timed out", {
+				plugin: plugin.name,
+				timeoutMs: hookTimeout.ms,
+			});
 		} catch (error) {
-			outcome = "incomplete";
 			logger.error("plugin failed to deactivate", {
 				plugin: plugin.name,
 				error: describeThrown(error),
 			});
 		}
+		outcome = "incomplete";
 	}
 	return outcome;
 }

@@ -6,6 +6,7 @@ import {
 } from "@workbench/sdk";
 import {
 	type CapabilityProviders,
+	type HookTimeout,
 	type LoadFailure,
 	type PluginPackage,
 	startPlugins,
@@ -43,7 +44,39 @@ type Scenario = {
 	readonly unreadable?: readonly UnreadablePackage[];
 	readonly enabledPlugins: readonly string[];
 	readonly capabilityProviders?: CapabilityProviders;
+	readonly hookTimeout?: HookTimeout;
 };
+
+const NEVER_EXPIRING: HookTimeout = { ms: 10_000, setTimer: () => () => {} };
+
+/** Timers that expire only when the test says so. */
+function manualTimers() {
+	const delaysMs: number[] = [];
+	let cancelled = 0;
+	let announce: ((expire: () => void) => void) | undefined;
+	const setTimer: HookTimeout["setTimer"] = (expire, delayMs) => {
+		delaysMs.push(delayMs);
+		announce?.(expire);
+		announce = undefined;
+		return () => {
+			cancelled += 1;
+		};
+	};
+	return {
+		setTimer,
+		delaysMs,
+		cancelled: () => cancelled,
+		/** Resolves with the expiry of the next timer that is set. */
+		next: () =>
+			new Promise<() => void>((resolve) => {
+				announce = resolve;
+			}),
+	};
+}
+
+function hanging(): Promise<void> {
+	return new Promise(() => {});
+}
 
 async function start(scenario: Scenario) {
 	const { logger, entries } = recordingLogger();
@@ -54,6 +87,7 @@ async function start(scenario: Scenario) {
 		}),
 		enabledPlugins: scenario.enabledPlugins,
 		capabilityProviders: scenario.capabilityProviders ?? {},
+		hookTimeout: scenario.hookTimeout ?? NEVER_EXPIRING,
 		logger,
 	});
 	return { plugins, entries };
@@ -700,6 +734,128 @@ describe("plugin kernel", () => {
 		]);
 	});
 
+	test("gives up on a plugin that does not finish activating and starts the others", async () => {
+		const journal: string[] = [];
+		const timers = manualTimers();
+		const timeUp = timers.next();
+
+		const starting = start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: { name: "notes" },
+						activate: hanging,
+						deactivate: () => {
+							journal.push("deactivate notes");
+						},
+					}),
+				),
+				packageOf(
+					recordingPlugin(journal, {
+						name: "board",
+						requires: { notes: "^1.0.0" },
+					}),
+				),
+				packageOf(recordingPlugin(journal, { name: "cards" })),
+			],
+			enabledPlugins: ["notes", "board", "cards"],
+			hookTimeout: { ms: 5000, setTimer: timers.setTimer },
+		});
+		(await timeUp)();
+		const { plugins } = await starting;
+		await plugins.deactivate();
+
+		expect(plugins.failures).toEqual([
+			{
+				plugin: "notes",
+				reason: "activation_timed_out",
+				detail: 'plugin "notes" did not finish activating within 5000 ms',
+			},
+			{
+				plugin: "board",
+				reason: "dependency_not_loaded",
+				detail:
+					'plugin "board" requires plugin "notes", which was not loaded: plugin "notes" did not finish activating within 5000 ms',
+			},
+		]);
+		expect(plugins.active).toEqual(["cards"]);
+		expect(journal).toEqual(["activate cards", "deactivate cards"]);
+	});
+
+	test("ignores an activation that fails after it has timed out", async () => {
+		const timers = manualTimers();
+		const timeUp = timers.next();
+		const activation = Promise.withResolvers<void>();
+
+		const starting = start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: { name: "notes" },
+						activate: () => activation.promise,
+					}),
+				),
+			],
+			enabledPlugins: ["notes"],
+			hookTimeout: { ms: 5000, setTimer: timers.setTimer },
+		});
+		(await timeUp)();
+		const { plugins } = await starting;
+		activation.reject(new Error("too late"));
+
+		expect(plugins.failures.map((failure) => failure.reason)).toEqual([
+			"activation_timed_out",
+		]);
+	});
+
+	test("gives up on a plugin that does not finish deactivating and deactivates the others", async () => {
+		const journal: string[] = [];
+		const timers = manualTimers();
+		const { plugins, entries } = await start({
+			packages: [
+				packageOf(recordingPlugin(journal, { name: "notes" })),
+				packageOf(
+					definePlugin({ manifest: { name: "board" }, deactivate: hanging }),
+				),
+			],
+			enabledPlugins: ["notes", "board"],
+			hookTimeout: { ms: 5000, setTimer: timers.setTimer },
+		});
+		const timeUp = timers.next();
+
+		const deactivating = plugins.deactivate();
+		(await timeUp)();
+		const outcome = await deactivating;
+
+		expect(outcome).toBe("incomplete");
+		expect(journal).toEqual(["activate notes", "deactivate notes"]);
+		expect(entries).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				message: "plugin deactivation timed out",
+				plugin: "board",
+				timeoutMs: 5000,
+			}),
+		);
+	});
+
+	test("stops the clock of every activation and deactivation that finishes in time", async () => {
+		const timers = manualTimers();
+		const { plugins } = await start({
+			packages: [
+				packageOf(definePlugin({ manifest: { name: "notes" } })),
+				packageOf(definePlugin({ manifest: { name: "board" } })),
+			],
+			enabledPlugins: ["notes", "board"],
+			hookTimeout: { ms: 5000, setTimer: timers.setTimer },
+		});
+
+		await plugins.deactivate();
+
+		expect(timers.delaysMs).toEqual([5000, 5000, 5000, 5000]);
+		expect(timers.cancelled()).toBe(4);
+	});
+
 	test("hands a plugin the capabilities its manifest declares and no others", async () => {
 		const clock = { now: () => new Date("2026-11-26T08:00:00.000Z") };
 		const provided: string[] = [];
@@ -826,6 +982,7 @@ describe("plugin kernel", () => {
 			discover: () => Promise.reject(failure),
 			enabledPlugins: ["notes"],
 			capabilityProviders: {},
+			hookTimeout: NEVER_EXPIRING,
 			logger,
 		});
 

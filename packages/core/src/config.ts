@@ -30,6 +30,8 @@ export type Config = {
 	readonly port: number;
 	readonly logLevel: LogLevel;
 	readonly readinessTimeoutMs: number;
+	/** How long one plugin may take to activate, and to deactivate. */
+	readonly pluginHookTimeoutMs: number;
 	/** Names of the plugins this instance activates. */
 	readonly enabledPlugins: readonly string[];
 };
@@ -64,6 +66,8 @@ const DEFAULT_PORT = 3000;
 const DEFAULT_LOG_LEVEL: LogLevel = "info";
 const READINESS_TIMEOUT_MS_RANGE: IntegerRange = { min: 1, max: 60_000 };
 const DEFAULT_READINESS_TIMEOUT_MS = 2000;
+const PLUGIN_HOOK_TIMEOUT_MS_RANGE: IntegerRange = { min: 1, max: 600_000 };
+const DEFAULT_PLUGIN_HOOK_TIMEOUT_MS = 10_000;
 
 function isPostgresUrl(value: string): boolean {
 	if (!URL.canParse(value)) return false;
@@ -100,6 +104,9 @@ const schema = z.object({
 	READINESS_TIMEOUT_MS: integerIn(READINESS_TIMEOUT_MS_RANGE).default(
 		DEFAULT_READINESS_TIMEOUT_MS,
 	),
+	PLUGIN_HOOK_TIMEOUT_MS: integerIn(PLUGIN_HOOK_TIMEOUT_MS_RANGE).default(
+		DEFAULT_PLUGIN_HOOK_TIMEOUT_MS,
+	),
 	PLUGINS: pluginNames.default([]),
 });
 
@@ -110,6 +117,7 @@ const EXPECTATIONS: Record<Variable, string> = {
 	PORT: integerExpectation(PORT_RANGE),
 	LOG_LEVEL: `must be one of ${LOG_LEVELS.join(", ")}`,
 	READINESS_TIMEOUT_MS: integerExpectation(READINESS_TIMEOUT_MS_RANGE),
+	PLUGIN_HOOK_TIMEOUT_MS: integerExpectation(PLUGIN_HOOK_TIMEOUT_MS_RANGE),
 	PLUGINS:
 		"must be a comma-separated list of plugin names (lowercase letters, digits and hyphens, starting with a letter)",
 };
@@ -182,6 +190,7 @@ function resolveVariables(
 		PORT: resolvePlain(source, "PORT"),
 		LOG_LEVEL: resolvePlain(source, "LOG_LEVEL"),
 		READINESS_TIMEOUT_MS: resolvePlain(source, "READINESS_TIMEOUT_MS"),
+		PLUGIN_HOOK_TIMEOUT_MS: resolvePlain(source, "PLUGIN_HOOK_TIMEOUT_MS"),
 		PLUGINS: resolvePlain(source, "PLUGINS"),
 	};
 }
@@ -226,6 +235,7 @@ export function loadConfig(source: ConfigSource): Config {
 		port: parsed.data.PORT,
 		logLevel: parsed.data.LOG_LEVEL,
 		readinessTimeoutMs: parsed.data.READINESS_TIMEOUT_MS,
+		pluginHookTimeoutMs: parsed.data.PLUGIN_HOOK_TIMEOUT_MS,
 		enabledPlugins: parsed.data.PLUGINS,
 	};
 }

@@ -4,6 +4,7 @@ import {
 	InvalidConfigError,
 	loadConfigFromEnvironment,
 } from "./config.ts";
+import { setSystemTimer } from "./hook-timeout.ts";
 import { startPlugins } from "./kernel.ts";
 import { createLogger } from "./logger.ts";
 import { discoverPluginPackages } from "./plugin-discovery.ts";
@@ -80,6 +81,7 @@ const plugins = startPlugins({
 	discover: discoverPluginPackages(PACKAGES_DIRECTORY),
 	enabledPlugins: config.enabledPlugins,
 	capabilityProviders: {},
+	hookTimeout: { ms: config.pluginHookTimeoutMs, setTimer: setSystemTimer },
 	logger,
 });
 
@@ -87,7 +89,7 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 	process.once(signal, () => {
 		logger.info("shutting down", { signal });
 		// A signal during startup waits for the plugins, so that every activated
-		// plugin is deactivated.
+		// plugin is deactivated. The hook timeout bounds that wait.
 		void plugins
 			.then((running) => shutDownInstance({ server, plugins: running }, logger))
 			.then((exitCode) => process.exit(exitCode));

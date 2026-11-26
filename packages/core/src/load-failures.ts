@@ -9,7 +9,8 @@ export type LoadFailureReason =
 	| "version_mismatch"
 	| "dependency_not_loaded"
 	| "dependency_cycle"
-	| "activation_failed";
+	| "activation_failed"
+	| "activation_timed_out";
 
 /** Why a plugin was not loaded, worded for the operator of the instance. */
 export type LoadFailure = {
