@@ -145,7 +145,7 @@ Die Architekturtests in `packages/architecture` lassen `bun run check` scheitern
 - ein Plugin aus einem anderen Plugin etwas anderes als `<Paket>/contract` importiert, auch als reinen Typ-Import oder über einen relativen Pfad in dessen Verzeichnis,
 - der Contract eine Datei seines eigenen Pakets importiert, etwa Server- oder Client-Code des Plugins; erlaubt sind andere Pakete und die Contracts fremder Plugins,
 - das Verzeichnis der Contract-Datei den Einstieg des Plugins enthält oder `./contract` keine einzelne Datei nennt,
-- der Core außerhalb seiner Tests Begriffe der fachlichen Plugins enthält, etwa `kanban`, `issue tracker` oder `note`; die Liste steht in `packages/architecture/src/domain-language.ts`.
+- der Core oder das SDK außerhalb ihrer Tests Begriffe der fachlichen Plugins enthält, etwa `kanban`, `issue tracker` oder `note`; die Liste steht in `packages/architecture/src/domain-language.ts`.
 
 ## Umgebungsvariablen
 

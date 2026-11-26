@@ -74,10 +74,15 @@ describe("domain language in the core", () => {
 	});
 });
 
-describe("the core of this repository", () => {
-	test("speaks no domain language besides the workspace", async () => {
-		expect(
-			await findDomainLanguage(join(import.meta.dir, "..", "..", "core")),
-		).toEqual([]);
-	});
+describe("the packages of this repository", () => {
+	test.each([["core"], ["sdk"]])(
+		"%s speaks no domain language besides the workspace",
+		async (packageDirectory) => {
+			expect(
+				await findDomainLanguage(
+					join(import.meta.dir, "..", "..", packageDirectory),
+				),
+			).toEqual([]);
+		},
+	);
 });
