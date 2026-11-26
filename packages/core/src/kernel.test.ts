@@ -287,7 +287,7 @@ describe("plugin kernel", () => {
 		expect(plugins.active).toEqual(["notes"]);
 	});
 
-	test("reports a plugin whose entry cannot be loaded without leaking the error text", async () => {
+	test("tells the operator what a plugin entry threw when it could not be loaded", async () => {
 		const { plugins, entries } = await start({
 			packages: [
 				{
@@ -295,7 +295,7 @@ describe("plugin kernel", () => {
 					pluginName: "board",
 					version: "1.0.0",
 					loadDefinition: () =>
-						Promise.reject(new SyntaxError("s3cr3t-detail")),
+						Promise.reject(new SyntaxError("Unexpected token '}'")),
 				},
 			],
 			enabledPlugins: ["board"],
@@ -306,10 +306,26 @@ describe("plugin kernel", () => {
 				plugin: "board",
 				reason: "invalid_manifest",
 				detail:
-					'plugin package "@workbench/plugin-board" has an invalid manifest: plugin entry failed to load (SyntaxError)',
+					"plugin package \"@workbench/plugin-board\" has an invalid manifest: plugin entry failed to load (SyntaxError: Unexpected token '}')",
+				error: {
+					name: "SyntaxError",
+					message: "Unexpected token '}'",
+					stack: expect.stringContaining("kernel.test.ts"),
+				},
 			},
 		]);
-		expect(JSON.stringify(entries)).not.toContain("s3cr3t-detail");
+		expect(entries).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				message: "plugin not loaded",
+				plugin: "board",
+				error: expect.objectContaining({
+					name: "SyntaxError",
+					message: "Unexpected token '}'",
+					stack: expect.stringContaining("kernel.test.ts"),
+				}),
+			}),
+		);
 	});
 
 	test.each(["^1.2.0", "~1.4", ">=1.0.0 <2.0.0", "1.x || 2.x", "*", "1.4.0"])(
@@ -611,7 +627,7 @@ describe("plugin kernel", () => {
 					definePlugin({
 						manifest: { name: "notes" },
 						activate: () => {
-							throw new TypeError("s3cr3t-detail");
+							throw new TypeError("notes table is missing");
 						},
 						deactivate: () => {
 							journal.push("deactivate notes");
@@ -634,18 +650,54 @@ describe("plugin kernel", () => {
 			{
 				plugin: "notes",
 				reason: "activation_failed",
-				detail: 'plugin "notes" failed to activate (TypeError)',
+				detail:
+					'plugin "notes" failed to activate (TypeError: notes table is missing)',
+				error: {
+					name: "TypeError",
+					message: "notes table is missing",
+					stack: expect.stringContaining("kernel.test.ts"),
+				},
 			},
 			{
 				plugin: "board",
 				reason: "dependency_not_loaded",
 				detail:
-					'plugin "board" requires plugin "notes", which was not loaded: plugin "notes" failed to activate (TypeError)',
+					'plugin "board" requires plugin "notes", which was not loaded: plugin "notes" failed to activate (TypeError: notes table is missing)',
 			},
 		]);
 		expect(plugins.active).toEqual(["cards"]);
 		expect(journal).toEqual(["activate cards", "deactivate cards"]);
-		expect(JSON.stringify(entries)).not.toContain("s3cr3t-detail");
+		expect(entries).toContainEqual(
+			expect.objectContaining({
+				message: "plugin not loaded",
+				plugin: "notes",
+				error: expect.objectContaining({ message: "notes table is missing" }),
+			}),
+		);
+	});
+
+	test("reports what a plugin threw even when it is not an Error", async () => {
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: { name: "notes" },
+						activate: () => Promise.reject("notes table is missing"),
+					}),
+				),
+			],
+			enabledPlugins: ["notes"],
+		});
+
+		expect(plugins.failures).toEqual([
+			{
+				plugin: "notes",
+				reason: "activation_failed",
+				detail:
+					'plugin "notes" failed to activate (unknown: notes table is missing)',
+				error: { name: "unknown", message: "notes table is missing" },
+			},
+		]);
 	});
 
 	test("hands a plugin the capabilities its manifest declares and no others", async () => {
@@ -698,7 +750,8 @@ describe("plugin kernel", () => {
 				packageOf(
 					definePlugin({
 						manifest: { name: "board" },
-						deactivate: () => Promise.reject(new RangeError("s3cr3t-detail")),
+						deactivate: () =>
+							Promise.reject(new RangeError("queue not drained")),
 					}),
 				),
 			],
@@ -714,10 +767,13 @@ describe("plugin kernel", () => {
 				level: "error",
 				message: "plugin failed to deactivate",
 				plugin: "board",
-				reason: "RangeError",
+				error: {
+					name: "RangeError",
+					message: "queue not drained",
+					stack: expect.stringContaining("kernel.test.ts"),
+				},
 			}),
 		);
-		expect(JSON.stringify(entries)).not.toContain("s3cr3t-detail");
 	});
 
 	test("deactivates each plugin once, however often shutdown asks", async () => {

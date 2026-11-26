@@ -1,4 +1,4 @@
-import { errorName } from "./failure-reason.ts";
+import { describeThrown, summarize } from "./failure-reason.ts";
 import type { LoadFailure } from "./load-failures.ts";
 import { type ValidPlugin, validatePlugin } from "./plugin-manifest.ts";
 import { quote } from "./quote.ts";
@@ -69,11 +69,13 @@ async function loadPlugin(
 	try {
 		definition = await pluginPackage.loadDefinition();
 	} catch (error) {
-		return notLoaded(
-			invalidManifest(pluginPackage, [
-				`plugin entry failed to load (${errorName(error)})`,
+		const thrown = describeThrown(error);
+		return notLoaded({
+			...invalidManifest(pluginPackage, [
+				`plugin entry failed to load (${summarize(thrown)})`,
 			]),
-		);
+			error: thrown,
+		});
 	}
 	const validation = validatePlugin(
 		{ declaredName, version, definition },

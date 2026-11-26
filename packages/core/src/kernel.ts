@@ -1,5 +1,5 @@
 import type { PluginContext } from "@workbench/sdk";
-import { errorName } from "./failure-reason.ts";
+import { describeThrown, summarize } from "./failure-reason.ts";
 import { type LoadFailure, LoadFailures } from "./load-failures.ts";
 import type { Logger } from "./logger.ts";
 import {
@@ -150,10 +150,12 @@ async function activate(
 		await plugin.activate(contextFor(plugin, providers));
 		return undefined;
 	} catch (error) {
+		const thrown = describeThrown(error);
 		return {
 			plugin: plugin.name,
 			reason: "activation_failed",
-			detail: `plugin ${quote(plugin.name)} failed to activate (${errorName(error)})`,
+			detail: `plugin ${quote(plugin.name)} failed to activate (${summarize(thrown)})`,
+			error: thrown,
 		};
 	}
 }
@@ -190,7 +192,7 @@ async function deactivate(
 			outcome = "incomplete";
 			logger.error("plugin failed to deactivate", {
 				plugin: plugin.name,
-				reason: errorName(error),
+				error: describeThrown(error),
 			});
 		}
 	}

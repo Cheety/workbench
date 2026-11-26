@@ -1,3 +1,4 @@
+import type { ThrownError } from "./failure-reason.ts";
 import type { Logger } from "./logger.ts";
 
 export type LoadFailureReason =
@@ -16,6 +17,8 @@ export type LoadFailure = {
 	readonly plugin: string;
 	readonly reason: LoadFailureReason;
 	readonly detail: string;
+	/** What the plugin threw, if that is why it was not loaded. */
+	readonly error?: ThrownError;
 };
 
 /** Collects the load failures of one instance start and logs each once. */
