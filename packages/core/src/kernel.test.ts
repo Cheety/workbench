@@ -15,7 +15,6 @@ import {
 	UndeclaredCapabilityError,
 	type UnreadablePackage,
 } from "./kernel.ts";
-import { createLogger } from "./logger.ts";
 import {
 	type Migration,
 	type MigrationRun,
@@ -25,18 +24,7 @@ import {
 } from "./schema-migrations.ts";
 import { schemaName } from "./schema-name.ts";
 import { createFreshDatabase, type FreshDatabase } from "./testing/postgres.ts";
-
-type LogEntry = Record<string, unknown>;
-
-function recordingLogger() {
-	const entries: LogEntry[] = [];
-	const logger = createLogger({
-		level: "debug",
-		now: () => new Date("2026-11-26T08:00:00.000Z"),
-		write: (line) => entries.push(JSON.parse(line)),
-	});
-	return { logger, entries };
-}
+import { recordingLogger } from "./testing/recording-logger.ts";
 
 function packageOf(
 	definition: PluginDefinition,

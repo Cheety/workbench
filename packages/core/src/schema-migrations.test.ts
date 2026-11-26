@@ -17,18 +17,7 @@ import {
 	type FreshDatabase,
 	PostgresGate,
 } from "./testing/postgres.ts";
-
-type LogEntry = Record<string, unknown>;
-
-function recordingLogger() {
-	const entries: LogEntry[] = [];
-	const logger = createLogger({
-		level: "debug",
-		now: () => new Date("2026-11-26T08:00:00.000Z"),
-		write: (line) => entries.push(JSON.parse(line)),
-	});
-	return { logger, entries };
-}
+import { recordingLogger } from "./testing/recording-logger.ts";
 
 const LOCK_HELD = "migration lock held by another run, waiting";
 

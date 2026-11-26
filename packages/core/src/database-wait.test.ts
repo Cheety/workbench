@@ -1,20 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { fullJitterBackoff, untilDatabaseReachable } from "./database-wait.ts";
 import type { SetTimer } from "./hook-timeout.ts";
-import { createLogger } from "./logger.ts";
 import type { DatabaseStatus } from "./postgres.ts";
-
-type LogEntry = Record<string, unknown>;
-
-function recordingLogger() {
-	const entries: LogEntry[] = [];
-	const logger = createLogger({
-		level: "debug",
-		now: () => new Date("2026-11-26T08:00:00.000Z"),
-		write: (line) => entries.push(JSON.parse(line)),
-	});
-	return { logger, entries };
-}
+import { recordingLogger } from "./testing/recording-logger.ts";
 
 function answering(...statuses: DatabaseStatus[]) {
 	let checks = 0;
