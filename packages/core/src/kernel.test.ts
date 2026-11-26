@@ -1853,4 +1853,31 @@ describe("plugin schemas", () => {
 			},
 		]);
 	});
+
+	test("does not load a plugin whose name is too long for the name of its schema, and migrates nothing for it", async () => {
+		const name = `notes-${"a".repeat(51)}`;
+		let called = false;
+
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					definePlugin({ manifest: { name, capabilities: ["database"] } }),
+				),
+			],
+			enabledPlugins: [name],
+			migrateSchemas: async (schemas) => {
+				called = true;
+				return migrateAll(schemas);
+			},
+		});
+
+		expect(plugins.failures).toEqual([
+			{
+				plugin: name,
+				reason: "invalid_manifest",
+				detail: `plugin package "@workbench/plugin-${name}" has an invalid manifest: manifest.name must have at most 56 characters`,
+			},
+		]);
+		expect(called).toBe(false);
+	});
 });

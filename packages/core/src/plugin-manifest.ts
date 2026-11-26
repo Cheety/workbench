@@ -1,6 +1,7 @@
 import { DATABASE_CAPABILITY, type PluginContext } from "@workbench/sdk";
 import { quote } from "./quote.ts";
 import type { Migration } from "./schema-migrations.ts";
+import { MAX_PLUGIN_NAME_LENGTH } from "./schema-name.ts";
 
 const PLUGIN_NAME = /^[a-z][a-z0-9-]*$/;
 
@@ -99,6 +100,10 @@ function nameProblems(
 			"manifest.name must consist of lowercase letters, digits and hyphens and start with a letter",
 		];
 	}
+	if (manifest.name.length > MAX_PLUGIN_NAME_LENGTH)
+		return [
+			`manifest.name must have at most ${MAX_PLUGIN_NAME_LENGTH} characters`,
+		];
 	return manifest.name === declaredName
 		? []
 		: [
