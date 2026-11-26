@@ -57,9 +57,8 @@ async function handleRequest(
 	});
 	response.headers.set(CORRELATION_ID_HEADER, correlationId);
 	const entry = { method: request.method, path, status: response.status };
-	if (path.startsWith(HEALTH_PATH_PREFIX))
-		logger.debug("request completed", entry);
-	else logger.info("request completed", entry);
+	const level = path.startsWith(HEALTH_PATH_PREFIX) ? "debug" : "info";
+	logger[level]("request completed", entry);
 	return response;
 }
 
