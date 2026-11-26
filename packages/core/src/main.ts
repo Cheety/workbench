@@ -40,6 +40,7 @@ const server = startServer({
 	checkDatabase: createPostgresCheck({
 		url: config.databaseUrl,
 		timeoutMs: config.readinessTimeoutMs,
+		logger,
 	}),
 	newCorrelationId: () => crypto.randomUUID(),
 });

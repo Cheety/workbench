@@ -26,16 +26,18 @@ function startTestServer() {
 	openGate = gate;
 	const lines: string[] = [];
 	let nextId = 1;
+	const logger = createLogger({
+		level: "debug",
+		now: () => new Date("2026-11-26T08:00:00.000Z"),
+		write: (line) => lines.push(line),
+	});
 	const server = startServer({
 		port: 0,
-		logger: createLogger({
-			level: "debug",
-			now: () => new Date("2026-11-26T08:00:00.000Z"),
-			write: (line) => lines.push(line),
-		}),
+		logger,
 		checkDatabase: createPostgresCheck({
 			url: new Secret(gate.url),
 			timeoutMs: 5000,
+			logger,
 		}),
 		newCorrelationId: () => `generated-${nextId++}`,
 	});

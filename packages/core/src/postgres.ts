@@ -1,5 +1,6 @@
 import { SQL } from "bun";
 import type { Secret } from "./config.ts";
+import type { Logger } from "./logger.ts";
 
 /** `reason` is a short machine-readable cause, e.g. `timeout` or a driver error code. */
 export type DatabaseStatus =
@@ -12,6 +13,13 @@ export type DatabaseCheck = () => Promise<DatabaseStatus>;
 const TIMEOUT_REASON = "timeout";
 const UNKNOWN_REASON = "unknown";
 
+export type PostgresCheckOptions = {
+	readonly url: Secret;
+	readonly timeoutMs: number;
+	/** Receives what the check cannot express in its status. */
+	readonly logger: Logger;
+};
+
 /**
  * Creates a check that reports whether Postgres answers a query within
  * `timeoutMs` milliseconds.
@@ -19,10 +27,9 @@ const UNKNOWN_REASON = "unknown";
  * Calls that overlap share one check and its result, so the check never
  * holds more than one connection, however many callers ask at once.
  */
-export function createPostgresCheck(options: {
-	readonly url: Secret;
-	readonly timeoutMs: number;
-}): DatabaseCheck {
+export function createPostgresCheck(
+	options: PostgresCheckOptions,
+): DatabaseCheck {
 	let inFlight: Promise<DatabaseStatus> | undefined;
 	return () => {
 		inFlight ??= queryOnce(options).finally(() => {
@@ -32,10 +39,9 @@ export function createPostgresCheck(options: {
 	};
 }
 
-async function queryOnce(options: {
-	readonly url: Secret;
-	readonly timeoutMs: number;
-}): Promise<DatabaseStatus> {
+async function queryOnce(
+	options: PostgresCheckOptions,
+): Promise<DatabaseStatus> {
 	// A connection of its own per check: a pooled connection that hangs
 	// would keep later checks waiting behind it after Postgres is back.
 	const sql = new SQL(options.url.reveal(), {
@@ -63,7 +69,13 @@ async function queryOnce(options: {
 		clearTimeout(timer);
 		// Awaited so that the next check starts only after this connection
 		// is gone; without a grace period it does not wait for a hung query.
-		await sql.close({ timeout: 0 }).catch(() => {});
+		await sql.close({ timeout: 0 }).catch((error: unknown) => {
+			// The status stands either way, but a connection that could not
+			// be closed may still occupy a slot in Postgres.
+			options.logger.warn("closing the readiness connection failed", {
+				reason: describeFailure(error),
+			});
+		});
 	}
 }
 

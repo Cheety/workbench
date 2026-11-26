@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { SQL } from "bun";
 import { Secret } from "./config.ts";
+import { createLogger } from "./logger.ts";
 import { createPostgresCheck } from "./postgres.ts";
 import { PostgresGate, TEST_DATABASE_URL } from "./testing/postgres.ts";
 
@@ -24,6 +25,12 @@ describe("test database", () => {
 
 const PARALLEL_CHECKS = 20;
 
+const logger = createLogger({
+	level: "error",
+	now: () => new Date("2026-11-26T08:00:00.000Z"),
+	write: () => {},
+});
+
 describe("createPostgresCheck", () => {
 	const gates: PostgresGate[] = [];
 
@@ -41,6 +48,7 @@ describe("createPostgresCheck", () => {
 		const check = createPostgresCheck({
 			url: new Secret(TEST_DATABASE_URL),
 			timeoutMs: 5000,
+			logger,
 		});
 
 		expect(await check()).toEqual({ reachable: true });
@@ -52,6 +60,7 @@ describe("createPostgresCheck", () => {
 		const check = createPostgresCheck({
 			url: new Secret(gate.url),
 			timeoutMs: 50,
+			logger,
 		});
 
 		const status = await check();
@@ -65,6 +74,7 @@ describe("createPostgresCheck", () => {
 		const check = createPostgresCheck({
 			url: new Secret(gate.url),
 			timeoutMs: 5000,
+			logger,
 		});
 
 		const statuses = await Promise.all(
@@ -83,6 +93,7 @@ describe("createPostgresCheck", () => {
 		const check = createPostgresCheck({
 			url: new Secret(gate.url),
 			timeoutMs: 500,
+			logger,
 		});
 		const hung = await check();
 		gate.forward();
@@ -99,6 +110,7 @@ describe("createPostgresCheck", () => {
 		const check = createPostgresCheck({
 			url: new Secret(url.href),
 			timeoutMs: 5000,
+			logger,
 		});
 
 		expect(await check()).toEqual({ reachable: false, reason: "28P01" });
