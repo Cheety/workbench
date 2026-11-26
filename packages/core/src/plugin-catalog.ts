@@ -4,18 +4,13 @@ import type { LoadFailure } from "./load-failures.ts";
 import { type ValidPlugin, validatePlugin } from "./plugin-manifest.ts";
 import { quote } from "./quote.ts";
 
-/** A plugin package as discovery found it, before anything is validated. */
 export type PluginPackage = {
 	readonly packageName: string;
-	/** The plugin name the package's `package.json` declares. */
 	readonly pluginName: string;
-	/** The `version` of the package's `package.json`, as found. */
 	readonly version: unknown;
-	/** Loads the default export of the plugin entry; this runs plugin code. */
 	readonly loadDefinition: () => Promise<unknown>;
 };
 
-/** A package directory whose `package.json` discovery could not use. */
 export type UnreadablePackage = {
 	readonly directory: string;
 	readonly problem: string;
@@ -30,15 +25,8 @@ export type PluginLoad =
 	| { readonly loaded: true; readonly plugin: ValidPlugin }
 	| { readonly loaded: false; readonly failure: LoadFailure };
 
-/** The discovered plugins by the name their plugin package declares. */
 export type PluginCatalog = {
 	isDiscovered(name: string): boolean;
-	/**
-	 * Loads and validates the entry of the plugin package that declares `name`.
-	 * A name that no plugin package or more than one declares is a load failure,
-	 * and no entry is loaded for it. An entry that does not finish loading
-	 * within the hook timeout is a load failure, too.
-	 */
 	load(name: string): Promise<PluginLoad>;
 };
 

@@ -1,7 +1,5 @@
-/** Calls `expire` after `delayMs`; the returned function cancels that. */
 export type SetTimer = (expire: () => void, delayMs: number) => () => void;
 
-/** How long one plugin may take to load its entry, to activate, and to deactivate. */
 export type HookTimeout = {
 	readonly ms: number;
 	readonly setTimer: SetTimer;
@@ -14,13 +12,6 @@ export const setSystemTimer: SetTimer = (expire, delayMs) => {
 	return () => clearTimeout(timer);
 };
 
-/**
- * Waits for a plugin hook or entry, but no longer than the timeout. A hook that timed
- * out keeps running, since nothing can stop it; what it does afterwards,
- * failing included, is ignored.
- *
- * Rejects with what the hook threw if it fails in time.
- */
 export function runWithin(
 	hook: () => Promise<void>,
 	timeout: HookTimeout,

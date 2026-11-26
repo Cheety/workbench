@@ -3,16 +3,6 @@ import type { PluginCatalog, PluginLoad } from "./plugin-catalog.ts";
 import type { ValidPlugin } from "./plugin-manifest.ts";
 import { quote } from "./quote.ts";
 
-/**
- * Decides which of the enabled plugins can be loaded and returns them with
- * every required plugin before the plugins that require it. Everything else
- * is rejected with the reason; a plugin that requires a rejected plugin is
- * rejected too, and its reason quotes the cause. Plugins that require each
- * other in a cycle are each rejected for the cycle.
- *
- * Only enabled plugins are loaded from the catalog, so no code of any other
- * plugin runs and none of them is rejected.
- */
 export async function resolvePlugins(
 	catalog: PluginCatalog,
 	enabledPlugins: readonly string[],

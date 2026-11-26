@@ -14,17 +14,13 @@ export type LoadFailureReason =
 	| "activation_failed"
 	| "activation_timed_out";
 
-/** Why a plugin was not loaded, worded for the operator of the instance. */
 export type LoadFailure = {
-	/** The plugin name, as the instance config or a manifest refers to it. */
 	readonly plugin: string;
 	readonly reason: LoadFailureReason;
 	readonly detail: string;
-	/** What the plugin or a capability provider threw, if that is why it was not loaded. */
 	readonly error?: ThrownError;
 };
 
-/** Collects the load failures of one instance start and logs each once. */
 export class LoadFailures {
 	readonly #logger: Logger;
 	readonly #failures: LoadFailure[] = [];

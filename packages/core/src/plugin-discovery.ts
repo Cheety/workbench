@@ -9,18 +9,6 @@ const PACKAGE_JSON = "package.json";
 
 const NOTHING: PluginDiscovery = { packages: [], unreadable: [] };
 
-/**
- * Finds the plugin packages among the packages in `packagesDirectory`: those
- * whose `package.json` declares a plugin in `workbench.plugin`, with the plugin
- * `name` and the `entry`, a relative path to a file inside the package
- * (ADR-0007). Other directories are not plugins and are skipped. No plugin code
- * is loaded before `loadDefinition` is called.
- *
- * A package whose `package.json` cannot be read or declares a plugin in
- * another shape is listed in `unreadable` and does not keep the others from
- * being found. The returned function rejects if the directory itself cannot
- * be read.
- */
 export function discoverPluginPackages(
 	packagesDirectory: string,
 ): () => Promise<PluginDiscovery> {

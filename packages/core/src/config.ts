@@ -30,9 +30,7 @@ export type Config = {
 	readonly port: number;
 	readonly logLevel: LogLevel;
 	readonly readinessTimeoutMs: number;
-	/** How long one plugin may take to activate, and to deactivate. */
 	readonly pluginHookTimeoutMs: number;
-	/** Names of the plugins this instance activates. */
 	readonly enabledPlugins: readonly string[];
 };
 

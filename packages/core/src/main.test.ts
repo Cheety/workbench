@@ -50,8 +50,6 @@ async function readFirstLine(
 
 type LogEntry = Record<string, unknown>;
 
-// Reads the log across several calls; iterating the stream directly would
-// cancel it at the first early return.
 function readLog(stream: ReadableStream<Uint8Array>) {
 	const reader = stream.getReader();
 	const decoder = new TextDecoder();

@@ -50,7 +50,6 @@ type Scenario = {
 
 const NEVER_EXPIRING: HookTimeout = { ms: 10_000, setTimer: () => () => {} };
 
-/** Timers that expire only when the test says so. */
 function manualTimers() {
 	const delaysMs: number[] = [];
 	let cancelled = 0;
@@ -70,7 +69,6 @@ function manualTimers() {
 		delaysMs,
 		cancelled: () => cancelled,
 		expireLatest: () => latest?.(),
-		/** Resolves with the expiry of the next timer that is set. */
 		next: () =>
 			new Promise<() => void>((resolve) => {
 				announce = resolve;

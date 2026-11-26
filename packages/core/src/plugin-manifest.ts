@@ -3,7 +3,6 @@ import { quote } from "./quote.ts";
 
 const PLUGIN_NAME = /^[a-z][a-z0-9-]*$/;
 
-// The grammar of semver.org, section "Is there a suggested regular expression".
 const SEMVER_VERSION =
 	/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 
@@ -11,8 +10,6 @@ const VERSION_PART = String.raw`(?:0|[1-9]\d*|[xX*])`;
 const PARTIAL_VERSION = String.raw`${VERSION_PART}(?:\.${VERSION_PART}(?:\.${VERSION_PART}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)?)?`;
 const COMPARATOR = String.raw`(?:(?:\^|~|>=|<=|>|<|=)\s*)?${PARTIAL_VERSION}`;
 const COMPARATOR_SET = String.raw`${COMPARATOR}(?:\s+${COMPARATOR})*`;
-// Bun.semver.satisfies treats a range it cannot parse as satisfied, so a range
-// has to be recognised before it is evaluated.
 const SEMVER_RANGE = new RegExp(
 	String.raw`^\s*${COMPARATOR_SET}(?:\s*\|\|\s*${COMPARATOR_SET})*\s*$`,
 );
@@ -25,7 +22,6 @@ export function isPluginName(value: unknown): value is string {
 export type ValidPlugin = {
 	readonly name: string;
 	readonly version: string;
-	/** Required plugin name → SemVer range. */
 	readonly requires: ReadonlyMap<string, string>;
 	readonly capabilities: readonly string[];
 	activate(ctx: PluginContext): Promise<void>;
@@ -33,7 +29,6 @@ export type ValidPlugin = {
 };
 
 export type UnvalidatedPlugin = {
-	/** The plugin name the package's `package.json` declares. */
 	readonly declaredName: string;
 	readonly version: unknown;
 	readonly definition: unknown;

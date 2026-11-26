@@ -17,16 +17,12 @@ import {
 import { reportFailedStart, shutDownInstance } from "./shutdown.ts";
 import { systemFailureReason } from "./system-error.ts";
 
-// The image holds the core and every plugin package of the repository side by
-// side, so the plugin packages are the siblings of this package.
 const PACKAGES_DIRECTORY = fileURLToPath(new URL("../../", import.meta.url));
 
 const CLOSED_PIPE = "EPIPE";
 
 const now = (): Date => new Date();
 
-// The instance outlives whoever reads its log: once stdout is closed there is
-// nowhere left to report that, and it is no reason to stop serving.
 process.stdout.on("error", (error) => {
 	if (systemFailureReason(error) !== CLOSED_PIPE) throw error;
 });
