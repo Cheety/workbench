@@ -1,14 +1,39 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import type { Subprocess, TCPSocketListener } from "bun";
 import { TEST_DATABASE_URL } from "./testing/postgres.ts";
 
 const MAIN = new URL("./main.ts", import.meta.url).pathname;
 
+const instances: Subprocess[] = [];
+let occupiedPort: TCPSocketListener | undefined;
+
+afterEach(async () => {
+	for (const instance of instances.splice(0)) {
+		instance.kill("SIGKILL");
+		await instance.exited;
+	}
+	occupiedPort?.stop(true);
+	occupiedPort = undefined;
+});
+
 function spawnInstance(env: Record<string, string>) {
-	return Bun.spawn([process.execPath, MAIN], {
+	const instance = Bun.spawn([process.execPath, MAIN], {
 		env: { PATH: process.env.PATH ?? "", ...env },
 		stdout: "pipe",
 		stderr: "pipe",
 	});
+	instances.push(instance);
+	return instance;
+}
+
+/** Listens on a free port until the test is over and returns the port. */
+function occupyPort(): number {
+	occupiedPort = Bun.listen({
+		hostname: "0.0.0.0",
+		port: 0,
+		socket: { data() {} },
+	});
+	return occupiedPort.port;
 }
 
 async function readFirstLine(
@@ -54,6 +79,34 @@ describe("instance start", () => {
 		expect(output).toContain("DATABASE_URL");
 		expect(output).toContain("PORT");
 		expect(output).not.toContain("s3cr3t-pass");
+	});
+
+	test("aborts with one log entry and no internals when the port is in use", async () => {
+		const port = occupyPort();
+		const instance = spawnInstance({
+			DATABASE_URL: TEST_DATABASE_URL,
+			PORT: String(port),
+		});
+
+		const exitCode = await instance.exited;
+		const stdout = await new Response(instance.stdout).text();
+		const stderr = await new Response(instance.stderr).text();
+
+		expect(exitCode).toBe(1);
+		expect(stderr).toBe("");
+		expect(
+			stdout
+				.trimEnd()
+				.split("\n")
+				.map((line) => JSON.parse(line)),
+		).toEqual([
+			expect.objectContaining({
+				level: "error",
+				message: "server failed to start",
+				port,
+				reason: "EADDRINUSE",
+			}),
+		]);
 	});
 
 	test("serves health checks and shuts down cleanly on SIGTERM", async () => {

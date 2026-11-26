@@ -5,7 +5,11 @@ import {
 } from "./config.ts";
 import { createLogger } from "./logger.ts";
 import { createPostgresCheck } from "./postgres.ts";
-import { startServer } from "./server.ts";
+import {
+	type RunningServer,
+	type ServerOptions,
+	startServer,
+} from "./server.ts";
 
 const now = (): Date => new Date();
 
@@ -28,13 +32,34 @@ function loadConfigOrExit(): Config {
 	}
 }
 
+const UNKNOWN_START_FAILURE = "unknown";
+
+function startServerOrExit(options: ServerOptions): RunningServer {
+	try {
+		return startServer(options);
+	} catch (error) {
+		// Only the system error code (e.g. EADDRINUSE) is reported: message
+		// and stack trace of the runtime are internals.
+		options.logger.error("server failed to start", {
+			port: options.port,
+			reason: systemErrorCode(error) ?? UNKNOWN_START_FAILURE,
+		});
+		process.exit(1);
+	}
+}
+
+function systemErrorCode(error: unknown): string | undefined {
+	if (!(error instanceof Error) || !("code" in error)) return undefined;
+	return typeof error.code === "string" ? error.code : undefined;
+}
+
 const config = loadConfigOrExit();
 const logger = createLogger({
 	level: config.logLevel,
 	now,
 	write: (line) => process.stdout.write(`${line}\n`),
 });
-const server = startServer({
+const server = startServerOrExit({
 	port: config.port,
 	logger,
 	checkDatabase: createPostgresCheck({

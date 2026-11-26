@@ -40,6 +40,8 @@ DATABASE_URL=postgres://workbench:workbench@127.0.0.1:54329/workbench_test bun r
 - `GET /health/live` meldet, dass der Prozess läuft, unabhängig von der Datenbank.
 - `GET /health/ready` antwortet mit 200, wenn Postgres erreichbar ist, sonst mit 503. Der Server startet auch ohne Datenbank.
 
+Kann der Server nicht starten, etwa weil der Port belegt ist, endet der Prozess mit Exit-Code 1 und einem Log-Eintrag `server failed to start`, der Port und Fehlercode (z. B. `EADDRINUSE`) nennt.
+
 Logs sind JSON-Zeilen auf der Standardausgabe. Jede Anfrage trägt eine Korrelations-ID: Ein gültiger Header `X-Correlation-ID` (höchstens 128 Zeichen aus Buchstaben, Ziffern, `.`, `_`, `-`) wird übernommen, sonst erzeugt der Server eine. Die Antwort nennt sie im selben Header.
 
 ## Umgebungsvariablen
