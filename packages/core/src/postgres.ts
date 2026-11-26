@@ -2,7 +2,11 @@ import { SQL } from "bun";
 import type { Secret } from "./config.ts";
 import type { Logger } from "./logger.ts";
 
-/** `reason` is a short machine-readable cause, e.g. `timeout` or a driver error code. */
+/**
+ * `reason` is a short machine-readable cause: `timeout`, `unknown`, or the
+ * code the driver or the server reported (an `ERR_POSTGRES_*` code or a
+ * SQLSTATE), which is why it is not a closed set.
+ */
 export type DatabaseStatus =
 	| { readonly reachable: true }
 	| { readonly reachable: false; readonly reason: string };

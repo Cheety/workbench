@@ -8,6 +8,13 @@ const HEALTH_PATH_PREFIX = "/health/";
 const LIVENESS_PATH = "/health/live";
 const READINESS_PATH = "/health/ready";
 
+/** The `status` values of the health responses; part of the HTTP contract. */
+const HEALTH_STATUS = {
+	alive: "alive",
+	ready: "ready",
+	notReady: "not_ready",
+} as const;
+
 export type ServerOptions = {
 	/** TCP port to listen on; 0 picks a free one. */
 	readonly port: number;
@@ -81,7 +88,7 @@ async function route(
 	logger: Logger,
 ): Promise<Response> {
 	if (method === "GET" && path === LIVENESS_PATH)
-		return Response.json({ status: "alive" });
+		return Response.json({ status: HEALTH_STATUS.alive });
 	if (method === "GET" && path === READINESS_PATH)
 		return readiness(checkDatabase, logger);
 	return problem(404, "Not Found");
@@ -92,9 +99,9 @@ async function readiness(
 	logger: Logger,
 ): Promise<Response> {
 	const database = await checkDatabase();
-	if (database.reachable) return Response.json({ status: "ready" });
+	if (database.reachable) return Response.json({ status: HEALTH_STATUS.ready });
 	logger.warn("not ready: database unreachable", { reason: database.reason });
-	return Response.json({ status: "not_ready" }, { status: 503 });
+	return Response.json({ status: HEALTH_STATUS.notReady }, { status: 503 });
 }
 
 /** An RFC 9457 problem response without internals. */
