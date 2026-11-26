@@ -710,6 +710,32 @@ describe("plugin kernel", () => {
 		);
 	});
 
+	test("leaves a plugin that failed midway through activation to clean up after itself", async () => {
+		const journal: string[] = [];
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: { name: "notes" },
+						activate: () => {
+							journal.push("notes opened its index");
+							throw new Error("notes table is missing");
+						},
+						deactivate: () => {
+							journal.push("deactivate notes");
+						},
+					}),
+				),
+			],
+			enabledPlugins: ["notes"],
+		});
+
+		await plugins.deactivate();
+
+		expect(plugins.active).toEqual([]);
+		expect(journal).toEqual(["notes opened its index"]);
+	});
+
 	test("reports what a plugin threw even when it is not an Error", async () => {
 		const { plugins } = await start({
 			packages: [

@@ -26,9 +26,20 @@ export type PluginContext = {
 
 export type PluginDefinition = {
 	readonly manifest: PluginManifest;
-	/** Called once at instance start, after every required plugin is active. */
+	/**
+	 * Called once at instance start, after every required plugin is active.
+	 *
+	 * If it throws, rejects or does not settle within the instance's hook
+	 * timeout, the plugin counts as not loaded and `deactivate` is never called
+	 * for it. It must therefore release whatever it acquired before it fails;
+	 * the kernel cannot tell how far it got.
+	 */
 	activate?(ctx: PluginContext): void | Promise<void>;
-	/** Called once at instance shutdown, before any required plugin stops. */
+	/**
+	 * Called once at instance shutdown, before any required plugin stops, and
+	 * only if `activate` succeeded. It has the instance's hook timeout to
+	 * settle; after that the instance shuts down without waiting for it.
+	 */
 	deactivate?(): void | Promise<void>;
 };
 
