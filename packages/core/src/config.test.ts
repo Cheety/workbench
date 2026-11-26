@@ -77,6 +77,8 @@ describe("loadConfig", () => {
 		["READINESS_TIMEOUT_MS", "0"],
 		["DATABASE_URL", "mysql://workbench:s3cr3t-pass@db.internal/workbench"],
 		["DATABASE_URL", "s3cr3t-pass"],
+		["DATABASE_URL", "postgres:s3cr3t-pass"],
+		["DATABASE_URL", "postgres:///s3cr3t-pass"],
 	])(
 		"rejects invalid %s and names it without echoing the value",
 		(variable, value) => {

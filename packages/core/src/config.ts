@@ -71,8 +71,11 @@ const DEFAULT_READINESS_TIMEOUT_MS = 2000;
 
 function isPostgresUrl(value: string): boolean {
 	if (!URL.canParse(value)) return false;
-	const { protocol } = new URL(value);
-	return POSTGRES_SCHEMES.some((scheme) => protocol === `${scheme}:`);
+	const { protocol, hostname } = new URL(value);
+	return (
+		POSTGRES_SCHEMES.some((scheme) => protocol === `${scheme}:`) &&
+		hostname !== ""
+	);
 }
 
 // Number() would also take hexadecimal, exponents and blank strings, which
@@ -105,7 +108,7 @@ type Variable = keyof z.input<typeof schema>;
 // Problems are reported from this table instead of from the validator's own
 // messages, so that no rejected value can ever end up in the output.
 const EXPECTATIONS: Record<Variable, string> = {
-	DATABASE_URL: `must be a ${POSTGRES_SCHEMES.map((scheme) => `${scheme}://`).join(" or ")} URL`,
+	DATABASE_URL: `must be a ${POSTGRES_SCHEMES.map((scheme) => `${scheme}://`).join(" or ")} URL with a host`,
 	PORT: integerExpectation(PORT_RANGE),
 	LOG_LEVEL: `must be one of ${LOG_LEVELS.join(", ")}`,
 	READINESS_TIMEOUT_MS: integerExpectation(READINESS_TIMEOUT_MS_RANGE),

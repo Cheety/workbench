@@ -48,7 +48,7 @@ Die Konfiguration kommt ausschließlich aus der Umgebung und wird beim Start gep
 
 | Variable               | Pflicht | Standard | Bedeutung                                                                                                      |
 | ---------------------- | ------- | -------- | -------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`         | ja      | –        | Postgres-URL (`postgres://` oder `postgresql://`). Secret.                                                     |
+| `DATABASE_URL`         | ja      | –        | Postgres-URL (`postgres://` oder `postgresql://`) mit Host. Secret.                                            |
 | `DATABASE_URL_FILE`    | –       | –        | Pfad einer Datei mit der Postgres-URL (Docker-Secret). Ersetzt `DATABASE_URL`; beide zugleich sind ein Fehler. |
 | `PORT`                 | nein    | `3000`   | HTTP-Port, 0 bis 65535 (0 wählt einen freien Port).                                                            |
 | `LOG_LEVEL`            | nein    | `info`   | `debug`, `info`, `warn` oder `error`.                                                                          |
