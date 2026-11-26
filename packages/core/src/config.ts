@@ -103,15 +103,6 @@ const EXPECTATIONS: Record<Variable, string> = {
 	READINESS_TIMEOUT_MS: integerExpectation(READINESS_TIMEOUT_MS_RANGE),
 };
 
-const SECRET_VARIABLES = [
-	"DATABASE_URL",
-] as const satisfies readonly Variable[];
-const PLAIN_VARIABLES = [
-	"PORT",
-	"LOG_LEVEL",
-	"READINESS_TIMEOUT_MS",
-] as const satisfies readonly Variable[];
-
 type ValueOrigin = "variable" | "secretFile";
 
 const MISSING_PROBLEMS: Record<ValueOrigin, string> = {
@@ -123,6 +114,7 @@ type ResolvedValue = {
 	readonly origin: ValueOrigin;
 	readonly reportedAs: string;
 	readonly value: string | undefined;
+	readonly expectation: string;
 };
 
 function readVariable(
@@ -133,16 +125,23 @@ function readVariable(
 	return value === undefined || value === "" ? undefined : value;
 }
 
+function resolvePlain(source: ConfigSource, variable: Variable): ResolvedValue {
+	return {
+		origin: "variable",
+		reportedAs: variable,
+		value: readVariable(source, variable),
+		expectation: EXPECTATIONS[variable],
+	};
+}
+
 function resolveSecret(
 	source: ConfigSource,
 	variable: Variable,
 ): ResolvedValue | ConfigIssue {
 	const fileVariable = `${variable}_FILE`;
-	const direct = readVariable(source, variable);
 	const path = readVariable(source, fileVariable);
-	if (path === undefined)
-		return { origin: "variable", reportedAs: variable, value: direct };
-	if (direct !== undefined) {
+	if (path === undefined) return resolvePlain(source, variable);
+	if (readVariable(source, variable) !== undefined) {
 		return {
 			variable: fileVariable,
 			problem: `must not be set together with ${variable}`,
@@ -154,6 +153,7 @@ function resolveSecret(
 			origin: "secretFile",
 			reportedAs: fileVariable,
 			value: content === "" ? undefined : content,
+			expectation: EXPECTATIONS[variable],
 		};
 	} catch {
 		return {
@@ -163,6 +163,17 @@ function resolveSecret(
 	}
 }
 
+function resolveVariables(
+	source: ConfigSource,
+): Record<Variable, ResolvedValue | ConfigIssue> {
+	return {
+		DATABASE_URL: resolveSecret(source, "DATABASE_URL"),
+		PORT: resolvePlain(source, "PORT"),
+		LOG_LEVEL: resolvePlain(source, "LOG_LEVEL"),
+		READINESS_TIMEOUT_MS: resolvePlain(source, "READINESS_TIMEOUT_MS"),
+	};
+}
+
 function isIssue(
 	resolved: ResolvedValue | ConfigIssue,
 ): resolved is ConfigIssue {
@@ -170,41 +181,31 @@ function isIssue(
 }
 
 export function loadConfig(source: ConfigSource): Config {
-	const issues: ConfigIssue[] = [];
-	const resolved = new Map<Variable, ResolvedValue>();
-	for (const variable of SECRET_VARIABLES) {
-		const secret = resolveSecret(source, variable);
-		if (isIssue(secret)) issues.push(secret);
-		else resolved.set(variable, secret);
-	}
-	for (const variable of PLAIN_VARIABLES) {
-		resolved.set(variable, {
-			origin: "variable",
-			reportedAs: variable,
-			value: readVariable(source, variable),
-		});
-	}
-
-	const input = Object.fromEntries(
-		[...resolved].map(([variable, { value }]) => [variable, value]),
+	const resolved = Object.entries(resolveVariables(source));
+	const parsed = schema.safeParse(
+		Object.fromEntries(
+			resolved.map(([variable, given]) => [
+				variable,
+				isIssue(given) ? undefined : given.value,
+			]),
+		),
 	);
-	const parsed = schema.safeParse(input);
-	if (!parsed.success) {
-		const rejected = new Set(
-			parsed.error.issues.map((issue) => issue.path[0] as Variable),
-		);
-		for (const variable of rejected) {
-			const given = resolved.get(variable);
-			if (given === undefined) continue;
-			issues.push({
+	const rejected = new Set(
+		parsed.success ? [] : parsed.error.issues.map((issue) => issue.path[0]),
+	);
+	const issues = resolved.flatMap(([variable, given]): ConfigIssue[] => {
+		if (isIssue(given)) return [given];
+		if (!rejected.has(variable)) return [];
+		return [
+			{
 				variable: given.reportedAs,
 				problem:
 					given.value === undefined
 						? MISSING_PROBLEMS[given.origin]
-						: EXPECTATIONS[variable],
-			});
-		}
-	}
+						: given.expectation,
+			},
+		];
+	});
 	if (!parsed.success || issues.length > 0)
 		throw new InvalidConfigError(issues);
 
