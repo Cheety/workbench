@@ -9,6 +9,7 @@ import {
 	validatePlugin,
 } from "./plugin-manifest.ts";
 import { dependencyNotLoaded, resolvePlugins } from "./plugin-resolution.ts";
+import { quote } from "./quote.ts";
 import { systemFailureReason } from "./system-error.ts";
 
 export type { LoadFailure } from "./load-failures.ts";
@@ -53,7 +54,7 @@ export type RunningPlugins = {
 export class UndeclaredCapabilityError extends Error {
 	constructor(plugin: string, capability: string) {
 		super(
-			`plugin ${JSON.stringify(plugin)} did not declare the capability ${JSON.stringify(capability)} in its manifest`,
+			`plugin ${quote(plugin)} did not declare the capability ${quote(capability)} in its manifest`,
 		);
 		this.name = "UndeclaredCapabilityError";
 	}
@@ -154,14 +155,14 @@ async function loadPlugins(
 			? {
 					name: undefined,
 					problems: [
-						`manifest.name ${JSON.stringify(plugin.name)} is already taken by another plugin package`,
+						`manifest.name ${quote(plugin.name)} is already taken by another plugin package`,
 					],
 				}
 			: plugin;
 		failures.reject({
 			plugin: invalid.name ?? pluginPackage.packageName,
 			reason: "invalid_manifest",
-			detail: `plugin package ${JSON.stringify(pluginPackage.packageName)} has an invalid manifest: ${invalid.problems.join("; ")}`,
+			detail: `plugin package ${quote(pluginPackage.packageName)} has an invalid manifest: ${invalid.problems.join("; ")}`,
 		});
 	}
 	return installed;
@@ -202,7 +203,7 @@ async function activate(
 		return {
 			plugin: plugin.name,
 			reason: "activation_failed",
-			detail: `plugin ${JSON.stringify(plugin.name)} failed to activate (${errorName(error)})`,
+			detail: `plugin ${quote(plugin.name)} failed to activate (${errorName(error)})`,
 		};
 	}
 }

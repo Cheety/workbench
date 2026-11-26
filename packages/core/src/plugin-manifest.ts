@@ -1,4 +1,5 @@
 import type { PluginContext } from "@workbench/sdk";
+import { quote } from "./quote.ts";
 
 const PLUGIN_NAME = /^[a-z][a-z0-9-]*$/;
 
@@ -117,7 +118,7 @@ function readRequires(requires: unknown): Read<ReadonlyMap<string, string>> {
 	for (const [required, range] of Object.entries(requires)) {
 		if (!isPluginName(required)) {
 			problems.push(
-				`manifest.requires names ${JSON.stringify(required)}, which is not a plugin name`,
+				`manifest.requires names ${quote(required)}, which is not a plugin name`,
 			);
 		} else if (typeof range !== "string" || !SEMVER_RANGE.test(range)) {
 			problems.push(
@@ -151,7 +152,7 @@ function readCapabilities(
 			.filter((capability) => !offered.includes(capability))
 			.map(
 				(capability) =>
-					`manifest.capabilities names ${JSON.stringify(capability)}, which this instance does not offer`,
+					`manifest.capabilities names ${quote(capability)}, which this instance does not offer`,
 			),
 	};
 }

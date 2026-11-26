@@ -1,5 +1,6 @@
 import type { LoadFailure, LoadFailures } from "./load-failures.ts";
 import type { ValidPlugin } from "./plugin-manifest.ts";
+import { quote } from "./quote.ts";
 
 /**
  * Decides which of the enabled plugins can be loaded and returns them with
@@ -73,14 +74,14 @@ export function resolvePlugins(
 				detail: `${requirement} (${range}), which is ${state}`,
 			};
 		}
-		const provider = resolve(required);
-		if (isLoadFailure(provider))
-			return dependencyNotLoaded(plugin, required, provider);
-		if (!Bun.semver.satisfies(provider.version, range)) {
+		const requiredPlugin = resolve(required);
+		if (isLoadFailure(requiredPlugin))
+			return dependencyNotLoaded(plugin, required, requiredPlugin);
+		if (!Bun.semver.satisfies(requiredPlugin.version, range)) {
 			return {
 				plugin: plugin.name,
 				reason: "version_mismatch",
-				detail: `${requirement} in a version matching ${range}, but ${provider.version} is installed`,
+				detail: `${requirement} in a version matching ${range}, but ${requiredPlugin.version} is installed`,
 			};
 		}
 		return undefined;
@@ -114,8 +115,4 @@ function isLoadFailure(
 	outcome: ValidPlugin | LoadFailure,
 ): outcome is LoadFailure {
 	return "reason" in outcome;
-}
-
-function quote(name: string): string {
-	return JSON.stringify(name);
 }
