@@ -27,7 +27,7 @@ Das Paket im Repository, das ein Plugin samt Manifest, Server- und Client-Teil, 
 _Avoid_: Workspace-Paket
 
 **Kernel**:
-Der Teil des Core, der die Plugin-Pakete entdeckt, Manifeste prüft, `requires` auflöst und die in der Instanz-Config aktivierten Plugins aktiviert und beim Shutdown deaktiviert.
+Der Teil des Core, der die Plugin-Pakete entdeckt, Manifeste prüft, `requires` auflöst, die Schemas der Plugins mit der Capability `database` migriert und die in der Instanz-Config aktivierten Plugins aktiviert und beim Shutdown deaktiviert.
 _Avoid_: Plugin-Manager, Loader, Plugin-Host
 
 **Manifest**:
