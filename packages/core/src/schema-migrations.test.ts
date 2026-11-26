@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SQL } from "bun";
 import { Secret } from "./config.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import { createLogger, type Logger } from "./logger.ts";
-import { type MigrationRunner, migrateSchemas } from "./schema-migrations.ts";
+import {
+	type MigrationRunner,
+	migrateCoreSchema,
+	migrateSchemas,
+} from "./schema-migrations.ts";
 import { schemaName } from "./schema-name.ts";
 import {
 	createFreshDatabase,
@@ -41,9 +48,13 @@ const databases: FreshDatabase[] = [];
 
 let openGate: PostgresGate | undefined;
 
+const directories: string[] = [];
+
 afterEach(async () => {
 	openGate?.close();
 	openGate = undefined;
+	for (const directory of directories.splice(0))
+		await rm(directory, { recursive: true, force: true });
 	for (const database of databases.splice(0)) await database.drop();
 });
 
@@ -63,6 +74,16 @@ function runnerFor(url: string, logger: Logger): MigrationRunner {
 		setTimer: setSystemTimer,
 		logger,
 	};
+}
+
+async function coreMigrations(
+	files: Readonly<Record<string, string>>,
+): Promise<string> {
+	const directory = await mkdtemp(join(tmpdir(), "workbench-core-migrations-"));
+	directories.push(directory);
+	for (const [name, sql] of Object.entries(files))
+		await writeFile(join(directory, name), sql);
+	return directory;
 }
 
 async function gatedMigration(database: FreshDatabase) {
@@ -440,3 +461,68 @@ async function untilBlockedSessions(
 		`expected ${count} sessions waiting for a lock within ${BLOCKED_SESSIONS_DEADLINE_MS} ms, saw ${blocked}`,
 	);
 }
+
+describe("core schema migrations", () => {
+	test("apply the migrations of the core schema from its directory", async () => {
+		const database = await freshDatabase();
+		const directory = await coreMigrations({
+			"0001_create_settings.sql":
+				"CREATE TABLE settings (key text PRIMARY KEY, value text NOT NULL);",
+		});
+
+		const outcome = await migrateCoreSchema(
+			runnerFor(database.url, recordingLogger().logger),
+			directory,
+			NOT_STOPPED,
+		);
+
+		expect(outcome).toBe("migrated");
+		expect(
+			await database.sql`SELECT schema_name, migration FROM core.migrations`,
+		).toEqual([{ schema_name: "core", migration: "0001_create_settings.sql" }]);
+		expect(
+			await database.sql`SELECT table_name FROM information_schema.tables WHERE table_schema = 'core' ORDER BY table_name`,
+		).toEqual([{ table_name: "migrations" }, { table_name: "settings" }]);
+	});
+
+	test("migrate the core schema when its directory holds no migration", async () => {
+		const database = await freshDatabase();
+
+		const outcome = await migrateCoreSchema(
+			runnerFor(database.url, recordingLogger().logger),
+			await coreMigrations({}),
+			NOT_STOPPED,
+		);
+
+		expect(outcome).toBe("migrated");
+	});
+
+	test("report the core schema as not migrated when one of its migrations fails", async () => {
+		const database = await freshDatabase();
+		const directory = await coreMigrations({
+			"0001_broken.sql": "CREATE TABLE settings (;",
+		});
+
+		const outcome = await migrateCoreSchema(
+			runnerFor(database.url, recordingLogger().logger),
+			directory,
+			NOT_STOPPED,
+		);
+
+		expect(outcome).toBe("not_migrated");
+	});
+
+	test("report a stopped run when it is told to stop beforehand", async () => {
+		const database = await freshDatabase();
+		const stop = new AbortController();
+		stop.abort();
+
+		const outcome = await migrateCoreSchema(
+			runnerFor(database.url, recordingLogger().logger),
+			await coreMigrations({}),
+			stop.signal,
+		);
+
+		expect(outcome).toBe("stopped");
+	});
+});

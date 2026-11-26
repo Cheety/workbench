@@ -8,8 +8,9 @@ import {
 } from "./failure-reason.ts";
 import type { SetTimer } from "./hook-timeout.ts";
 import type { Logger } from "./logger.ts";
+import { readMigrations } from "./migration-files.ts";
 import { quote } from "./quote.ts";
-import type { SchemaName } from "./schema-name.ts";
+import { type SchemaName, schemaName } from "./schema-name.ts";
 
 export type Migration = {
 	readonly name: string;
@@ -53,6 +54,28 @@ export type MigrationRunner = {
 const MIGRATION_LOCK_KEY = 0x776f726b62656e63n;
 
 const STOPPED: MigrationRun = { stopped: true };
+
+const CORE_SCHEMA = schemaName("core");
+
+export type CoreSchemaMigration = "migrated" | "not_migrated" | "stopped";
+
+export async function migrateCoreSchema(
+	runner: MigrationRunner,
+	migrationsDirectory: string,
+	stopSignal: AbortSignal,
+): Promise<CoreSchemaMigration> {
+	const migrations = await readMigrations(migrationsDirectory);
+	const run = await migrateSchemas(
+		runner,
+		[{ schema: CORE_SCHEMA, migrations }],
+		stopSignal,
+	);
+	if (run.stopped) return "stopped";
+	const migrated = run.outcomes.some(
+		(outcome) => outcome.schema === CORE_SCHEMA && outcome.migrated,
+	);
+	return migrated ? "migrated" : "not_migrated";
+}
 
 export async function migrateSchemas(
 	runner: MigrationRunner,

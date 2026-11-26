@@ -11,7 +11,12 @@ import { type RunningPlugins, startPlugins } from "./kernel.ts";
 import { createLogger } from "./logger.ts";
 import { discoverPluginPackages } from "./plugin-discovery.ts";
 import { createPostgresCheck } from "./postgres.ts";
-import { type MigrationRunner, migrateSchemas } from "./schema-migrations.ts";
+import {
+	type CoreSchemaMigration,
+	type MigrationRunner,
+	migrateCoreSchema,
+	migrateSchemas,
+} from "./schema-migrations.ts";
 import {
 	type RunningServer,
 	type ServerOptions,
@@ -22,6 +27,10 @@ import { reportFailedStart, shutDownInstance } from "./shutdown.ts";
 import { systemFailureReason } from "./system-error.ts";
 
 const PACKAGES_DIRECTORY = fileURLToPath(new URL("../../", import.meta.url));
+
+const CORE_MIGRATIONS_DIRECTORY = fileURLToPath(
+	new URL("../migrations/", import.meta.url),
+);
 
 const CLOSED_PIPE = "EPIPE";
 
@@ -122,10 +131,20 @@ async function startInstance(): Promise<StartedPlugins> {
 		logger,
 	});
 	if (database === "stopped") return NO_PLUGINS;
+	let coreSchema: CoreSchemaMigration;
 	try {
-		await migrateSchemas(migrationRunner, [], instanceStart.signal);
+		coreSchema = await migrateCoreSchema(
+			migrationRunner,
+			CORE_MIGRATIONS_DIRECTORY,
+			instanceStart.signal,
+		);
 	} catch (error) {
 		failStart("core_schema_not_migrated", { error: describeThrown(error) });
+		return NO_PLUGINS;
+	}
+	if (coreSchema === "stopped") return NO_PLUGINS;
+	if (coreSchema === "not_migrated") {
+		failStart("core_schema_not_migrated");
 		return NO_PLUGINS;
 	}
 	const plugins = await startPlugins({
