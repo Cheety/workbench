@@ -60,22 +60,36 @@ export class InvalidConfigError extends Error {
 	}
 }
 
-const POSTGRES_PROTOCOLS = new Set(["postgres:", "postgresql:"]);
+type IntegerRange = { readonly min: number; readonly max: number };
+
+const POSTGRES_SCHEMES = ["postgres", "postgresql"] as const;
+const PORT_RANGE: IntegerRange = { min: 0, max: 65_535 };
+const DEFAULT_PORT = 3000;
+const DEFAULT_LOG_LEVEL: LogLevel = "info";
+const READINESS_TIMEOUT_MS_RANGE: IntegerRange = { min: 1, max: 60_000 };
+const DEFAULT_READINESS_TIMEOUT_MS = 2000;
 
 function isPostgresUrl(value: string): boolean {
-	return URL.canParse(value) && POSTGRES_PROTOCOLS.has(new URL(value).protocol);
+	if (!URL.canParse(value)) return false;
+	const { protocol } = new URL(value);
+	return POSTGRES_SCHEMES.some((scheme) => protocol === `${scheme}:`);
+}
+
+function integerIn(range: IntegerRange) {
+	return z.coerce.number().int().min(range.min).max(range.max);
+}
+
+function integerExpectation(range: IntegerRange): string {
+	return `must be an integer between ${range.min} and ${range.max}`;
 }
 
 const schema = z.object({
 	DATABASE_URL: z.string().refine(isPostgresUrl),
-	PORT: z.coerce.number().int().min(0).max(65535).default(3000),
-	LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
-	READINESS_TIMEOUT_MS: z.coerce
-		.number()
-		.int()
-		.min(1)
-		.max(60_000)
-		.default(2000),
+	PORT: integerIn(PORT_RANGE).default(DEFAULT_PORT),
+	LOG_LEVEL: z.enum(LOG_LEVELS).default(DEFAULT_LOG_LEVEL),
+	READINESS_TIMEOUT_MS: integerIn(READINESS_TIMEOUT_MS_RANGE).default(
+		DEFAULT_READINESS_TIMEOUT_MS,
+	),
 });
 
 type Variable = keyof z.input<typeof schema>;
@@ -83,10 +97,10 @@ type Variable = keyof z.input<typeof schema>;
 // Problems are reported from this table instead of from the validator's own
 // messages, so that no rejected value can ever end up in the output.
 const EXPECTATIONS: Record<Variable, string> = {
-	DATABASE_URL: "must be a postgres:// or postgresql:// URL",
-	PORT: "must be an integer between 0 and 65535",
+	DATABASE_URL: `must be a ${POSTGRES_SCHEMES.map((scheme) => `${scheme}://`).join(" or ")} URL`,
+	PORT: integerExpectation(PORT_RANGE),
 	LOG_LEVEL: `must be one of ${LOG_LEVELS.join(", ")}`,
-	READINESS_TIMEOUT_MS: "must be an integer between 1 and 60000",
+	READINESS_TIMEOUT_MS: integerExpectation(READINESS_TIMEOUT_MS_RANGE),
 };
 
 const SECRET_VARIABLES = [
@@ -98,7 +112,16 @@ const PLAIN_VARIABLES = [
 	"READINESS_TIMEOUT_MS",
 ] as const satisfies readonly Variable[];
 
+/** Where the operator provided a value: in the variable itself or in a secret file. */
+type ValueOrigin = "variable" | "secretFile";
+
+const MISSING_PROBLEMS: Record<ValueOrigin, string> = {
+	variable: "is required",
+	secretFile: "names an empty file",
+};
+
 type ResolvedValue = {
+	readonly origin: ValueOrigin;
 	/** The variable the operator actually set, used when reporting problems. */
 	readonly reportedAs: string;
 	readonly value: string | undefined;
@@ -123,7 +146,8 @@ function resolveSecret(
 	const fileVariable = `${variable}_FILE`;
 	const direct = readVariable(source, variable);
 	const path = readVariable(source, fileVariable);
-	if (path === undefined) return { reportedAs: variable, value: direct };
+	if (path === undefined)
+		return { origin: "variable", reportedAs: variable, value: direct };
 	if (direct !== undefined) {
 		return {
 			variable: fileVariable,
@@ -133,6 +157,7 @@ function resolveSecret(
 	try {
 		const content = source.readSecretFile(path).trim();
 		return {
+			origin: "secretFile",
 			reportedAs: fileVariable,
 			value: content === "" ? undefined : content,
 		};
@@ -165,6 +190,7 @@ export function loadConfig(source: ConfigSource): Config {
 	}
 	for (const variable of PLAIN_VARIABLES) {
 		resolved.set(variable, {
+			origin: "variable",
 			reportedAs: variable,
 			value: readVariable(source, variable),
 		});
@@ -179,13 +205,13 @@ export function loadConfig(source: ConfigSource): Config {
 			parsed.error.issues.map((issue) => issue.path[0] as Variable),
 		);
 		for (const variable of rejected) {
-			const origin = resolved.get(variable);
-			if (origin === undefined) continue;
+			const given = resolved.get(variable);
+			if (given === undefined) continue;
 			issues.push({
-				variable: origin.reportedAs,
+				variable: given.reportedAs,
 				problem:
-					origin.value === undefined
-						? missingProblem(origin)
+					given.value === undefined
+						? MISSING_PROBLEMS[given.origin]
 						: EXPECTATIONS[variable],
 			});
 		}
@@ -199,12 +225,6 @@ export function loadConfig(source: ConfigSource): Config {
 		logLevel: parsed.data.LOG_LEVEL,
 		readinessTimeoutMs: parsed.data.READINESS_TIMEOUT_MS,
 	};
-}
-
-function missingProblem(origin: ResolvedValue): string {
-	return origin.reportedAs.endsWith("_FILE")
-		? "names an empty file"
-		: "is required";
 }
 
 /** Reads the configuration of this process from its environment. */
