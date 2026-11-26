@@ -2,16 +2,11 @@ import { readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { PluginDiscovery, PluginPackage } from "./kernel.ts";
+import { readMigrations } from "./migration-files.ts";
 import { isPluginName } from "./plugin-manifest.ts";
-import { quote } from "./quote.ts";
-import type { Migration } from "./schema-migrations.ts";
 import { systemFailureReason } from "./system-error.ts";
 
 const PACKAGE_JSON = "package.json";
-
-const SQL_FILE = ".sql";
-
-const MIGRATION_FILE_NAME = /^[0-9]{4}_[a-z0-9_]+\.sql$/;
 
 const NOTHING: PluginDiscovery = { packages: [], unreadable: [] };
 
@@ -93,26 +88,6 @@ async function readPackage(root: string): Promise<PluginDiscovery> {
 			: { loadMigrations: () => readMigrations(migrationsPath) }),
 	};
 	return { packages: [pluginPackage], unreadable: [] };
-}
-
-async function readMigrations(
-	directory: string,
-): Promise<readonly Migration[]> {
-	const names = (await readdir(directory))
-		.filter((name) => name.endsWith(SQL_FILE))
-		.sort();
-	const misnamed = names.find((name) => !MIGRATION_FILE_NAME.test(name));
-	if (misnamed !== undefined) {
-		throw new Error(
-			`migration file ${quote(misnamed)} must be named like "0001_create_notes.sql": four digits, an underscore, lowercase letters, digits and underscores, ".sql"`,
-		);
-	}
-	return Promise.all(
-		names.map(async (name) => ({
-			name,
-			sql: await Bun.file(join(directory, name)).text(),
-		})),
-	);
 }
 
 function pathInside(root: string, path: string): string | undefined {
