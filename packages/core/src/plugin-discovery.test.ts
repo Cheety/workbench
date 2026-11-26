@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { InvalidMigrationFileNameError } from "./migration-files.ts";
 import { discoverPluginPackages } from "./plugin-discovery.ts";
 
 let packagesDirectory: string;
@@ -285,6 +286,7 @@ describe("plugin discovery", () => {
 
 		const loading = packages[0]?.loadMigrations?.();
 
+		await expect(loading).rejects.toBeInstanceOf(InvalidMigrationFileNameError);
 		await expect(loading).rejects.toThrow(
 			'migration file "create_notes.sql" must be named like "0001_create_notes.sql": four digits, an underscore, lowercase letters, digits and underscores, ".sql"',
 		);
