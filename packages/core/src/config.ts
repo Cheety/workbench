@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { LOG_LEVELS, type LogLevel } from "./logger.ts";
+import { isPluginName } from "./plugin-manifest.ts";
 
 const REDACTED = "[redacted]";
 
@@ -29,6 +30,8 @@ export type Config = {
 	readonly port: number;
 	readonly logLevel: LogLevel;
 	readonly readinessTimeoutMs: number;
+	/** Names of the plugins this instance activates. */
+	readonly enabledPlugins: readonly string[];
 };
 
 export type ConfigSource = {
@@ -85,6 +88,11 @@ function integerExpectation(range: IntegerRange): string {
 	return `must be a decimal integer between ${range.min} and ${range.max}`;
 }
 
+const pluginNames = z
+	.string()
+	.transform((value) => value.split(",").map((name) => name.trim()))
+	.pipe(z.array(z.string().refine(isPluginName)));
+
 const schema = z.object({
 	DATABASE_URL: z.string().refine(isPostgresUrl),
 	PORT: integerIn(PORT_RANGE).default(DEFAULT_PORT),
@@ -92,6 +100,7 @@ const schema = z.object({
 	READINESS_TIMEOUT_MS: integerIn(READINESS_TIMEOUT_MS_RANGE).default(
 		DEFAULT_READINESS_TIMEOUT_MS,
 	),
+	PLUGINS: pluginNames.default([]),
 });
 
 type Variable = keyof z.input<typeof schema>;
@@ -101,6 +110,8 @@ const EXPECTATIONS: Record<Variable, string> = {
 	PORT: integerExpectation(PORT_RANGE),
 	LOG_LEVEL: `must be one of ${LOG_LEVELS.join(", ")}`,
 	READINESS_TIMEOUT_MS: integerExpectation(READINESS_TIMEOUT_MS_RANGE),
+	PLUGINS:
+		"must be a comma-separated list of plugin names (lowercase letters, digits and hyphens, starting with a letter)",
 };
 
 type ValueOrigin = "variable" | "secretFile";
@@ -171,6 +182,7 @@ function resolveVariables(
 		PORT: resolvePlain(source, "PORT"),
 		LOG_LEVEL: resolvePlain(source, "LOG_LEVEL"),
 		READINESS_TIMEOUT_MS: resolvePlain(source, "READINESS_TIMEOUT_MS"),
+		PLUGINS: resolvePlain(source, "PLUGINS"),
 	};
 }
 
@@ -214,6 +226,7 @@ export function loadConfig(source: ConfigSource): Config {
 		port: parsed.data.PORT,
 		logLevel: parsed.data.LOG_LEVEL,
 		readinessTimeoutMs: parsed.data.READINESS_TIMEOUT_MS,
+		enabledPlugins: parsed.data.PLUGINS,
 	};
 }
 
