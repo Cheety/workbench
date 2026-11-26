@@ -1,5 +1,6 @@
 import { type ReservedSQL, SQL } from "bun";
 import type { Secret } from "./config.ts";
+import { pauseUnlessStopped } from "./database-wait.ts";
 import {
 	describeThrown,
 	summarize,
@@ -52,22 +53,37 @@ const MIGRATION_LOCK_KEY = 0x776f726b62656e63n;
 
 const SCHEMA_NAME = /^[a-z][a-z0-9_]{0,62}$/;
 
+const STOPPED: MigrationRun = { stopped: true };
+
 export async function migrateSchemas(
 	runner: MigrationRunner,
 	schemas: readonly SchemaMigrations[],
-	_stopSignal: AbortSignal,
+	stopSignal: AbortSignal,
 ): Promise<MigrationRun> {
+	if (stopSignal.aborted) return STOPPED;
 	const { logger } = runner;
-	const sql = new SQL(runner.databaseUrl.reveal(), { max: 1 });
+	const sql = new SQL(runner.databaseUrl.reveal(), {
+		max: 1,
+		connectionTimeout: runner.connectionTimeoutMs / 1000,
+	});
 	try {
 		const connection = await sql.reserve();
 		try {
-			await connection`SELECT pg_advisory_lock(${MIGRATION_LOCK_KEY})`;
+			const lock = await acquireLock(connection, runner, stopSignal);
+			if (lock === "stopped") return STOPPED;
 			try {
 				await createMigrationsTable(connection);
 				const outcomes: SchemaMigrationOutcome[] = [];
-				for (const schema of schemas)
-					outcomes.push(await migrateSchema(connection, schema, logger));
+				for (const schema of schemas) {
+					const outcome = await migrateSchema(
+						connection,
+						schema,
+						logger,
+						stopSignal,
+					);
+					if (outcome === "stopped") return STOPPED;
+					outcomes.push(outcome);
+				}
 				return { stopped: false, outcomes };
 			} finally {
 				await releaseLock(connection, logger);
@@ -78,6 +94,22 @@ export async function migrateSchemas(
 	} finally {
 		await sql.close();
 	}
+}
+
+async function acquireLock(
+	connection: ReservedSQL,
+	{ lockRetryDelayMs, setTimer, logger }: MigrationRunner,
+	stopSignal: AbortSignal,
+): Promise<"acquired" | "stopped"> {
+	for (let attempt = 0; !stopSignal.aborted; attempt += 1) {
+		const [row]: { acquired: boolean }[] =
+			await connection`SELECT pg_try_advisory_lock(${MIGRATION_LOCK_KEY}) AS acquired`;
+		if (row?.acquired) return "acquired";
+		if (attempt === 0)
+			logger.info("migration lock held by another run, waiting");
+		await pauseUnlessStopped(lockRetryDelayMs(attempt), setTimer, stopSignal);
+	}
+	return "stopped";
 }
 
 async function releaseLock(
@@ -109,7 +141,8 @@ async function migrateSchema(
 	connection: ReservedSQL,
 	{ schema, migrations }: SchemaMigrations,
 	logger: Logger,
-): Promise<SchemaMigrationOutcome> {
+	stopSignal: AbortSignal,
+): Promise<SchemaMigrationOutcome | "stopped"> {
 	if (!SCHEMA_NAME.test(schema)) {
 		const detail = `schema name ${quote(schema)} must consist of at most 63 lowercase letters, digits and underscores and start with a letter`;
 		logger.error("schema not migrated", { schema, detail });
@@ -122,6 +155,7 @@ async function migrateSchema(
 		.toSorted((a, b) => compareNames(a.name, b.name));
 	const applied: string[] = [];
 	for (const migration of pending) {
+		if (stopSignal.aborted) return "stopped";
 		try {
 			await connection.begin(async (transaction) => {
 				await transaction.unsafe(`SET LOCAL search_path TO "${schema}"`);

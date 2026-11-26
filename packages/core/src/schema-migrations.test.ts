@@ -4,7 +4,11 @@ import { Secret } from "./config.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import { createLogger, type Logger } from "./logger.ts";
 import { type MigrationRunner, migrateSchemas } from "./schema-migrations.ts";
-import { createFreshDatabase, type FreshDatabase } from "./testing/postgres.ts";
+import {
+	createFreshDatabase,
+	type FreshDatabase,
+	PostgresGate,
+} from "./testing/postgres.ts";
 
 type LogEntry = Record<string, unknown>;
 
@@ -18,9 +22,27 @@ function recordingLogger() {
 	return { logger, entries };
 }
 
+const LOCK_HELD = "migration lock held by another run, waiting";
+
+function announcingLogger(message: string) {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	const logger = createLogger({
+		level: "debug",
+		now: () => new Date("2026-11-26T08:00:00.000Z"),
+		write: (line) => {
+			if (JSON.parse(line).message === message) resolve();
+		},
+	});
+	return { logger, logged: promise };
+}
+
 const databases: FreshDatabase[] = [];
 
+let openGate: PostgresGate | undefined;
+
 afterEach(async () => {
+	openGate?.close();
+	openGate = undefined;
 	for (const database of databases.splice(0)) await database.drop();
 });
 
@@ -39,6 +61,26 @@ function runnerFor(url: string, logger: Logger): MigrationRunner {
 		lockRetryDelayMs: () => 10,
 		setTimer: setSystemTimer,
 		logger,
+	};
+}
+
+async function gatedMigration(database: FreshDatabase) {
+	await database.sql.unsafe(`
+		CREATE TABLE public.gate (id int PRIMARY KEY);
+		INSERT INTO public.gate VALUES (1);
+		CREATE TABLE public.applications (migration text NOT NULL);
+	`);
+	const holder = new SQL(database.url, { max: 1 });
+	await holder.unsafe("BEGIN; SELECT id FROM public.gate FOR UPDATE;");
+	return {
+		migration: {
+			name: "0001_wait_at_gate.sql",
+			sql: "SELECT id FROM public.gate FOR UPDATE; INSERT INTO public.applications VALUES ('0001_wait_at_gate.sql');",
+		},
+		open: async () => {
+			await holder.unsafe("COMMIT");
+			await holder.close();
+		},
 	};
 }
 
@@ -282,39 +324,102 @@ describe("schema migrations", () => {
 		},
 	);
 
-	test("apply each migration exactly once when two runs start at the same time", async () => {
+	test("give up connecting when the database does not answer within the connection timeout", async () => {
+		const gate = PostgresGate.create();
+		openGate = gate;
+		gate.goSilent();
+		const runner = {
+			...runnerFor(gate.url, recordingLogger().logger),
+			connectionTimeoutMs: 200,
+		};
+
+		const run = migrateSchemas(runner, [NOTES], NOT_STOPPED);
+
+		await expect(run).rejects.toThrow();
+	});
+
+	test("stop waiting for the lock another run holds when it is told to stop", async () => {
 		const database = await freshDatabase();
-		const url = database.url;
-		await database.sql.unsafe(`
-			CREATE TABLE public.gate (id int PRIMARY KEY);
-			INSERT INTO public.gate VALUES (1);
-			CREATE TABLE public.applications (migration text NOT NULL);
-		`);
-		const gated = {
-			schema: "plugin_notes",
-			migrations: [
+		const gate = await gatedMigration(database);
+		const holding = migrateSchemas(
+			runnerFor(database.url, recordingLogger().logger),
+			[{ schema: "plugin_notes", migrations: [gate.migration] }],
+			NOT_STOPPED,
+		);
+		await untilBlockedSessions(database, 1);
+		const stop = new AbortController();
+		const { logger, entries } = recordingLogger();
+		const runner: MigrationRunner = {
+			...runnerFor(database.url, logger),
+			setTimer: () => {
+				queueMicrotask(() => stop.abort());
+				return () => {};
+			},
+		};
+
+		const run = await migrateSchemas(runner, [NOTES], stop.signal);
+
+		await gate.open();
+		await holding;
+		expect(run).toEqual({ stopped: true });
+		expect(entries).toContainEqual(
+			expect.objectContaining({
+				level: "info",
+				message: LOCK_HELD,
+			}),
+		);
+	});
+
+	test("apply no further migration once it is told to stop", async () => {
+		const database = await freshDatabase();
+		const gate = await gatedMigration(database);
+		const stop = new AbortController();
+
+		const running = migrateSchemas(
+			runnerFor(database.url, recordingLogger().logger),
+			[
 				{
-					name: "0001_wait_at_gate.sql",
-					sql: "SELECT id FROM public.gate FOR UPDATE; INSERT INTO public.applications VALUES ('0001_wait_at_gate.sql');",
+					schema: "plugin_notes",
+					migrations: [
+						gate.migration,
+						...NOTES.migrations.map((migration) => ({
+							...migration,
+							name: "0002_create_notes.sql",
+						})),
+					],
 				},
 			],
-		};
+			stop.signal,
+		);
+		await untilBlockedSessions(database, 1);
+		stop.abort();
+		await gate.open();
+		const run = await running;
+
+		expect(run).toEqual({ stopped: true });
+		expect(await database.sql`SELECT migration FROM core.migrations`).toEqual([
+			{ migration: "0001_wait_at_gate.sql" },
+		]);
+	});
+
+	test("apply each migration exactly once when two runs start at the same time", async () => {
+		const database = await freshDatabase();
+		const gate = await gatedMigration(database);
+		const gated = { schema: "plugin_notes", migrations: [gate.migration] };
 		await migrateSchemas(
-			runnerFor(url, recordingLogger().logger),
+			runnerFor(database.url, recordingLogger().logger),
 			[{ schema: gated.schema, migrations: [] }],
 			NOT_STOPPED,
 		);
-		const holder = new SQL(database.url, { max: 1 });
-		await holder.unsafe("BEGIN; SELECT id FROM public.gate FOR UPDATE;");
-		const { logger } = recordingLogger();
+		const { logger, logged } = announcingLogger(LOCK_HELD);
 
 		const runs = Promise.all([
-			migrateSchemas(runnerFor(url, logger), [gated], NOT_STOPPED),
-			migrateSchemas(runnerFor(url, logger), [gated], NOT_STOPPED),
+			migrateSchemas(runnerFor(database.url, logger), [gated], NOT_STOPPED),
+			migrateSchemas(runnerFor(database.url, logger), [gated], NOT_STOPPED),
 		]);
-		await untilBlockedSessions(database, 2);
-		await holder.unsafe("COMMIT");
-		await holder.close();
+		await untilBlockedSessions(database, 1);
+		await logged;
+		await gate.open();
 		const results = await runs;
 
 		expect(results).toContainAllValues([
