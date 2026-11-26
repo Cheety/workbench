@@ -6,7 +6,8 @@
 	"workbench": {
 		"plugin": {
 			"name": "reference",
-			"entry": "./src/plugin.ts"
+			"entry": "./src/plugin.ts",
+			"migrations": "./migrations"
 		}
 	},
 	"dependencies": {
