@@ -79,12 +79,7 @@ function violatedRule(
 	plugins: readonly PluginPackage[],
 ): ImportViolation["rule"] | undefined {
 	const importedFile = isPath ? resolve(dirname(file), importPath) : undefined;
-	const target = plugins.find((candidate) =>
-		importedFile === undefined
-			? importPath === candidate.packageName ||
-				importPath.startsWith(`${candidate.packageName}/`)
-			: isWithin(importedFile, candidate.root),
-	);
+	const target = importedPlugin(importPath, importedFile, plugins);
 	if (target === undefined || isContractImport(target, importPath))
 		return undefined;
 	if (target !== plugin) return "foreign_plugin_internals";
@@ -175,6 +170,37 @@ function isContractImport(plugin: PluginPackage, importPath: string): boolean {
 
 function isPathImport(importPath: string): boolean {
 	return importPath.startsWith(".") || isAbsolute(importPath);
+}
+
+function importedPlugin(
+	importPath: string,
+	importedFile: string | undefined,
+	plugins: readonly PluginPackage[],
+): PluginPackage | undefined {
+	const packageName =
+		importedFile === undefined
+			? packageNameOf(importPath)
+			: installedPackageOf(importedFile);
+	return plugins.find((plugin) =>
+		packageName === undefined
+			? importedFile !== undefined && isWithin(importedFile, plugin.root)
+			: plugin.packageName === packageName,
+	);
+}
+
+function packageNameOf(specifier: string): string {
+	return specifier
+		.split("/")
+		.slice(0, specifier.startsWith("@") ? 2 : 1)
+		.join("/");
+}
+
+function installedPackageOf(path: string): string | undefined {
+	const segments = path.split(sep);
+	const start = segments.lastIndexOf(INSTALLED_DEPENDENCIES) + 1;
+	return start === 0
+		? undefined
+		: packageNameOf(segments.slice(start).join("/"));
 }
 
 function isWithin(path: string, directory: string): boolean {

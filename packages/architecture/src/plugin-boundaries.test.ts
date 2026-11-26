@@ -121,22 +121,22 @@ describe("imports between plugins", () => {
 		["../../plugin-notes/src/contract/index.ts"],
 		["../../plugin-notes"],
 		["../../plugin-notes/"],
-	])(
-		"rejects a relative import into a foreign plugin: %s",
-		async (importPath) => {
-			const packages = await packagesDirectoryWith(
-				boardPluginImporting(`import { store } from "${importPath}";`),
-			);
+		["../../node_modules/@fixture/plugin-notes/src/store.ts"],
+		["../node_modules/@fixture/plugin-notes"],
+		["/srv/workbench/node_modules/@fixture/plugin-notes/contract"],
+	])("rejects a path import into a foreign plugin: %s", async (importPath) => {
+		const packages = await packagesDirectoryWith(
+			boardPluginImporting(`import { store } from "${importPath}";`),
+		);
 
-			expect(await findPluginBoundaryViolations(packages)).toEqual([
-				{
-					rule: "foreign_plugin_internals",
-					file: "plugin-board/src/plugin.ts",
-					importPath,
-				},
-			]);
-		},
-	);
+		expect(await findPluginBoundaryViolations(packages)).toEqual([
+			{
+				rule: "foreign_plugin_internals",
+				file: "plugin-board/src/plugin.ts",
+				importPath,
+			},
+		]);
+	});
 
 	test("allows an import from the contract export of a foreign plugin", async () => {
 		const packages = await packagesDirectoryWith(
