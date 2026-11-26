@@ -280,6 +280,25 @@ describe("schema migrations", () => {
 		);
 	});
 
+	test.each([
+		["an invalid schema name", "Plugin-Notes", "0001_create_notes.sql"],
+		["an invalid file name", "plugin_notes", "create_notes.sql"],
+	])(
+		"refuse to record a migration with %s",
+		async (_case, schema, migration) => {
+			const database = await freshDatabase();
+			await migrateSchemas(
+				runnerFor(database.url, recordingLogger().logger),
+				[],
+				NOT_STOPPED,
+			);
+
+			const recording = database.sql`INSERT INTO core.migrations (schema_name, migration) VALUES (${schema}, ${migration})`;
+
+			await expect(recording).rejects.toMatchObject({ errno: "23514" });
+		},
+	);
+
 	test("report the outcome and log why the lock could not be released when the connection is lost during a migration", async () => {
 		const database = await freshDatabase();
 		const { logger, entries } = recordingLogger();

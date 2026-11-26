@@ -11,9 +11,10 @@ const PLUGIN_SCHEMA_PREFIX = "plugin_";
 export const MAX_PLUGIN_NAME_LENGTH =
 	MAX_SCHEMA_NAME_LENGTH - PLUGIN_SCHEMA_PREFIX.length;
 
-const SCHEMA_NAME = new RegExp(
-	`^[a-z][a-z0-9_]{0,${MAX_SCHEMA_NAME_LENGTH - 1}}$`,
-);
+// Postgres enforces it as well, on core.migrations, so it must mean the same in both regex dialects.
+export const SCHEMA_NAME_PATTERN = `^[a-z][a-z0-9_]{0,${MAX_SCHEMA_NAME_LENGTH - 1}}$`;
+
+const SCHEMA_NAME = new RegExp(SCHEMA_NAME_PATTERN);
 
 export class InvalidSchemaNameError extends Error {
 	constructor(value: string) {

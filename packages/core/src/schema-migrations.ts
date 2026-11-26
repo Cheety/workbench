@@ -8,9 +8,16 @@ import {
 } from "./failure-reason.ts";
 import type { SetTimer } from "./hook-timeout.ts";
 import type { Logger } from "./logger.ts";
-import { readMigrations } from "./migration-files.ts";
+import {
+	MIGRATION_FILE_NAME_PATTERN,
+	readMigrations,
+} from "./migration-files.ts";
 import { quote } from "./quote.ts";
-import { type SchemaName, schemaName } from "./schema-name.ts";
+import {
+	SCHEMA_NAME_PATTERN,
+	type SchemaName,
+	schemaName,
+} from "./schema-name.ts";
 
 export type Migration = {
 	readonly name: string;
@@ -153,12 +160,16 @@ async function createMigrationsTable(connection: ReservedSQL): Promise<void> {
 	await connection.unsafe(`
 		CREATE SCHEMA IF NOT EXISTS core;
 		CREATE TABLE IF NOT EXISTS core.migrations (
-			schema_name text NOT NULL,
-			migration text NOT NULL,
+			schema_name text NOT NULL CHECK (schema_name ~ ${stringLiteral(SCHEMA_NAME_PATTERN)}),
+			migration text NOT NULL CHECK (migration ~ ${stringLiteral(MIGRATION_FILE_NAME_PATTERN)}),
 			applied_at timestamptz NOT NULL DEFAULT now(),
 			PRIMARY KEY (schema_name, migration)
 		);
 	`);
+}
+
+function stringLiteral(value: string): string {
+	return `'${value.replaceAll("'", "''")}'`;
 }
 
 async function migrateSchema(
