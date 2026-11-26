@@ -1,0 +1,3 @@
+# Docker Compose ist der unterstützte Weg für Deployment und Inbetriebnahme
+
+Ursprünglich waren Podman-Quadlets geplant. Unterstützt wird stattdessen ein einziger Weg: ein versioniertes Container-Image aus der GitHub Container Registry plus eine Compose-Datei (Workbench, Postgres 17, optional Caddy). Pro Mandant gibt es ein eigenes Compose-Projekt. Compose läuft unverändert mit Docker und mit Podman, ist verbreiteter und lässt sich in der CI als Smoke-Test fahren, Quadlets hingegen binden an systemd und Podman. Zwei gleichwertige Deployment-Wege hätten doppelte Pflege und doppelte Tests bedeutet. Wer Quadlets will, kann sie aus dem Compose ableiten; offiziell gepflegt werden sie nicht.
