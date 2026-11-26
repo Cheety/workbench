@@ -35,9 +35,7 @@ export type {
 	UnreadablePackage,
 } from "./plugin-catalog.ts";
 
-export type CapabilityProviders = Readonly<
-	Record<string, (plugin: string) => unknown>
->;
+export type CapabilityProviders = Readonly<Record<string, () => unknown>>;
 
 export type MigrateSchemas = (
 	schemas: readonly SchemaMigrations[],
@@ -321,7 +319,7 @@ function provide(
 		const database: DatabaseCapability = { schema: pluginSchema(plugin) };
 		return database;
 	}
-	return providers[capability]?.(plugin);
+	return providers[capability]?.();
 }
 
 async function deactivate(
