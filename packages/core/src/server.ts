@@ -90,7 +90,7 @@ async function readiness(
 	checkDatabase: DatabaseCheck,
 	logger: Logger,
 ): Promise<Response> {
-	const database = await checkDatabase();
+	const database = await checkDatabase(logger);
 	if (database.reachable) return Response.json({ status: HEALTH_STATUS.ready });
 	logger.warn("not ready: database unreachable", { reason: database.reason });
 	return Response.json({ status: HEALTH_STATUS.notReady }, { status: 503 });

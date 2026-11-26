@@ -7,22 +7,21 @@ export type DatabaseStatus =
 	| { readonly reachable: true }
 	| { readonly reachable: false; readonly reason: string };
 
-export type DatabaseCheck = () => Promise<DatabaseStatus>;
+export type DatabaseCheck = (logger: Logger) => Promise<DatabaseStatus>;
 
 const TIMEOUT_REASON = "timeout";
 
 export type PostgresCheckOptions = {
 	readonly url: Secret;
 	readonly timeoutMs: number;
-	readonly logger: Logger;
 };
 
 export function createPostgresCheck(
 	options: PostgresCheckOptions,
 ): DatabaseCheck {
 	let inFlight: Promise<DatabaseStatus> | undefined;
-	return () => {
-		inFlight ??= queryOnce(options).finally(() => {
+	return (logger) => {
+		inFlight ??= queryOnce(options, logger).finally(() => {
 			inFlight = undefined;
 		});
 		return inFlight;
@@ -31,6 +30,7 @@ export function createPostgresCheck(
 
 async function queryOnce(
 	options: PostgresCheckOptions,
+	logger: Logger,
 ): Promise<DatabaseStatus> {
 	const sql = new SQL(options.url.reveal(), {
 		max: 1,
@@ -54,7 +54,7 @@ async function queryOnce(
 	} finally {
 		clearTimeout(timer);
 		await sql.close({ timeout: 0 }).catch((error: unknown) => {
-			options.logger.warn("closing the readiness connection failed", {
+			logger.warn("closing the readiness connection failed", {
 				reason: describeFailure(error),
 			});
 		});

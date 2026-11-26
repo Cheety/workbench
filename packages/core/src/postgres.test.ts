@@ -48,10 +48,9 @@ describe("createPostgresCheck", () => {
 		const check = createPostgresCheck({
 			url: new Secret(TEST_DATABASE_URL),
 			timeoutMs: 5000,
-			logger,
 		});
 
-		expect(await check()).toEqual({ reachable: true });
+		expect(await check(logger)).toEqual({ reachable: true });
 	});
 
 	test("reports a timeout when Postgres accepts the connection but never answers", async () => {
@@ -60,10 +59,9 @@ describe("createPostgresCheck", () => {
 		const check = createPostgresCheck({
 			url: new Secret(gate.url),
 			timeoutMs: 50,
-			logger,
 		});
 
-		const status = await check();
+		const status = await check(logger);
 
 		expect(status).toEqual({ reachable: false, reason: "timeout" });
 	});
@@ -74,11 +72,10 @@ describe("createPostgresCheck", () => {
 		const check = createPostgresCheck({
 			url: new Secret(gate.url),
 			timeoutMs: 5000,
-			logger,
 		});
 
 		const statuses = await Promise.all(
-			Array.from({ length: PARALLEL_CHECKS }, () => check()),
+			Array.from({ length: PARALLEL_CHECKS }, () => check(logger)),
 		);
 
 		expect(statuses).toEqual(
@@ -93,12 +90,11 @@ describe("createPostgresCheck", () => {
 		const check = createPostgresCheck({
 			url: new Secret(gate.url),
 			timeoutMs: 500,
-			logger,
 		});
-		const hung = await check();
+		const hung = await check(logger);
 		gate.forward();
 
-		const status = await check();
+		const status = await check(logger);
 
 		expect(hung).toEqual({ reachable: false, reason: "timeout" });
 		expect(status).toEqual({ reachable: true });
@@ -110,9 +106,8 @@ describe("createPostgresCheck", () => {
 		const check = createPostgresCheck({
 			url: new Secret(url.href),
 			timeoutMs: 5000,
-			logger,
 		});
 
-		expect(await check()).toEqual({ reachable: false, reason: "28P01" });
+		expect(await check(logger)).toEqual({ reachable: false, reason: "28P01" });
 	});
 });

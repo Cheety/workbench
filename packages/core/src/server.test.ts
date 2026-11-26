@@ -35,7 +35,6 @@ function startTestServer() {
 		checkDatabase: createPostgresCheck({
 			url: new Secret(gate.url),
 			timeoutMs: 5000,
-			logger,
 		}),
 		newCorrelationId: () => `generated-${nextId++}`,
 	});
