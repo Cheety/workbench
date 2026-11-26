@@ -30,9 +30,8 @@ function bindLogger(options: LoggerOptions, bound: LogFields): Logger {
 	): void => {
 		if (LOG_LEVELS.indexOf(level) < threshold) return;
 		const reserved = { time: options.now().toISOString(), level, message };
-		options.write(
-			JSON.stringify({ ...reserved, ...bound, ...fields, ...reserved }),
-		);
+		const context = withoutKeysOf(reserved, { ...bound, ...fields });
+		options.write(JSON.stringify({ ...reserved, ...context }));
 	};
 	return {
 		debug: (message, fields) => log("debug", message, fields),
@@ -41,4 +40,10 @@ function bindLogger(options: LoggerOptions, bound: LogFields): Logger {
 		error: (message, fields) => log("error", message, fields),
 		with: (fields) => bindLogger(options, { ...bound, ...fields }),
 	};
+}
+
+function withoutKeysOf(reserved: LogFields, fields: LogFields): LogFields {
+	return Object.fromEntries(
+		Object.entries(fields).filter(([key]) => !Object.hasOwn(reserved, key)),
+	);
 }
