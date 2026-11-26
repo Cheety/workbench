@@ -1,19 +1,31 @@
+import { fileURLToPath } from "node:url";
 import {
 	type Config,
 	InvalidConfigError,
 	loadConfigFromEnvironment,
 } from "./config.ts";
+import { setSystemTimer } from "./hook-timeout.ts";
+import { startPlugins } from "./kernel.ts";
 import { createLogger } from "./logger.ts";
+import { discoverPluginPackages } from "./plugin-discovery.ts";
 import { createPostgresCheck } from "./postgres.ts";
 import {
 	type RunningServer,
 	type ServerOptions,
 	startServer,
 } from "./server.ts";
-import { shutDown } from "./shutdown.ts";
+import { reportFailedStart, shutDownInstance } from "./shutdown.ts";
 import { systemFailureReason } from "./system-error.ts";
 
+const PACKAGES_DIRECTORY = fileURLToPath(new URL("../../", import.meta.url));
+
+const CLOSED_PIPE = "EPIPE";
+
 const now = (): Date => new Date();
+
+process.stdout.on("error", (error) => {
+	if (systemFailureReason(error) !== CLOSED_PIPE) throw error;
+});
 
 function loadConfigOrExit(): Config {
 	try {
@@ -61,9 +73,25 @@ const server = startServerOrExit({
 });
 logger.info("server started", { port: server.port });
 
+const pluginStart = new AbortController();
+const plugins = reportFailedStart(
+	startPlugins({
+		discover: discoverPluginPackages(PACKAGES_DIRECTORY),
+		enabledPlugins: config.enabledPlugins,
+		capabilityProviders: {},
+		hookTimeout: { ms: config.pluginHookTimeoutMs, setTimer: setSystemTimer },
+		stopSignal: pluginStart.signal,
+		logger,
+	}),
+	logger,
+);
+
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
 	process.once(signal, () => {
 		logger.info("shutting down", { signal });
-		void shutDown(server, logger).then((exitCode) => process.exit(exitCode));
+		void shutDownInstance(
+			{ stopStartingPlugins: () => pluginStart.abort(), server, plugins },
+			logger,
+		).then((exitCode) => process.exit(exitCode));
 	});
 }

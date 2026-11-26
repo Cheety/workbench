@@ -1,1 +1,23 @@
 export const UNKNOWN_FAILURE_REASON = "unknown";
+
+export type ThrownError = {
+	readonly name: string;
+	readonly message: string;
+	readonly stack?: string;
+};
+
+export function describeThrown(thrown: unknown): ThrownError {
+	if (thrown instanceof Error) {
+		const { name, message, stack } = thrown;
+		return stack === undefined ? { name, message } : { name, message, stack };
+	}
+	return {
+		name: UNKNOWN_FAILURE_REASON,
+		message:
+			typeof thrown === "string" ? thrown : "the thrown value is not an Error",
+	};
+}
+
+export function summarize(error: ThrownError): string {
+	return `${error.name}: ${error.message}`;
+}

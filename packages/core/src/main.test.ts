@@ -48,6 +48,45 @@ async function readFirstLine(
 	throw new Error(`stream ended before a full line: ${buffered}`);
 }
 
+type LogEntry = Record<string, unknown>;
+
+function readLog(stream: ReadableStream<Uint8Array>) {
+	const reader = stream.getReader();
+	const decoder = new TextDecoder();
+	let buffered = "";
+	const nextEntry = async (): Promise<LogEntry | undefined> => {
+		for (;;) {
+			const end = buffered.indexOf("\n");
+			if (end !== -1) {
+				const line = buffered.slice(0, end);
+				buffered = buffered.slice(end + 1);
+				return JSON.parse(line);
+			}
+			const { done, value } = await reader.read();
+			if (done) return undefined;
+			buffered += decoder.decode(value, { stream: true });
+		}
+	};
+	const collect = async (lastMessage?: string): Promise<LogEntry[]> => {
+		const entries: LogEntry[] = [];
+		for (;;) {
+			const entry = await nextEntry();
+			if (entry === undefined) {
+				if (lastMessage === undefined) return entries;
+				throw new Error(
+					`log ended before "${lastMessage}": ${JSON.stringify(entries)}`,
+				);
+			}
+			entries.push(entry);
+			if (entry.message === lastMessage) return entries;
+		}
+	};
+	return {
+		until: (message: string) => collect(message),
+		rest: () => collect(),
+	};
+}
+
 describe("instance start", () => {
 	test("aborts and names the variable when a required one is missing", async () => {
 		const instance = spawnInstance({});
@@ -125,5 +164,89 @@ describe("instance start", () => {
 			/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
 		);
 		expect(exitCode).toBe(0);
+	});
+});
+
+describe("plugins of an instance", () => {
+	test("activates the reference plugin the instance config enables and deactivates it on shutdown", async () => {
+		const instance = spawnInstance({
+			DATABASE_URL: TEST_DATABASE_URL,
+			PORT: "0",
+			PLUGINS: "reference",
+		});
+		const log = readLog(instance.stdout);
+
+		const startup = await log.until("plugins started");
+		instance.kill("SIGTERM");
+		const exitCode = await instance.exited;
+		const shutdown = await log.rest();
+
+		expect(startup).toContainEqual(
+			expect.objectContaining({
+				level: "info",
+				message: "plugin activated",
+				plugin: "reference",
+			}),
+		);
+		expect(startup.at(-1)).toMatchObject({
+			active: ["reference"],
+			notLoaded: [],
+		});
+		expect(shutdown).toContainEqual(
+			expect.objectContaining({
+				message: "plugin deactivated",
+				plugin: "reference",
+			}),
+		);
+		expect(exitCode).toBe(0);
+	});
+
+	test("discovers the reference plugin but leaves it inactive when the instance config does not enable it", async () => {
+		const instance = spawnInstance({
+			DATABASE_URL: TEST_DATABASE_URL,
+			PORT: "0",
+		});
+
+		const startup = await readLog(instance.stdout).until("plugins started");
+
+		expect(startup).toContainEqual(
+			expect.objectContaining({
+				message: "plugins discovered",
+				packages: ["@workbench/plugin-reference"],
+			}),
+		);
+		expect(startup.map((entry) => entry.message)).not.toContain(
+			"plugin activated",
+		);
+		expect(startup.at(-1)).toMatchObject({ active: [], notLoaded: [] });
+	});
+
+	test("keeps running and tells the operator why an enabled plugin was not loaded", async () => {
+		const instance = spawnInstance({
+			DATABASE_URL: TEST_DATABASE_URL,
+			PORT: "0",
+			PLUGINS: "ghost,reference",
+		});
+
+		const startup = await readLog(instance.stdout).until("plugins started");
+		const live = await fetch(
+			`http://127.0.0.1:${startup[0]?.port}/health/live`,
+		);
+
+		expect(startup).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				message: "plugin not loaded",
+				plugin: "ghost",
+				reason: "unknown_plugin",
+				detail:
+					'plugin "ghost" is enabled in the instance config, but no plugin package provides it',
+			}),
+		);
+		expect(startup.at(-1)).toMatchObject({
+			active: ["reference"],
+			notLoaded: ["ghost"],
+		});
+		expect(live.status).toBe(200);
 	});
 });

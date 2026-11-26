@@ -181,4 +181,81 @@ describe("loadConfig", () => {
 
 		expect(rendered.join("\n")).not.toContain("s3cr3t-pass");
 	});
+
+	test("gives a plugin ten seconds to activate or deactivate unless told otherwise", () => {
+		const config = loadConfig({
+			env: { DATABASE_URL },
+			readSecretFile: noSecretFiles,
+		});
+
+		expect(config.pluginHookTimeoutMs).toBe(10_000);
+	});
+
+	test.each([
+		["1", 1],
+		["600000", 600_000],
+	])("reads PLUGIN_HOOK_TIMEOUT_MS %s", (value, expected) => {
+		const config = loadConfig({
+			env: { DATABASE_URL, PLUGIN_HOOK_TIMEOUT_MS: value },
+			readSecretFile: noSecretFiles,
+		});
+
+		expect(config.pluginHookTimeoutMs).toBe(expected);
+	});
+
+	test.each(["0", "600001", "10s", "-1"])(
+		"rejects PLUGIN_HOOK_TIMEOUT_MS %s",
+		(value) => {
+			const error = captureInvalidConfig({
+				DATABASE_URL,
+				PLUGIN_HOOK_TIMEOUT_MS: value,
+			});
+
+			expect(error.issues).toEqual([
+				{
+					variable: "PLUGIN_HOOK_TIMEOUT_MS",
+					problem: "must be a decimal integer between 1 and 600000",
+				},
+			]);
+		},
+	);
+
+	test("enables no plugins when PLUGINS is not set", () => {
+		const config = loadConfig({
+			env: { DATABASE_URL },
+			readSecretFile: noSecretFiles,
+		});
+
+		expect(config.enabledPlugins).toEqual([]);
+	});
+
+	test("reads PLUGINS as a comma-separated list of plugin names", () => {
+		const config = loadConfig({
+			env: { DATABASE_URL, PLUGINS: "reference, kanban-board,chat2" },
+			readSecretFile: noSecretFiles,
+		});
+
+		expect(config.enabledPlugins).toEqual([
+			"reference",
+			"kanban-board",
+			"chat2",
+		]);
+	});
+
+	test.each([
+		["an uppercase name", "Reference"],
+		["an empty entry", "reference,,chat"],
+		["a name with a space", "kanban board"],
+		["a package name", "@workbench/plugin-reference"],
+	])("rejects PLUGINS with %s", (_case, value) => {
+		const error = captureInvalidConfig({ DATABASE_URL, PLUGINS: value });
+
+		expect(error.issues).toEqual([
+			{
+				variable: "PLUGINS",
+				problem:
+					"must be a comma-separated list of plugin names (lowercase letters, digits and hyphens, starting with a letter)",
+			},
+		]);
+	});
 });
