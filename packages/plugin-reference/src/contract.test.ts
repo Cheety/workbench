@@ -13,6 +13,6 @@ describe("the contract of the reference plugin", () => {
 				"@workbench/plugin-reference/src/plugin.ts",
 				import.meta.dir,
 			),
-		).toThrow();
+		).toThrow("Cannot find package '@workbench/plugin-reference'");
 	});
 });
