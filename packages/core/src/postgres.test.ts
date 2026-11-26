@@ -1,22 +1,40 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { SQL } from "bun";
 import { Secret } from "./config.ts";
 import { createPostgresCheck } from "./postgres.ts";
 import { PostgresGate, TEST_DATABASE_URL } from "./testing/postgres.ts";
 
 describe("test database", () => {
+	let sql: SQL | undefined;
+
+	afterEach(async () => {
+		await sql?.close();
+		sql = undefined;
+	});
+
 	test("is a real Postgres 17", async () => {
-		const sql = new SQL(TEST_DATABASE_URL, { max: 1 });
+		sql = new SQL(TEST_DATABASE_URL, { max: 1 });
 
 		const [row] =
 			await sql`SELECT current_setting('server_version_num')::int / 10000 AS major`;
-		await sql.close();
 
 		expect(row).toEqual({ major: 17 });
 	});
 });
 
 describe("createPostgresCheck", () => {
+	const gates: PostgresGate[] = [];
+
+	afterEach(() => {
+		for (const gate of gates.splice(0)) gate.close();
+	});
+
+	function openGate(): PostgresGate {
+		const gate = PostgresGate.create();
+		gates.push(gate);
+		return gate;
+	}
+
 	test("reports Postgres reachable when it answers", async () => {
 		const check = createPostgresCheck({
 			url: new Secret(TEST_DATABASE_URL),
@@ -27,7 +45,7 @@ describe("createPostgresCheck", () => {
 	});
 
 	test("reports a timeout when Postgres accepts the connection but never answers", async () => {
-		const gate = PostgresGate.create();
+		const gate = openGate();
 		gate.goSilent();
 		const check = createPostgresCheck({
 			url: new Secret(gate.url),
@@ -35,7 +53,6 @@ describe("createPostgresCheck", () => {
 		});
 
 		const status = await check();
-		gate.refuse();
 
 		expect(status).toEqual({ reachable: false, reason: "timeout" });
 	});

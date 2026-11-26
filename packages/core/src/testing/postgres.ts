@@ -26,7 +26,10 @@ export class PostgresGate {
 		this.#target = target;
 	}
 
-	/** Creates a gate that refuses connections until told otherwise. */
+	/**
+	 * Creates a gate that refuses connections until told otherwise. Call
+	 * `close()` when the test is over.
+	 */
 	static create(): PostgresGate {
 		const reservation = Bun.listen({
 			hostname: "127.0.0.1",
@@ -57,6 +60,11 @@ export class PostgresGate {
 	/** Accept connections but never answer, like a database that hangs. */
 	goSilent(): void {
 		this.#switchTo("silent");
+	}
+
+	/** Stops accepting connections and drops the open ones. */
+	close(): void {
+		this.#switchTo("refusing");
 	}
 
 	#switchTo(mode: GateMode): void {

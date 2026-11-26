@@ -8,13 +8,19 @@ import { PostgresGate } from "./testing/postgres.ts";
 type LogEntry = Record<string, unknown>;
 
 let running: RunningServer | undefined;
+let openGate: PostgresGate | undefined;
 
 afterEach(async () => {
 	await running?.stop();
 	running = undefined;
+	openGate?.close();
+	openGate = undefined;
 });
 
-function startTestServer(gate: PostgresGate) {
+/** Starts a server whose database is a gate that refuses connections. */
+function startTestServer() {
+	const gate = PostgresGate.create();
+	openGate = gate;
 	const lines: string[] = [];
 	let nextId = 1;
 	const server = startServer({
@@ -32,6 +38,7 @@ function startTestServer(gate: PostgresGate) {
 	});
 	running = server;
 	return {
+		gate,
 		get: (path: string, headers: Record<string, string> = {}) =>
 			fetch(`http://127.0.0.1:${server.port}${path}`, { headers }),
 		logEntries: (): LogEntry[] => lines.map((line) => JSON.parse(line)),
@@ -40,7 +47,7 @@ function startTestServer(gate: PostgresGate) {
 
 describe("liveness", () => {
 	test("answers alive while Postgres is unreachable", async () => {
-		const { get } = startTestServer(PostgresGate.create());
+		const { get } = startTestServer();
 
 		const response = await get("/health/live");
 
@@ -51,7 +58,7 @@ describe("liveness", () => {
 
 describe("readiness", () => {
 	test("reports not ready while Postgres is unreachable", async () => {
-		const { get } = startTestServer(PostgresGate.create());
+		const { get } = startTestServer();
 
 		const response = await get("/health/ready");
 
@@ -60,32 +67,31 @@ describe("readiness", () => {
 	});
 
 	test("reports ready once Postgres becomes reachable", async () => {
-		const gate = PostgresGate.create();
-		const { get } = startTestServer(gate);
-		expect((await get("/health/ready")).status).toBe(503);
+		const { get, gate } = startTestServer();
+		const whileUnreachable = await get("/health/ready");
 		gate.forward();
 
 		const response = await get("/health/ready");
 
+		expect(whileUnreachable.status).toBe(503);
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({ status: "ready" });
 	});
 
 	test("reports not ready again when Postgres goes away", async () => {
-		const gate = PostgresGate.create();
+		const { get, gate } = startTestServer();
 		gate.forward();
-		const { get } = startTestServer(gate);
-		expect((await get("/health/ready")).status).toBe(200);
+		const whileReachable = await get("/health/ready");
 		gate.refuse();
 
 		const response = await get("/health/ready");
 
+		expect(whileReachable.status).toBe(200);
 		expect(response.status).toBe(503);
 	});
 
 	test("logs why it is not ready without leaking the database credentials", async () => {
-		const gate = PostgresGate.create();
-		const { get, logEntries } = startTestServer(gate);
+		const { get, gate, logEntries } = startTestServer();
 
 		await get("/health/ready");
 
@@ -104,7 +110,7 @@ describe("readiness", () => {
 
 describe("correlation ID", () => {
 	test("generates one per request, returns it and logs it", async () => {
-		const { get, logEntries } = startTestServer(PostgresGate.create());
+		const { get, logEntries } = startTestServer();
 
 		const response = await get("/health/live");
 
@@ -123,7 +129,7 @@ describe("correlation ID", () => {
 	});
 
 	test("adopts a valid incoming one", async () => {
-		const { get, logEntries } = startTestServer(PostgresGate.create());
+		const { get, logEntries } = startTestServer();
 
 		const response = await get("/health/live", {
 			"X-Correlation-ID": "client-42.a_b",
@@ -137,7 +143,7 @@ describe("correlation ID", () => {
 		["with characters outside the allowed set", 'inject"ed {id}'],
 		["that is too long", "a".repeat(129)],
 	])("replaces an incoming one %s", async (_case, incoming) => {
-		const { get, logEntries } = startTestServer(PostgresGate.create());
+		const { get, logEntries } = startTestServer();
 
 		const response = await get("/health/live", {
 			"X-Correlation-ID": incoming,
@@ -150,7 +156,7 @@ describe("correlation ID", () => {
 
 describe("unknown routes", () => {
 	test("answer with a problem document and a logged correlation ID", async () => {
-		const { get, logEntries } = startTestServer(PostgresGate.create());
+		const { get, logEntries } = startTestServer();
 
 		const response = await get("/nowhere?token=abc");
 
