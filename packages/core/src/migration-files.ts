@@ -13,7 +13,7 @@ const MIGRATION_FILE_NAME = new RegExp(MIGRATION_FILE_NAME_PATTERN);
 export class InvalidMigrationFileNameError extends Error {
 	constructor(fileName: string) {
 		super(
-			`migration file ${quote(fileName)} must be named like "0001_create_notes.sql": four digits, an underscore, lowercase letters, digits and underscores, ".sql"`,
+			`migration file ${quote(fileName)} must be named like "0001_initial_schema.sql": four digits, an underscore, lowercase letters, digits and underscores, ".sql"`,
 		);
 		this.name = "InvalidMigrationFileNameError";
 	}

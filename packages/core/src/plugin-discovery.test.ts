@@ -288,7 +288,7 @@ describe("plugin discovery", () => {
 
 		await expect(loading).rejects.toBeInstanceOf(InvalidMigrationFileNameError);
 		await expect(loading).rejects.toThrow(
-			'migration file "create_notes.sql" must be named like "0001_create_notes.sql": four digits, an underscore, lowercase letters, digits and underscores, ".sql"',
+			'migration file "create_notes.sql" must be named like "0001_initial_schema.sql": four digits, an underscore, lowercase letters, digits and underscores, ".sql"',
 		);
 	});
 
