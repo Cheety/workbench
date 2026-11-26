@@ -37,14 +37,11 @@ function bindLogger(options: LoggerOptions, bound: LogFields): Logger {
 		fields: LogFields = {},
 	): void => {
 		if (LOG_LEVELS.indexOf(level) < threshold) return;
+		const reserved = { time: options.now().toISOString(), level, message };
+		// Spread twice: first for a stable key order, last so that no field
+		// can overwrite a reserved key.
 		options.write(
-			JSON.stringify({
-				...bound,
-				...fields,
-				time: options.now().toISOString(),
-				level,
-				message,
-			}),
+			JSON.stringify({ ...reserved, ...bound, ...fields, ...reserved }),
 		);
 	};
 	return {
