@@ -1,9 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
 	definePlugin,
 	type PluginContext,
 	type PluginDefinition,
 } from "@workbench/sdk";
+import { Secret } from "./config.ts";
+import { setSystemTimer } from "./hook-timeout.ts";
 import {
 	type CapabilityProviders,
 	type HookTimeout,
@@ -14,12 +16,15 @@ import {
 	type UnreadablePackage,
 } from "./kernel.ts";
 import { createLogger } from "./logger.ts";
-import type {
-	Migration,
-	MigrationRun,
-	SchemaMigrations,
+import {
+	type Migration,
+	type MigrationRun,
+	type MigrationRunner,
+	migrateSchemas,
+	type SchemaMigrations,
 } from "./schema-migrations.ts";
 import { schemaName } from "./schema-name.ts";
+import { createFreshDatabase, type FreshDatabase } from "./testing/postgres.ts";
 
 type LogEntry = Record<string, unknown>;
 
@@ -1879,5 +1884,58 @@ describe("plugin schemas", () => {
 			},
 		]);
 		expect(called).toBe(false);
+	});
+});
+
+describe("plugin schemas in Postgres", () => {
+	const databases: FreshDatabase[] = [];
+
+	afterEach(async () => {
+		for (const database of databases.splice(0)) await database.drop();
+	});
+
+	function migratingInto(database: FreshDatabase): MigrateSchemas {
+		const runner: MigrationRunner = {
+			databaseUrl: new Secret(database.url),
+			connectionTimeoutMs: 2_000,
+			statementTimeoutMs: 5_000,
+			lockRetryDelayMs: () => 10,
+			setTimer: setSystemTimer,
+			logger: recordingLogger().logger,
+		};
+		return (schemas) =>
+			migrateSchemas(runner, schemas, new AbortController().signal);
+	}
+
+	test("creates a schema with its tables only for the plugin with the database capability", async () => {
+		const database = await createFreshDatabase();
+		databases.push(database);
+
+		await start({
+			packages: [
+				withMigrations(
+					packageOf(
+						definePlugin({
+							manifest: { name: "sticky-notes", capabilities: ["database"] },
+						}),
+					),
+					[CREATE_NOTES],
+				),
+				packageOf(definePlugin({ manifest: { name: "cards" } })),
+			],
+			enabledPlugins: ["sticky-notes", "cards"],
+			migrateSchemas: migratingInto(database),
+		});
+
+		const schemas = await database.sql<{ schema_name: string }[]>`
+			SELECT schema_name FROM information_schema.schemata
+			WHERE starts_with(schema_name, 'plugin_') ORDER BY schema_name`;
+		const tables = await database.sql<{ table_name: string }[]>`
+			SELECT table_name FROM information_schema.tables
+			WHERE table_schema = 'plugin_sticky_notes'`;
+		expect(schemas.map((row) => row.schema_name)).toEqual([
+			"plugin_sticky_notes",
+		]);
+		expect(tables.map((row) => row.table_name)).toEqual(["notes"]);
 	});
 });
