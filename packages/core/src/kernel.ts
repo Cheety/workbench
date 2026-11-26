@@ -2,14 +2,22 @@ import type { PluginContext } from "@workbench/sdk";
 import { errorName } from "./failure-reason.ts";
 import { type LoadFailure, LoadFailures } from "./load-failures.ts";
 import type { Logger } from "./logger.ts";
-import { catalogPlugins, type PluginPackage } from "./plugin-catalog.ts";
+import {
+	catalogPlugins,
+	type PluginDiscovery,
+	type PluginPackage,
+} from "./plugin-catalog.ts";
 import type { ValidPlugin } from "./plugin-manifest.ts";
 import { dependencyNotLoaded, resolvePlugins } from "./plugin-resolution.ts";
 import { quote } from "./quote.ts";
 import { systemFailureReason } from "./system-error.ts";
 
 export type { LoadFailure } from "./load-failures.ts";
-export type { PluginPackage } from "./plugin-catalog.ts";
+export type {
+	PluginDiscovery,
+	PluginPackage,
+	UnreadablePackage,
+} from "./plugin-catalog.ts";
 
 /**
  * The capabilities this instance offers, by name. A provider is called once
@@ -18,7 +26,7 @@ export type { PluginPackage } from "./plugin-catalog.ts";
 export type CapabilityProviders = Readonly<Record<string, () => unknown>>;
 
 export type KernelOptions = {
-	readonly discover: () => Promise<readonly PluginPackage[]>;
+	readonly discover: () => Promise<PluginDiscovery>;
 	/** Plugin names from the instance config. */
 	readonly enabledPlugins: readonly string[];
 	readonly capabilityProviders: CapabilityProviders;
@@ -55,7 +63,9 @@ export class UndeclaredCapabilityError extends Error {
  * are not loaded and their defects are not reported.
  *
  * Never rejects because of a plugin: every plugin that cannot be loaded is
- * logged as "plugin not loaded" and listed in `failures`, the others run.
+ * logged as "plugin not loaded" and listed in `failures`, the others run. A
+ * package whose `package.json` discovery could not use is logged as "plugin
+ * package ignored" with its directory.
  */
 export async function startPlugins(
 	options: KernelOptions,
@@ -111,7 +121,9 @@ async function discoverPackages(
 	options: KernelOptions,
 ): Promise<readonly PluginPackage[]> {
 	try {
-		const packages = await options.discover();
+		const { packages, unreadable } = await options.discover();
+		for (const unreadablePackage of unreadable)
+			options.logger.error("plugin package ignored", unreadablePackage);
 		options.logger.info("plugins discovered", {
 			packages: packages.map((pluginPackage) => pluginPackage.packageName),
 		});

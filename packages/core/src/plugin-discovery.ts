@@ -1,10 +1,13 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { PluginPackage } from "./kernel.ts";
+import type { PluginDiscovery, PluginPackage } from "./kernel.ts";
 import { isPluginName } from "./plugin-manifest.ts";
+import { systemFailureReason } from "./system-error.ts";
 
 const PACKAGE_JSON = "package.json";
+
+const NOTHING: PluginDiscovery = { packages: [], unreadable: [] };
 
 /**
  * Finds the plugin packages among the packages in `packagesDirectory`: those
@@ -13,12 +16,14 @@ const PACKAGE_JSON = "package.json";
  * directories are not plugins and are skipped. No plugin code is loaded before
  * `loadDefinition` is called.
  *
- * The returned function rejects if the directory or a `package.json` in it
- * cannot be read.
+ * A package whose `package.json` cannot be read or declares a plugin in
+ * another shape is listed in `unreadable` and does not keep the others from
+ * being found. The returned function rejects if the directory itself cannot
+ * be read.
  */
 export function discoverPluginPackages(
 	packagesDirectory: string,
-): () => Promise<readonly PluginPackage[]> {
+): () => Promise<PluginDiscovery> {
 	return async () => {
 		const entries = await readdir(packagesDirectory, { withFileTypes: true });
 		const directories = entries
@@ -27,26 +32,44 @@ export function discoverPluginPackages(
 			.sort();
 		const found = await Promise.all(
 			directories.map((directory) =>
-				readPluginPackage(join(packagesDirectory, directory)),
+				readPackage(join(packagesDirectory, directory)),
 			),
 		);
-		return found.filter((pluginPackage) => pluginPackage !== undefined);
+		return {
+			packages: found.flatMap(({ packages }) => packages),
+			unreadable: found.flatMap(({ unreadable }) => unreadable),
+		};
 	};
 }
 
-async function readPluginPackage(
-	root: string,
-): Promise<PluginPackage | undefined> {
+async function readPackage(root: string): Promise<PluginDiscovery> {
 	const file = Bun.file(join(root, PACKAGE_JSON));
-	if (!(await file.exists())) return undefined;
-	const packageJson: unknown = await file.json();
+	if (!(await file.exists())) return NOTHING;
+	let packageJson: unknown;
+	try {
+		packageJson = await file.json();
+	} catch (error) {
+		return unreadable(
+			root,
+			error instanceof SyntaxError
+				? `${PACKAGE_JSON} is not valid JSON`
+				: `${PACKAGE_JSON} cannot be read (${systemFailureReason(error)})`,
+		);
+	}
 	if (!isRecord(packageJson) || !isRecord(packageJson.workbench))
-		return undefined;
+		return NOTHING;
 	const declared = packageJson.workbench.plugin;
-	if (!isRecord(declared)) return undefined;
-	const { name: pluginName, entry } = declared;
-	if (!isPluginName(pluginName) || typeof entry !== "string") return undefined;
-	return {
+	if (declared === undefined) return NOTHING;
+	const { name: pluginName = undefined, entry = undefined } = isRecord(declared)
+		? declared
+		: {};
+	if (!isPluginName(pluginName) || typeof entry !== "string") {
+		return unreadable(
+			root,
+			'workbench.plugin must declare the plugin "name" (lowercase letters, digits and hyphens, starting with a letter) and the "entry" path',
+		);
+	}
+	const pluginPackage: PluginPackage = {
 		packageName: typeof packageJson.name === "string" ? packageJson.name : root,
 		pluginName,
 		version: packageJson.version,
@@ -57,6 +80,11 @@ async function readPluginPackage(
 			return isRecord(module) ? module.default : undefined;
 		},
 	};
+	return { packages: [pluginPackage], unreadable: [] };
+}
+
+function unreadable(directory: string, problem: string): PluginDiscovery {
+	return { packages: [], unreadable: [{ directory, problem }] };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

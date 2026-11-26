@@ -14,6 +14,17 @@ export type PluginPackage = {
 	readonly loadDefinition: () => Promise<unknown>;
 };
 
+/** A package directory whose `package.json` discovery could not use. */
+export type UnreadablePackage = {
+	readonly directory: string;
+	readonly problem: string;
+};
+
+export type PluginDiscovery = {
+	readonly packages: readonly PluginPackage[];
+	readonly unreadable: readonly UnreadablePackage[];
+};
+
 export type PluginLoad =
 	| { readonly loaded: true; readonly plugin: ValidPlugin }
 	| { readonly loaded: false; readonly failure: LoadFailure };

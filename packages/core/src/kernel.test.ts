@@ -10,6 +10,7 @@ import {
 	type PluginPackage,
 	startPlugins,
 	UndeclaredCapabilityError,
+	type UnreadablePackage,
 } from "./kernel.ts";
 import { createLogger } from "./logger.ts";
 
@@ -39,6 +40,7 @@ function packageOf(
 
 type Scenario = {
 	readonly packages: readonly PluginPackage[];
+	readonly unreadable?: readonly UnreadablePackage[];
 	readonly enabledPlugins: readonly string[];
 	readonly capabilityProviders?: CapabilityProviders;
 };
@@ -46,7 +48,10 @@ type Scenario = {
 async function start(scenario: Scenario) {
 	const { logger, entries } = recordingLogger();
 	const plugins = await startPlugins({
-		discover: async () => scenario.packages,
+		discover: async () => ({
+			packages: scenario.packages,
+			unreadable: scenario.unreadable ?? [],
+		}),
 		enabledPlugins: scenario.enabledPlugins,
 		capabilityProviders: scenario.capabilityProviders ?? {},
 		logger,
@@ -700,6 +705,30 @@ describe("plugin kernel", () => {
 
 		expect(outcomes).toEqual(["clean", "clean"]);
 		expect(journal).toEqual(["activate notes", "deactivate notes"]);
+	});
+
+	test("tells the operator which plugin package it could not read and loads the others", async () => {
+		const { plugins, entries } = await start({
+			packages: [packageOf(definePlugin({ manifest: { name: "notes" } }))],
+			unreadable: [
+				{
+					directory: "/app/packages/plugin-board",
+					problem: "package.json is not valid JSON",
+				},
+			],
+			enabledPlugins: ["notes"],
+		});
+
+		expect(entries).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				message: "plugin package ignored",
+				directory: "/app/packages/plugin-board",
+				problem: "package.json is not valid JSON",
+			}),
+		);
+		expect(plugins.active).toEqual(["notes"]);
+		expect(plugins.failures).toEqual([]);
 	});
 
 	test("starts without plugins and reports it when discovery fails", async () => {

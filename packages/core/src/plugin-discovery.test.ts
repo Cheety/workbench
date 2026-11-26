@@ -42,6 +42,21 @@ beforeAll(async () => {
 		name: "@fixture/library",
 		version: "3.0.0",
 	});
+	await writePackage("plugin-old-style", {
+		name: "@fixture/plugin-old-style",
+		version: "1.0.0",
+		workbench: { plugin: "./src/plugin.ts" },
+	});
+	await writePackage("plugin-unnamed", {
+		name: "@fixture/plugin-unnamed",
+		version: "1.0.0",
+		workbench: { plugin: { name: "Not A Name", entry: "./src/plugin.ts" } },
+	});
+	await mkdir(join(packagesDirectory, "plugin-garbled"));
+	await writeFile(
+		join(packagesDirectory, "plugin-garbled", "package.json"),
+		'{ "name": "@fixture/plugin-garbled", ',
+	);
 	await mkdir(join(packagesDirectory, "not-a-package"));
 	await writeFile(join(packagesDirectory, "README.md"), "not a directory");
 });
@@ -52,7 +67,7 @@ afterAll(async () => {
 
 describe("plugin discovery", () => {
 	test("finds the packages that declare a plugin, in a stable order", async () => {
-		const packages = await discoverPluginPackages(packagesDirectory)();
+		const { packages } = await discoverPluginPackages(packagesDirectory)();
 
 		expect(
 			packages.map(({ packageName, pluginName, version }) => ({
@@ -75,7 +90,7 @@ describe("plugin discovery", () => {
 	});
 
 	test("loads the default export of the plugin entry on demand", async () => {
-		const packages = await discoverPluginPackages(packagesDirectory)();
+		const { packages } = await discoverPluginPackages(packagesDirectory)();
 
 		const definition = await packages[1]?.loadDefinition();
 
@@ -83,11 +98,37 @@ describe("plugin discovery", () => {
 	});
 
 	test("leaves a plugin entry that fails on import to the caller", async () => {
-		const packages = await discoverPluginPackages(packagesDirectory)();
+		const { packages } = await discoverPluginPackages(packagesDirectory)();
 
 		const loading = packages[0]?.loadDefinition();
 
 		await expect(loading).rejects.toThrow(TypeError);
+	});
+
+	test("reports the packages whose package.json it cannot use and still finds the others", async () => {
+		const { packages, unreadable } =
+			await discoverPluginPackages(packagesDirectory)();
+
+		const declaration =
+			'workbench.plugin must declare the plugin "name" (lowercase letters, digits and hyphens, starting with a letter) and the "entry" path';
+		expect(unreadable).toEqual([
+			{
+				directory: join(packagesDirectory, "plugin-garbled"),
+				problem: "package.json is not valid JSON",
+			},
+			{
+				directory: join(packagesDirectory, "plugin-old-style"),
+				problem: declaration,
+			},
+			{
+				directory: join(packagesDirectory, "plugin-unnamed"),
+				problem: declaration,
+			},
+		]);
+		expect(packages.map(({ pluginName }) => pluginName)).toEqual([
+			"broken",
+			"notes",
+		]);
 	});
 
 	test("fails when the directory cannot be read", async () => {
