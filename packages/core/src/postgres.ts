@@ -1,5 +1,6 @@
 import { SQL } from "bun";
 import type { Secret } from "./config.ts";
+import { UNKNOWN_FAILURE_REASON } from "./failure-reason.ts";
 import type { Logger } from "./logger.ts";
 
 export type DatabaseStatus =
@@ -9,7 +10,6 @@ export type DatabaseStatus =
 export type DatabaseCheck = () => Promise<DatabaseStatus>;
 
 const TIMEOUT_REASON = "timeout";
-const UNKNOWN_REASON = "unknown";
 
 export type PostgresCheckOptions = {
 	readonly url: Secret;
@@ -62,6 +62,6 @@ async function queryOnce(
 }
 
 function describeFailure(error: unknown): string {
-	if (!(error instanceof SQL.PostgresError)) return UNKNOWN_REASON;
+	if (!(error instanceof SQL.PostgresError)) return UNKNOWN_FAILURE_REASON;
 	return error.errno ?? error.code;
 }

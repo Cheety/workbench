@@ -1,3 +1,4 @@
+import { UNKNOWN_FAILURE_REASON } from "./failure-reason.ts";
 import type { Logger } from "./logger.ts";
 import type { DatabaseCheck } from "./postgres.ts";
 
@@ -51,9 +52,7 @@ async function handleRequest(
 		options.checkDatabase,
 		logger,
 	).catch((error: unknown) => {
-		logger.error("request failed", {
-			error: error instanceof Error ? error.name : "unknown",
-		});
+		logger.error("request failed", { error: errorName(error) });
 		return problem(500, "Internal Server Error");
 	});
 	response.headers.set(CORRELATION_ID_HEADER, correlationId);
@@ -62,6 +61,10 @@ async function handleRequest(
 		logger.debug("request completed", entry);
 	else logger.info("request completed", entry);
 	return response;
+}
+
+function errorName(error: unknown): string {
+	return error instanceof Error ? error.name : UNKNOWN_FAILURE_REASON;
 }
 
 function acceptCorrelationId(request: Request): string | undefined {
