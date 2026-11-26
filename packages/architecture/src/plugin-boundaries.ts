@@ -48,7 +48,7 @@ export async function findPluginBoundaryViolations(
 			if (path.split(sep).includes(INSTALLED_DEPENDENCIES)) continue;
 			const file = join(plugin.root, path);
 			for (const importPath of importPathsIn(await Bun.file(file).text())) {
-				const rule = brokenRule({ file, importPath }, plugin, plugins);
+				const rule = violatedRule({ file, importPath }, plugin, plugins);
 				if (rule !== undefined)
 					violations.push({
 						rule,
@@ -61,7 +61,7 @@ export async function findPluginBoundaryViolations(
 	return violations;
 }
 
-function brokenRule(
+function violatedRule(
 	{ file, importPath }: Import,
 	plugin: PluginPackage,
 	plugins: readonly PluginPackage[],
