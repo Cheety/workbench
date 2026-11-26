@@ -70,6 +70,7 @@ function runnerFor(url: string, logger: Logger): MigrationRunner {
 	return {
 		databaseUrl: new Secret(url),
 		connectionTimeoutMs: 2_000,
+		statementTimeoutMs: 5_000,
 		lockRetryDelayMs: () => 10,
 		setTimer: setSystemTimer,
 		logger,
@@ -330,6 +331,55 @@ describe("schema migrations", () => {
 		const run = migrateSchemas(runner, [NOTES], NOT_STOPPED);
 
 		await expect(run).rejects.toThrow();
+	});
+
+	test("fail a migration that waits for a table lock longer than the statement timeout and free the migration lock", async () => {
+		const database = await freshDatabase();
+		await database.sql`CREATE TABLE public.archive (id int PRIMARY KEY)`;
+		const blocker = new SQL(database.url, { max: 1 });
+		await blocker.unsafe(
+			"BEGIN; LOCK TABLE public.archive IN ACCESS EXCLUSIVE MODE;",
+		);
+		const readsArchive = {
+			schema: schemaName("plugin_notes"),
+			migrations: [
+				{
+					name: "0001_read_archive.sql",
+					sql: "SELECT count(*) FROM public.archive;",
+				},
+			],
+		};
+		const { logger, entries } = recordingLogger();
+		const runner: MigrationRunner = {
+			...runnerFor(database.url, logger),
+			statementTimeoutMs: 200,
+		};
+
+		const run = await migrateSchemas(runner, [readsArchive], NOT_STOPPED);
+
+		await blocker.unsafe("COMMIT");
+		await blocker.close();
+		expect(run).toEqual({
+			stopped: false,
+			outcomes: [
+				expect.objectContaining({
+					schema: schemaName("plugin_notes"),
+					migrated: false,
+					applied: [],
+					detail: expect.stringContaining("statement timeout"),
+				}),
+			],
+		});
+		expect(entries).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				message: "migration failed",
+				migration: "0001_read_archive.sql",
+			}),
+		);
+		expect(
+			await database.sql`SELECT count(*)::int AS held FROM pg_locks WHERE locktype = 'advisory'`,
+		).toEqual([{ held: 0 }]);
 	});
 
 	test("stop waiting for the lock another run holds when it is told to stop", async () => {

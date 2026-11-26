@@ -36,6 +36,8 @@ const DATABASE_RETRY = { baseMs: 250, capMs: 10_000 } as const;
 
 const MIGRATION_CONNECTION_TIMEOUT_MS = 10_000;
 
+const MIGRATION_STATEMENT_TIMEOUT_MS = 60_000;
+
 const MIGRATION_LOCK_RETRY = { baseMs: 250, capMs: 2_000 } as const;
 
 const now = (): Date => new Date();
@@ -86,6 +88,7 @@ const checkDatabase = createPostgresCheck({
 const migrationRunner: MigrationRunner = {
 	databaseUrl: config.databaseUrl,
 	connectionTimeoutMs: MIGRATION_CONNECTION_TIMEOUT_MS,
+	statementTimeoutMs: MIGRATION_STATEMENT_TIMEOUT_MS,
 	lockRetryDelayMs: fullJitterBackoff({
 		...MIGRATION_LOCK_RETRY,
 		random: Math.random,

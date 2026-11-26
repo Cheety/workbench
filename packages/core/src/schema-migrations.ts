@@ -46,6 +46,7 @@ export type MigrationRun =
 export type MigrationRunner = {
 	readonly databaseUrl: Secret;
 	readonly connectionTimeoutMs: number;
+	readonly statementTimeoutMs: number;
 	readonly lockRetryDelayMs: (attempt: number) => number;
 	readonly setTimer: SetTimer;
 	readonly logger: Logger;
@@ -91,6 +92,7 @@ export async function migrateSchemas(
 	try {
 		const connection = await sql.reserve();
 		try {
+			await connection`SELECT set_config('statement_timeout', ${String(runner.statementTimeoutMs)}, false)`;
 			const lock = await acquireLock(connection, runner, stopSignal);
 			if (lock === "stopped") return STOPPED;
 			try {
