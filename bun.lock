@@ -14,8 +14,13 @@
       "name": "@workbench/core",
       "version": "0.0.0",
       "dependencies": {
+        "@workbench/sdk": "workspace:*",
         "zod": "4.6.7",
       },
+    },
+    "packages/sdk": {
+      "name": "@workbench/sdk",
+      "version": "0.0.0",
     },
   },
   "packages": {
@@ -86,6 +91,8 @@
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
 
     "@workbench/core": ["@workbench/core@workspace:packages/core"],
+
+    "@workbench/sdk": ["@workbench/sdk@workspace:packages/sdk"],
 
     "bun-types": ["bun-types@1.4.5", "", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-ECHn+9dhL3wv0G6u0+7dQvrnaimXiRDxxerYBmhTaLyJEEuvTPWk2Fye3XIf5Y++JIIiHKfQw4Z7V5D8KuiXbg=="],
 
