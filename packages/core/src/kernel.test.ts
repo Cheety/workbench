@@ -653,6 +653,54 @@ describe("plugin kernel", () => {
 		);
 	});
 
+	test.each([
+		[
+			"was rejected for another cycle first",
+			{ cards: ["board"], board: ["notes", "cards"], notes: ["board"] },
+			[
+				{ plugin: "notes", cycle: "notes -> board -> notes" },
+				{ plugin: "board", cycle: "cards -> board -> cards" },
+				{ plugin: "cards", cycle: "cards -> board -> cards" },
+			],
+		],
+		[
+			"was rejected before the plugin was reached",
+			{ cards: ["board", "notes"], board: ["cards"], notes: ["board"] },
+			[
+				{ plugin: "board", cycle: "cards -> board -> cards" },
+				{ plugin: "cards", cycle: "cards -> board -> cards" },
+				{ plugin: "notes", cycle: "notes -> board -> cards -> notes" },
+			],
+		],
+	])(
+		"reports the cycle for a plugin of a cycle whose required plugin %s",
+		async (_case, requirements, cycles) => {
+			const { plugins } = await start({
+				packages: Object.entries(requirements).map(([name, required]) =>
+					packageOf(
+						definePlugin({
+							manifest: {
+								name,
+								requires: Object.fromEntries(
+									required.map((requiredName) => [requiredName, "*"]),
+								),
+							},
+						}),
+					),
+				),
+				enabledPlugins: Object.keys(requirements),
+			});
+
+			expect(plugins.failures).toEqual(
+				cycles.map(({ plugin, cycle }) => ({
+					plugin,
+					reason: "dependency_cycle",
+					detail: `plugin "${plugin}" is part of a dependency cycle: ${cycle}`,
+				})),
+			);
+		},
+	);
+
 	test("loads none of several plugin packages that declare the same plugin name", async () => {
 		const journal: string[] = [];
 

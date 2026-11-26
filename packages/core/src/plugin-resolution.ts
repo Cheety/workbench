@@ -18,12 +18,13 @@ export async function resolvePlugins(
 	enabledPlugins: readonly string[],
 	failures: LoadFailures,
 ): Promise<readonly ValidPlugin[]> {
-	const enabled = new Set(enabledPlugins);
+	const loads = new Map<string, PluginLoad>();
+	for (const name of new Set(enabledPlugins))
+		loads.set(name, await catalog.load(name));
+	const cycles = findDependencyCycles(loads);
 	const activationOrder: ValidPlugin[] = [];
 	const resolved = new Map<string, ValidPlugin>();
 	const resolving: string[] = [];
-	/** Plugin name → the dependency cycle the plugin was found in. */
-	const cycles = new Map<string, string>();
 
 	const rejected = (failure: LoadFailure): PluginLoad => {
 		failures.reject(failure);
@@ -35,7 +36,7 @@ export async function resolvePlugins(
 		if (plugin !== undefined) return { loaded: true, plugin };
 		const known = failures.find(name);
 		if (known !== undefined) return { loaded: false, failure: known };
-		const load = await catalog.load(name);
+		const load = loads.get(name) ?? (await catalog.load(name));
 		if (!load.loaded) return rejected(load.failure);
 		const failure = await firstRequirementFailure(load.plugin);
 		if (failure !== undefined) return rejected(failure);
@@ -65,13 +66,10 @@ export async function resolvePlugins(
 		range: string,
 	): Promise<LoadFailure | undefined> => {
 		const requirement = `plugin ${quote(plugin.name)} requires plugin ${quote(required)}`;
-		if (resolving.includes(required)) {
-			const members = resolving.slice(resolving.indexOf(required));
-			const cycle = [...members, required].join(" -> ");
-			for (const member of members) cycles.set(member, cycle);
+		const cycle = cycles.get(plugin.name);
+		if (cycle !== undefined && resolving.includes(required))
 			return dependencyCycle(plugin, cycle);
-		}
-		if (!enabled.has(required)) {
+		if (!loads.has(required)) {
 			const state = catalog.isDiscovered(required)
 				? "is not enabled in the instance config"
 				: "no plugin package provides";
@@ -83,7 +81,6 @@ export async function resolvePlugins(
 		}
 		const requiredPlugin = await resolve(required);
 		if (!requiredPlugin.loaded) {
-			const cycle = cycles.get(plugin.name);
 			return cycle === undefined
 				? dependencyNotLoaded(plugin, required, requiredPlugin.failure)
 				: dependencyCycle(plugin, cycle);
@@ -101,6 +98,37 @@ export async function resolvePlugins(
 
 	for (const name of enabledPlugins) await resolve(name);
 	return activationOrder;
+}
+
+function findDependencyCycles(
+	loads: ReadonlyMap<string, PluginLoad>,
+): ReadonlyMap<string, string> {
+	const cycles = new Map<string, string>();
+	for (const name of loads.keys()) {
+		if (cycles.has(name)) continue;
+		const members = shortestCycleThrough(name, loads);
+		if (members === undefined) continue;
+		const cycle = [...members, name].join(" -> ");
+		for (const member of members)
+			if (!cycles.has(member)) cycles.set(member, cycle);
+	}
+	return cycles;
+}
+
+function shortestCycleThrough(
+	start: string,
+	loads: ReadonlyMap<string, PluginLoad>,
+): readonly string[] | undefined {
+	const paths = new Map<string, readonly string[]>([[start, [start]]]);
+	for (const [name, path] of paths) {
+		const load = loads.get(name);
+		if (!load?.loaded) continue;
+		for (const required of load.plugin.requires.keys()) {
+			if (required === start) return path;
+			if (!paths.has(required)) paths.set(required, [...path, required]);
+		}
+	}
+	return undefined;
 }
 
 function dependencyCycle(plugin: ValidPlugin, cycle: string): LoadFailure {
