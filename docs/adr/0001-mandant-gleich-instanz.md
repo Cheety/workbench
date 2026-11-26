@@ -1,0 +1,3 @@
+# Ein Mandant ist eine eigene Instanz, ohne Tenant-ID im Code
+
+Mandanten werden nicht in der Anwendung getrennt, sondern im Betrieb: Jeder Mandant läuft als eigene Instanz mit eigenem Linux-User (rootless Podman), eigener Postgres-Datenbank, eigenen Secrets und eigener Subdomain. Deshalb gibt es im Code weder eine `tenantId` noch Mandantenfilter. Eine Verwechslung von Mandantendaten ist dadurch strukturell ausgeschlossen. Der Preis: Instanzübergreifende Funktionen (gemeinsamer Login, Links zwischen Mandanten) gibt es nicht, und jeder Mandant kostet eigene Betriebsressourcen.

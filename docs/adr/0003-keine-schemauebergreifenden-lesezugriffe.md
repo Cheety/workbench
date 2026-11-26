@@ -1,0 +1,3 @@
+# Keine Lesezugriffe über Schema-Grenzen
+
+Ein Plugin liest und schreibt nur in seinem eigenen Postgres-Schema. Freigegebene Datenbank-Views über fremde Schemas, Joins oder Fremdschlüssel über Plugin-Grenzen gibt es nicht. Fremde Daten kommen über Batch-Services aus dem Contract oder über ein eigenes Read Model, das per Event gepflegt wird. Für `core.objects` und `core.links` melden Plugins ihre Objekte über einen Core-Service an und ab. Beim Abmelden entfernt der Core die zugehörigen Links, und die UI zeigt verwaiste Verweise als „Objekt nicht verfügbar“. Das kostet Bequemlichkeit beim Lesen, dafür kann jedes Plugin sein Schema ändern, ohne andere zu brechen.
