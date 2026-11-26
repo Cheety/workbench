@@ -44,7 +44,7 @@ Logs sind JSON-Zeilen auf der Standardausgabe. Jede Anfrage trägt eine Korrelat
 
 ## Umgebungsvariablen
 
-Die Konfiguration kommt ausschließlich aus der Umgebung und wird beim Start geprüft. Fehlt eine Pflichtvariable oder ist ein Wert ungültig, endet der Start mit Exit-Code 1 und einer Meldung, die die Variable nennt, aber keinen Wert ausgibt. Leere Variablen gelten als nicht gesetzt.
+Die Konfiguration kommt ausschließlich aus der Umgebung und wird beim Start geprüft. Fehlt eine Pflichtvariable oder ist ein Wert ungültig, endet der Start mit Exit-Code 1 und einer Meldung, die die Variable nennt, aber keinen Wert ausgibt. Leere Variablen gelten als nicht gesetzt. Zahlen sind ganze Dezimalzahlen ohne Vorzeichen, führende Nullen oder Leerraum; Schreibweisen wie `0x1F90` oder `1e3` werden abgelehnt.
 
 | Variable               | Pflicht | Standard | Bedeutung                                                                                                      |
 | ---------------------- | ------- | -------- | -------------------------------------------------------------------------------------------------------------- |

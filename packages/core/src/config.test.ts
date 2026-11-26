@@ -34,6 +34,23 @@ describe("loadConfig", () => {
 		expect(config.readinessTimeoutMs).toBe(2000);
 	});
 
+	test.each([
+		["0", "1"],
+		["8080", "1500"],
+		["65535", "60000"],
+	])(
+		"reads PORT %s and READINESS_TIMEOUT_MS %s as decimal integers",
+		(port, timeout) => {
+			const config = loadConfig({
+				env: { DATABASE_URL, PORT: port, READINESS_TIMEOUT_MS: timeout },
+				readSecretFile: noSecretFiles,
+			});
+
+			expect(config.port).toBe(Number(port));
+			expect(config.readinessTimeoutMs).toBe(Number(timeout));
+		},
+	);
+
 	test("rejects a missing required variable and names it", () => {
 		const error = captureInvalidConfig({});
 
@@ -46,6 +63,16 @@ describe("loadConfig", () => {
 	test.each([
 		["PORT", "70000"],
 		["PORT", "http"],
+		["PORT", " "],
+		["PORT", "0x1F90"],
+		["PORT", "1e3"],
+		["PORT", "80.0"],
+		["PORT", "+80"],
+		["PORT", "080"],
+		["PORT", " 80"],
+		["READINESS_TIMEOUT_MS", " "],
+		["READINESS_TIMEOUT_MS", "0x10"],
+		["READINESS_TIMEOUT_MS", "1e3"],
 		["LOG_LEVEL", "verbose"],
 		["READINESS_TIMEOUT_MS", "0"],
 		["DATABASE_URL", "mysql://workbench:s3cr3t-pass@db.internal/workbench"],

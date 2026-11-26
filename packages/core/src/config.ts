@@ -75,12 +75,20 @@ function isPostgresUrl(value: string): boolean {
 	return POSTGRES_SCHEMES.some((scheme) => protocol === `${scheme}:`);
 }
 
+// Number() would also take hexadecimal, exponents and blank strings, which
+// are far more likely a mistake than an intended port or duration.
+const DECIMAL_INTEGER = /^(0|[1-9][0-9]*)$/;
+
 function integerIn(range: IntegerRange) {
-	return z.coerce.number().int().min(range.min).max(range.max);
+	return z
+		.string()
+		.regex(DECIMAL_INTEGER)
+		.transform(Number)
+		.pipe(z.number().min(range.min).max(range.max));
 }
 
 function integerExpectation(range: IntegerRange): string {
-	return `must be an integer between ${range.min} and ${range.max}`;
+	return `must be a decimal integer between ${range.min} and ${range.max}`;
 }
 
 const schema = z.object({
