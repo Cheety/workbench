@@ -90,6 +90,16 @@ docker compose -f compose.dev.yaml exec -T postgres psql -U workbench -d workben
 
 `core.events` nennt `reference.NoteCreated` in Version 1 mit der `noteId` der Antwort. `core.event_deliveries` bleibt leer, solange kein in `PLUGINS` aktiviertes Plugin das Event abonniert; mit einem abonnierenden Plugin steht dort je Plugin eine Zeile mit `attempts` und `delivered_at`, und mit `LOG_LEVEL=debug` meldet das Log `event delivered`, sonst nur `event not delivered` mit `reason`. Wie ein Handler ein Event erhält und eine gescheiterte Zustellung wiederholt wird, zeigen die Tests in `packages/core/src/events.test.ts`.
 
+## Die Job-Queue ansehen
+
+Den Server wie oben starten. Die Migration `0006_create_jobs.sql` hat `core.jobs` angelegt:
+
+```sh
+docker compose -f compose.dev.yaml exec -T postgres psql -U workbench -d workbench_verify -c 'SELECT name, state, attempts, next_attempt_at, due_at, failure_reason FROM core.jobs ORDER BY next_attempt_at'
+```
+
+Die Tabelle bleibt leer, solange kein aktives Plugin einen Job einreiht oder einen Cron-Job deklariert; das Referenz-Plugin tut beides nicht. Mit einem solchen Plugin steht dort je Job eine Zeile (`pending`, `completed` oder `dead`), für einen Cron-Job die nächste Fälligkeit in `due_at`, und mit `LOG_LEVEL=debug` meldet das Log `job completed`, sonst nur `job failed` und `job dead-lettered` mit `reason`. Wie ein Job nach dem Festschreiben läuft, wiederholt wird, seine Frist überschreitet und im Dead-Letter landet, zeigen die Tests in `packages/core/src/jobs.test.ts` und `packages/core/src/job-queue.test.ts`, mit einer Uhr, die der Test stellt.
+
 ## Einen Ladefehler auslösen
 
 Ein Plugin in `PLUGINS`, das kein Plugin-Paket bereitstellt, ist der schnellste Ladefehler. Den Server wie oben starten, aber mit `PLUGINS=reference,missing`, dann:
