@@ -7,10 +7,13 @@ export type JobContext = {
 	random(): number;
 };
 
-export type EnqueuedJob<Payload> = {
+export type JobAttempt = {
 	readonly id: string;
 	readonly name: string;
 	readonly attempt: number;
+};
+
+export type EnqueuedJob<Payload> = JobAttempt & {
 	readonly enqueuedAt: Date;
 	readonly workspace: string;
 	readonly payload: Payload;
@@ -29,10 +32,7 @@ export function defineJob<Payload>(
 	return definition;
 }
 
-export type DueCronJob = {
-	readonly id: string;
-	readonly name: string;
-	readonly attempt: number;
+export type DueCronJob = JobAttempt & {
 	readonly dueAt: Date;
 };
 
