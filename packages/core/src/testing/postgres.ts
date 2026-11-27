@@ -1,10 +1,56 @@
 import { type Socket, SQL, type TCPSocketListener } from "bun";
+import { z } from "zod";
 
 const DEFAULT_TEST_DATABASE_URL =
 	"postgres://workbench:workbench@127.0.0.1:54329/workbench_test";
 
 export const TEST_DATABASE_URL: string =
 	process.env.TEST_DATABASE_URL ?? DEFAULT_TEST_DATABASE_URL;
+
+export const SUPPORTED_POSTGRES_MAJOR = 17;
+
+const SERVER_VERSION_NUMS_PER_MAJOR = 10000;
+
+export class UnsupportedPostgresVersionError extends Error {
+	constructor(serverVersionNum: number, major: number) {
+		super(
+			`test database runs Postgres ${major} (server_version_num ${serverVersionNum}), tests need Postgres ${SUPPORTED_POSTGRES_MAJOR} as in production`,
+		);
+		this.name = "UnsupportedPostgresVersionError";
+	}
+}
+
+export function assertSupportedPostgresVersion(serverVersionNum: number): void {
+	const major = Math.floor(serverVersionNum / SERVER_VERSION_NUMS_PER_MAJOR);
+	if (major !== SUPPORTED_POSTGRES_MAJOR)
+		throw new UnsupportedPostgresVersionError(serverVersionNum, major);
+}
+
+const serverVersionRows = z.tuple([
+	z.object({ server_version_num: z.number().int() }),
+]);
+
+async function assertTestDatabaseIsSupported(): Promise<void> {
+	const sql = new SQL(TEST_DATABASE_URL, { max: 1 });
+	try {
+		const rows =
+			await sql`SELECT current_setting('server_version_num')::int AS server_version_num`;
+		const [row] = serverVersionRows.parse([...rows]);
+		assertSupportedPostgresVersion(row.server_version_num);
+	} finally {
+		await sql.close();
+	}
+}
+
+function oncePerProcess(run: () => Promise<void>): () => Promise<void> {
+	let result: Promise<void> | undefined;
+	return () => {
+		result ??= run();
+		return result;
+	};
+}
+
+const testDatabaseIsSupported = oncePerProcess(assertTestDatabaseIsSupported);
 
 export type FreshDatabase = {
 	readonly url: string;
@@ -13,6 +59,7 @@ export type FreshDatabase = {
 };
 
 export async function createFreshDatabase(): Promise<FreshDatabase> {
+	await testDatabaseIsSupported();
 	const name = `workbench_test_${crypto.randomUUID().replaceAll("-", "")}`;
 	const admin = new SQL(TEST_DATABASE_URL, { max: 1 });
 	await admin.unsafe(`CREATE DATABASE ${name}`);

@@ -45,7 +45,7 @@ Die Ermessensfragen, die keine Prüfung entscheidet. Alles Mechanische prüft `b
 
 - Zuerst der Test, der aus dem erwarteten Grund rot wird, dann der Code.
 - Ein Test prüft, was ein Aufrufer sieht: Rückgabe, HTTP-Antwort, Log-Eintrag, Zustand in Postgres. Er bleibt grün, wenn sich nur die Implementierung ändert.
-- Postgres läuft echt. Jeder Test, der eine Datenbank braucht, holt sich mit `createFreshDatabase()` aus `packages/core/src/testing/postgres.ts` eine eigene und räumt sie mit `drop()` ab. Ausfälle der Datenbank (verweigert, stumm, wieder da) stellt `PostgresGate` aus derselben Datei her, nicht ein Mock.
+- Postgres läuft echt, in der Hauptversion der Produktion: `createFreshDatabase()` lehnt einen Server anderer Hauptversion mit `UnsupportedPostgresVersionError` ab. Jeder Test, der eine Datenbank braucht, holt sich mit `createFreshDatabase()` aus `packages/core/src/testing/postgres.ts` eine eigene und räumt sie mit `drop()` ab. Ausfälle der Datenbank (verweigert, stumm, wieder da) stellt `PostgresGate` aus derselben Datei her, nicht ein Mock.
 - Log-Einträge prüft `recordingLogger()` aus `packages/core/src/testing/recording-logger.ts`, mit fester Uhr.
 - Jeder Test kann an einem plausiblen Fehler scheitern, den ein Aufrufer oder Betreiber bemerken würde. Lässt sich dieser Fehler nicht benennen, entfällt der Test.
 - Tests verbinden sich nur mit Datenbanken aus `packages/core/src/testing/postgres.ts` (`TEST_DATABASE_URL` oder `createFreshDatabase()`), nie mit `DATABASE_URL`.
