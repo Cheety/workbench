@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { type ReservedSQL, SQL } from "bun";
 import type { Secret } from "./config.ts";
 import { pauseUnlessStopped } from "./database-wait.ts";
@@ -59,14 +60,17 @@ export type MigrationRunner = {
 	readonly logger: Logger;
 };
 
-// Advisory locks share one key space per database, so the key is a fixed, unlikely value:
-// the ASCII bytes of "workbenc", as much of "workbench" as fits a bigint. It makes a
-// collision with other lock users of the same database improbable, not impossible.
-const MIGRATION_LOCK_KEY = 0x776f726b62656e63n;
+const MIGRATION_LOCK_KEY = BigInt(
+	`0x${Buffer.from("workbenc", "ascii").toString("hex")}`,
+);
 
 const STOPPED: MigrationRun = { stopped: true };
 
 const CORE_SCHEMA = schemaName("core");
+
+export const CORE_MIGRATIONS_DIRECTORY = fileURLToPath(
+	new URL("../migrations/", import.meta.url),
+);
 
 export type CoreSchemaMigration = "migrated" | "not_migrated" | "stopped";
 

@@ -14,6 +14,10 @@
 		}
 	},
 	"dependencies": {
-		"@workbench/sdk": "workspace:*"
+		"@workbench/sdk": "workspace:*",
+		"zod": "4.6.7"
+	},
+	"devDependencies": {
+		"@workbench/core": "workspace:*"
 	}
 }

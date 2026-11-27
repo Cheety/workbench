@@ -1,6 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { isRecord } from "./is-record.ts";
 import type { PluginDiscovery, PluginPackage } from "./kernel.ts";
 import { readMigrations } from "./migration-files.ts";
 import { isPluginName } from "./plugin-manifest.ts";
@@ -21,7 +22,7 @@ export function discoverPluginPackages(
 			.sort();
 		const found = await Promise.all(
 			directories.map((directory) =>
-				readPackage(join(packagesDirectory, directory)),
+				readPluginPackage(join(packagesDirectory, directory)),
 			),
 		);
 		return {
@@ -31,7 +32,9 @@ export function discoverPluginPackages(
 	};
 }
 
-async function readPackage(root: string): Promise<PluginDiscovery> {
+export async function readPluginPackage(
+	root: string,
+): Promise<PluginDiscovery> {
 	const file = Bun.file(join(root, PACKAGE_JSON));
 	if (!(await file.exists())) return NOTHING;
 	let packageJson: unknown;
@@ -104,8 +107,4 @@ function pathInside(root: string, path: string): string | undefined {
 
 function unreadable(directory: string, problem: string): PluginDiscovery {
 	return { packages: [], unreadable: [{ directory, problem }] };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

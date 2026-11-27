@@ -12,6 +12,7 @@ import { createLogger } from "./logger.ts";
 import { discoverPluginPackages } from "./plugin-discovery.ts";
 import { createPostgresCheck } from "./postgres.ts";
 import {
+	CORE_MIGRATIONS_DIRECTORY,
 	type MigrationRunner,
 	migrateCoreSchema,
 	migrateSchemas,
@@ -25,10 +26,6 @@ import { reportFailedStart, shutDownInstance } from "./shutdown.ts";
 import { systemFailureReason } from "./system-error.ts";
 
 const PACKAGES_DIRECTORY = fileURLToPath(new URL("../../", import.meta.url));
-
-const CORE_MIGRATIONS_DIRECTORY = fileURLToPath(
-	new URL("../migrations/", import.meta.url),
-);
 
 const CLOSED_PIPE = "EPIPE";
 

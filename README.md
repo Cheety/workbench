@@ -88,7 +88,7 @@ Kann ein Plugin nicht geladen werden, startet die Instanz trotzdem. Das Log nenn
 
 | `reason`                 | Bedeutung                                                                                             |
 | ------------------------ | ----------------------------------------------------------------------------------------------------- |
-| `invalid_manifest`       | Manifest oder Paketversion ungültig, Einstieg nicht ladbar oder Name anders als im Paket.             |
+| `invalid_manifest`       | Manifest, Operationen oder Paketversion ungültig, Einstieg nicht ladbar, Name anders als im Paket.    |
 | `load_timed_out`         | Der Einstieg des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` geladen.                  |
 | `unknown_plugin`         | In `PLUGINS` genannt, aber kein Plugin-Paket stellt das Plugin bereit.                                |
 | `duplicate_plugin`       | Mehrere Plugin-Pakete deklarieren denselben Plugin-Namen; keines davon wird geladen.                  |
@@ -122,10 +122,99 @@ Seine SQL-Migrationen liegen in einem Verzeichnis des Plugin-Pakets, das die `pa
 - Jede Datei mit der Endung `.sql` ist eine Migration. Ihr Name besteht aus vier Ziffern, einem Unterstrich und Kleinbuchstaben, Ziffern oder Unterstrichen, z. B. `0001_create_notes.sql`; die Migrationen laufen in der Reihenfolge ihrer Namen. Andere Dateien bleiben unbeachtet.
 - Jede Migration läuft in einer eigenen Transaktion mit dem Schema des Plugins als `search_path`; Tabellen werden daher ohne Schema angelegt.
 - Angewandte Migrationen hält die Tabelle `core.migrations` fest (Schema, Dateiname, Zeitpunkt); ein erneuter Start wendet nur neue Migrationen an. Eine angewandte Migration wird nie geändert, sondern durch eine neue ergänzt.
-- Die Migrationen des Schemas `core` liegen in `packages/core/migrations` und laufen genauso, mit `core` als `search_path`; das Verzeichnis darf leer sein. Schlägt eine davon fehl, meldet das Log `instance failed to start` mit `reason` `core_schema_not_migrated`, und die Instanz lädt keine Plugins.
+- Die Migrationen des Schemas `core` liegen in `packages/core/migrations` und laufen genauso, mit `core` als `search_path`. Sie legen `core.workspaces` an, die Tabelle der Workspaces (ADR-0002). Schlägt eine davon fehl, meldet das Log `instance failed to start` mit `reason` `core_schema_not_migrated`, und die Instanz lädt keine Plugins.
 - Jeder Migrationslauf (erst `core`, dann die Schemas der Plugins) hält dieselbe Postgres-Advisory-Lock. Starten zwei Prozesse gleichzeitig, wartet der zweite (Log-Eintrag `migration lock held by another run, waiting`) und wendet nichts doppelt an. Ein Signal beendet das Warten; eine laufende Migration läuft zu Ende, weitere beginnen nicht. Jede Anweisung eines Laufs darf höchstens 60 s dauern, das Warten auf Tabellensperren eingeschlossen; dauert sie länger, schlägt die Migration fehl (`migration failed`) und der Lauf gibt die Lock frei (Begründung in ADR-0008).
 - Schlägt eine Migration fehl, wird sie zurückgerollt; die folgenden Migrationen desselben Schemas laufen nicht, die anderer Schemas schon. Das Log nennt Schema, Migration und Fehler (`migration failed`), das Plugin wird nicht geladen (`migration_failed`), und die Instanz meldet nicht „bereit“.
 - Nennt die `package.json` Migrationen, deklariert das Manifest aber nicht `database`, ist das Manifest ungültig.
+
+### Operationen
+
+Ein Plugin deklariert seine Operationen in `definePlugin({ manifest, operations })`, jede mit `defineOperation()` aus `@workbench/sdk`:
+
+```ts
+const renameLabel = defineOperation({
+	name: "renameLabel",
+	kind: "mutation",
+	target: "workspace",
+	right: "board.label.edit",
+	input: z.object({ label: z.string().min(1) }),
+	output: z.object({ label: z.string() }),
+	execute: async (input, ctx) => ({ label: input.label }),
+});
+```
+
+- `name` ist Verb und Objekt in camelCase (`createLabel`). Die Registry vergibt den Namen `<plugin>.<name>`, hier `board.renameLabel`.
+- `kind` ist `query` (nur lesen) oder `mutation`, `target` ist `object` oder `workspace`. Bisher wird `target` nur beim Laden geprüft; die Pipeline ruft jede Operation auf einem Workspace auf. Operationen auf einem einzelnen Objekt (`object`) folgen in einem späteren Ticket.
+- `right` nennt genau ein Recht des eigenen Plugins: `<plugin>.` gefolgt von Abschnitten aus Kleinbuchstaben, Ziffern und Bindestrichen, durch Punkte getrennt (`board.label.edit`). Das Recht wird bisher nur beim Laden geprüft, aber beim Aufruf nicht durchgesetzt: Jeder Akteur darf jede Operation aufrufen. Die Prüfung folgt in einem späteren Ticket mit Identität und Zugriff.
+- `input` und `output` sind Schemas nach [Standard Schema](https://standardschema.dev), etwa von zod 4 (ADR-0010).
+
+Eine Operation mit unbekannter Art oder unbekanntem Ziel, ohne Recht oder mit mehreren, mit dem Recht eines anderen Plugins, ohne Schema, ohne `execute` oder mit einem Namen, den das Plugin schon deklariert, macht das Plugin ungültig: Es wird nicht geladen (`invalid_manifest`), und `detail` nennt jede fehlerhafte Operation.
+
+### Aufruf einer Operation
+
+Ein Akteur ruft eine Operation mit ihrem Namen, einem Workspace und einer Eingabe auf. Die Pipeline des Cores
+
+1. sucht die Operation unter den Operationen der aktiven Plugins,
+2. prüft die Eingabe gegen das Eingabe-Schema,
+3. öffnet eine Transaktion, für eine `query` nur lesend, mit dem Schema des Plugins als `search_path`,
+4. prüft, dass der Workspace in `core.workspaces` existiert,
+5. führt `execute(input, ctx)` aus; `ctx` nennt `actor`, `workspace`, `sql` (die Transaktion als Tagged Template), `now()`, `newId()` und `random()`,
+6. bildet den Rückgabewert über das Ausgabe-Schema ab und schreibt die Transaktion fest.
+
+Wirft `execute` oder passt die Ausgabe nicht zum Schema, wird die Transaktion zurückgerollt. Ein fachlicher Fehler ist ein `OperationError` aus `@workbench/sdk` mit Art (`not_found`, `conflict`, `rejected`), Code (Kleinbuchstaben, Ziffern, Unterstriche) und einer Meldung für den Aufrufer; der Aufrufer erhält den Code als `<plugin>.<code>`. Jeder andere Fehler erreicht den Aufrufer nur als `internal_error`.
+
+| Code                  | Art             | Bedeutung                                                                                                                                           |
+| --------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `invalid_input`       | `invalid_input` | Die Eingabe passt nicht zum Eingabe-Schema; `issues` nennt je Befund Pfad und Meldung.                                                              |
+| `unknown_operation`   | `not_found`     | Kein aktives Plugin hat eine Operation dieses Namens registriert.                                                                                   |
+| `workspace_not_found` | `not_found`     | Der Workspace existiert nicht.                                                                                                                      |
+| `internal_error`      | `internal`      | `execute` warf einen anderen Fehler als `OperationError`, die Ausgabe passt nicht zum Schema, oder die Pipeline scheiterte außerhalb von `execute`. |
+| `<plugin>.<code>`     | aus dem Fehler  | `execute` warf einen `OperationError`.                                                                                                              |
+
+Ein `internal_error` steht mit `correlationId`, `operation` und `reason` im Log als Eintrag `operation failed`: `execute_threw`, wenn `execute` warf, mit dem Fehler in `error`; `invalid_output` mit den Befunden des Ausgabe-Schemas in `issues`; oder `pipeline_failed`, wenn die Pipeline außerhalb von `execute` scheiterte (etwa ein Schema, das wirft oder ein Ergebnis liefert, das nicht Standard Schema entspricht, ein unerreichbares Postgres beim Öffnen der Transaktion oder beim Prüfen des Workspace, ein gescheitertes Festschreiben), mit dem Fehler in `error`.
+
+Jedes Scheitern lässt sich als Problem Details nach RFC 9457 abbilden (`toProblemDetails` in `packages/core/src/problem-details.ts`), mit `type` `urn:workbench:problem:<code>`, `title` und `status` nach der Art (`invalid_input` 400, `not_found` 404, `conflict` 409, `rejected` 422, `internal` 500), `detail`, `code`, `correlationId` und `issues`:
+
+```json
+{
+	"type": "urn:workbench:problem:invalid_input",
+	"title": "Bad Request",
+	"status": 400,
+	"detail": "the input does not match the input schema of the operation",
+	"code": "invalid_input",
+	"correlationId": "request-7",
+	"issues": [{ "path": ["title"], "message": "Too small" }]
+}
+```
+
+Die Pipeline prüft bisher weder Rechte noch Idempotency-Keys und schreibt kein Audit; das folgt mit Identität und Zugriff.
+
+### Test-Harness
+
+Plugins testen ihre Operationen als „Akteur ruft Operation auf“ gegen ein echtes Postgres (ADR-0011). Das Harness aus `@workbench/core/testing` legt eine eigene Datenbank an, migriert `core` und die Schemas der Plugins, aktiviert die Plugins und ruft Operationen über dieselbe Pipeline auf wie die Instanz:
+
+```ts
+import {
+	pluginPackageAt,
+	startOperationHarness,
+} from "@workbench/core/testing";
+
+const harness = await startOperationHarness({
+	plugins: [await pluginPackageAt(join(import.meta.dir, ".."))],
+});
+const workspace = await harness.createWorkspace("Alpha");
+const result = await harness.call({
+	actor: { kind: "user", id: "alice" },
+	workspace,
+	operation: "board.renameLabel",
+	input: { label: "Urgent" },
+});
+await harness.stop();
+```
+
+`result` ist `{ ok: true, output }` oder `{ ok: false, failure }` mit `code`, `kind`, `detail` und `issues`. Ohne Angabe gibt das Harness eine feste Uhr (`2026-11-26T08:00:00.000Z`), fortlaufende IDs im UUID-Format (`00000000-0000-4000-8000-000000000001`, …), `random()` = `0.5` und jedem Aufruf eine fortlaufende Correlation-ID (`harness-call-1`, …), unter der die Pipeline loggt; `now`, `newId`, `random` und `newCorrelationId` lassen sich als Optionen übergeben. Lädt ein Plugin nicht, wirft `startOperationHarness` einen `HarnessStartError` mit dem Ladefehler. `harness.logEntries` enthält die Log-Einträge.
+
+Das Referenz-Plugin bietet so die Mutation `reference.createNote` (Eingabe `title`, 1 bis 200 Zeichen nach Entfernen von Leerraum am Rand) und die Query `reference.listNotes` (Eingabe `limit`, 1 bis 100; die neuesten zuerst), beide auf den Notizen eines Workspaces in `plugin_reference.notes`. Seine Tests in `packages/plugin-reference/src/operations.test.ts` zeigen das Harness im Einsatz.
 
 ### Contract
 

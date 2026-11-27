@@ -1,0 +1,243 @@
+import {
+	type Actor,
+	type OperationContext,
+	OperationError,
+	type OperationErrorKind,
+	type OperationKind,
+} from "@workbench/sdk";
+import type { SQL } from "bun";
+import { describeThrown } from "./failure-reason.ts";
+import type { Logger } from "./logger.ts";
+import type {
+	OperationRegistry,
+	RegisteredOperation,
+} from "./operation-registry.ts";
+import { quote } from "./quote.ts";
+import { pluginSchemaName } from "./schema-name.ts";
+import type { ValidationIssue } from "./schema-validation.ts";
+import { workspaceExists } from "./workspaces.ts";
+
+export type OperationCall = {
+	readonly operation: string;
+	readonly actor: Actor;
+	readonly workspace: string;
+	readonly input: unknown;
+	readonly correlationId: string;
+};
+
+export type FailureKind = OperationErrorKind | "invalid_input" | "internal";
+
+export type OperationFailure = {
+	readonly code: string;
+	readonly kind: FailureKind;
+	readonly detail: string;
+	readonly issues: readonly ValidationIssue[];
+};
+
+export type OperationResult =
+	| { readonly ok: true; readonly output: unknown }
+	| { readonly ok: false; readonly failure: OperationFailure };
+
+export type OperationPipelineOptions = {
+	readonly sql: SQL;
+	readonly registry: OperationRegistry;
+	readonly now: () => Date;
+	readonly newId: () => string;
+	readonly random: () => number;
+	readonly logger: Logger;
+};
+
+export type OperationPipeline = {
+	invoke(call: OperationCall): Promise<OperationResult>;
+};
+
+const INTERNAL_ERROR: OperationFailure = {
+	code: "internal_error",
+	kind: "internal",
+	detail: "the operation failed for an internal reason",
+	issues: [],
+};
+
+const WORKSPACE_NOT_FOUND: OperationFailure = {
+	code: "workspace_not_found",
+	kind: "not_found",
+	detail: "the workspace does not exist",
+	issues: [],
+};
+
+class WorkspaceNotFoundError extends Error {
+	constructor() {
+		super(WORKSPACE_NOT_FOUND.detail);
+		this.name = "WorkspaceNotFoundError";
+	}
+}
+
+class InvalidOutputError extends Error {
+	readonly issues: readonly ValidationIssue[];
+
+	constructor(issues: readonly ValidationIssue[]) {
+		super("the output does not match the output schema of the operation");
+		this.name = "InvalidOutputError";
+		this.issues = issues;
+	}
+}
+
+class ExecuteThrewError extends Error {
+	constructor(cause: unknown) {
+		super("the execute function of the operation threw", { cause });
+		this.name = "ExecuteThrewError";
+	}
+}
+
+export function createOperationPipeline(
+	options: OperationPipelineOptions,
+): OperationPipeline {
+	return { invoke: (call) => invoke(call, options) };
+}
+
+async function invoke(
+	call: OperationCall,
+	options: OperationPipelineOptions,
+): Promise<OperationResult> {
+	const operation = options.registry.find(call.operation);
+	if (operation === undefined)
+		return failed({
+			code: "unknown_operation",
+			kind: "not_found",
+			detail: `no operation is named ${quote(call.operation)}`,
+			issues: [],
+		});
+	const logger = options.logger.with({
+		correlationId: call.correlationId,
+		operation: operation.name,
+	});
+	try {
+		const input = await operation.validateInput(call.input);
+		if (!input.valid)
+			return failed({
+				code: "invalid_input",
+				kind: "invalid_input",
+				detail: "the input does not match the input schema of the operation",
+				issues: input.issues,
+			});
+		const output = await inTransaction(
+			operation,
+			options.sql,
+			async (transaction) => {
+				await requireWorkspace(transaction, call.workspace);
+				return execute(
+					operation,
+					input.value,
+					contextOf(call, transaction, options),
+				);
+			},
+		);
+		return { ok: true, output };
+	} catch (error) {
+		return failed(logAndMapFailure(error, logger, operation.plugin));
+	}
+}
+
+const BEGIN_TRANSACTION: Record<
+	OperationKind,
+	(sql: SQL, body: (transaction: SQL) => Promise<unknown>) => Promise<unknown>
+> = {
+	query: (sql, body) => sql.begin("read only", body),
+	mutation: (sql, body) => sql.begin(body),
+};
+
+function inTransaction(
+	operation: RegisteredOperation,
+	sql: SQL,
+	run: (transaction: SQL) => Promise<unknown>,
+): Promise<unknown> {
+	const schema = pluginSchemaName(operation.plugin);
+	const body = async (transaction: SQL): Promise<unknown> => {
+		await transaction.unsafe(`SET LOCAL search_path TO "${schema}"`);
+		return run(transaction);
+	};
+	return BEGIN_TRANSACTION[operation.kind](sql, body);
+}
+
+async function requireWorkspace(
+	transaction: SQL,
+	workspace: string,
+): Promise<void> {
+	if (!(await workspaceExists(transaction, workspace)))
+		throw new WorkspaceNotFoundError();
+}
+
+function contextOf(
+	call: OperationCall,
+	transaction: SQL,
+	sources: Pick<OperationPipelineOptions, "now" | "newId" | "random">,
+): OperationContext {
+	return {
+		actor: call.actor,
+		workspace: call.workspace,
+		sql: transaction,
+		now: sources.now,
+		newId: sources.newId,
+		random: sources.random,
+	};
+}
+
+async function execute(
+	operation: RegisteredOperation,
+	input: unknown,
+	ctx: OperationContext,
+): Promise<unknown> {
+	const output = await operation.validateOutput(
+		await runExecute(operation, input, ctx),
+	);
+	if (!output.valid) throw new InvalidOutputError(output.issues);
+	return output.value;
+}
+
+async function runExecute(
+	operation: RegisteredOperation,
+	input: unknown,
+	ctx: OperationContext,
+): Promise<unknown> {
+	try {
+		return await operation.execute(input, ctx);
+	} catch (error) {
+		if (error instanceof OperationError) throw error;
+		throw new ExecuteThrewError(error);
+	}
+}
+
+function logAndMapFailure(
+	error: unknown,
+	logger: Logger,
+	plugin: string,
+): OperationFailure {
+	if (error instanceof WorkspaceNotFoundError) return WORKSPACE_NOT_FOUND;
+	if (error instanceof OperationError)
+		return {
+			code: `${plugin}.${error.code}`,
+			kind: error.kind,
+			detail: error.message,
+			issues: [],
+		};
+	if (error instanceof InvalidOutputError)
+		logger.error("operation failed", {
+			reason: "invalid_output",
+			issues: error.issues,
+		});
+	else if (error instanceof ExecuteThrewError)
+		logger.error("operation failed", {
+			reason: "execute_threw",
+			error: describeThrown(error.cause),
+		});
+	else
+		logger.error("operation failed", {
+			reason: "pipeline_failed",
+			error: describeThrown(error),
+		});
+	return INTERNAL_ERROR;
+}
+
+function failed(failure: OperationFailure): OperationResult {
+	return { ok: false, failure };
+}

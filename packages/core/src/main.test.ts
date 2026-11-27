@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import type { Subprocess, TCPSocketListener } from "bun";
+import { Glob, type Subprocess, type TCPSocketListener } from "bun";
+import { CORE_MIGRATIONS_DIRECTORY } from "./schema-migrations.ts";
 import {
 	createFreshDatabase,
 	type FreshDatabase,
@@ -8,6 +9,10 @@ import {
 } from "./testing/postgres.ts";
 
 const MAIN = new URL("./main.ts", import.meta.url).pathname;
+const REFERENCE_MIGRATIONS_DIRECTORY = new URL(
+	"../../plugin-reference/migrations/",
+	import.meta.url,
+).pathname;
 
 const instances: Subprocess[] = [];
 const databases: FreshDatabase[] = [];
@@ -273,16 +278,17 @@ describe("migrations at start", () => {
 			expect.objectContaining({
 				message: "migration applied",
 				schema: "plugin_reference",
-				migration: "0001_create_notes.sql",
 			}),
 		);
 		expect(ready.status).toBe(200);
 		expect(
-			await database.sql`SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema IN ('core', 'plugin_reference') ORDER BY table_schema, table_name`,
-		).toEqual([
-			{ table_schema: "core", table_name: "migrations" },
-			{ table_schema: "plugin_reference", table_name: "notes" },
-		]);
+			await database.sql`SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema IN ('core', 'plugin_reference')`,
+		).toEqual(
+			expect.arrayContaining([
+				{ table_schema: "core", table_name: "migrations" },
+				{ table_schema: "plugin_reference", table_name: "notes" },
+			]),
+		);
 	});
 
 	test("apply each migration once when two instances start against the same fresh database", async () => {
@@ -296,17 +302,28 @@ describe("migrations at start", () => {
 			readLog(second.stdout).until("instance started"),
 		]);
 
-		expect(
-			startups
-				.flat()
-				.filter((entry) => entry.message === "migration applied")
-				.map((entry) => entry.migration),
-		).toEqual(["0001_create_notes.sql"]);
-		expect(
-			await database.sql`SELECT schema_name, migration FROM core.migrations`,
-		).toEqual([
-			{ schema_name: "plugin_reference", migration: "0001_create_notes.sql" },
-		]);
+		const applied = startups
+			.flat()
+			.filter((entry) => entry.message === "migration applied")
+			.map(({ schema, migration }) => ({ schema, migration }));
+		const recorded = await database.sql<
+			{ schema: string; migration: string }[]
+		>`SELECT schema_name AS schema, migration FROM core.migrations`;
+		const onDisk = [
+			...(await Array.fromAsync(
+				new Glob("*.sql").scan(CORE_MIGRATIONS_DIRECTORY),
+			)),
+			...(await Array.fromAsync(
+				new Glob("*.sql").scan(REFERENCE_MIGRATIONS_DIRECTORY),
+			)),
+		];
+		expect(applied).not.toBeEmpty();
+		expect(applied).toHaveLength(recorded.length);
+		expect(applied).toEqual(expect.arrayContaining([...recorded]));
+		expect(recorded.map(({ migration }) => migration)).toEqual(
+			expect.arrayContaining(onDisk),
+		);
+		expect(recorded).toHaveLength(onDisk.length);
 	});
 
 	test("migrate nothing when the instance starts again", async () => {

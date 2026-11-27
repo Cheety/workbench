@@ -39,7 +39,7 @@ Die Ermessensfragen, die keine Prüfung entscheidet. Alles Mechanische prüft `b
 
 ## Kommentare
 
-- Ein Kommentar sagt nur, was der Code nicht zeigen kann: warum, etwa eine Bedingung von Postgres (`schema-migrations.ts`, Schlüssel der Advisory-Lock). Was der Code tut, sagen seine Namen; Entscheidungen stehen in ADRs.
+- Ein Kommentar sagt nur, was der Code nicht zeigen kann: warum, etwa eine Bedingung von Postgres. Was der Code tut, sagen seine Namen; Entscheidungen stehen in ADRs.
 
 ## Tests
 

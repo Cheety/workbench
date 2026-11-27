@@ -147,15 +147,23 @@ describe("waiting for the database", () => {
 });
 
 describe("full jitter backoff", () => {
-	test("draws each delay between zero and a doubling ceiling that stops at the cap", () => {
-		const delay = fullJitterBackoff({
-			baseMs: 250,
-			capMs: 2000,
-			random: () => 0.5,
-		});
+	test.each([
+		["zero", 0, [0, 0, 0, 0, 0, 0]],
+		[
+			"just under the doubling ceiling",
+			0.9999,
+			[249, 499, 999, 1999, 1999, 1999],
+		],
+	])(
+		"draws each delay at %s when the random draw is %d, with the ceiling stopping at the cap",
+		(_bound, draw, delaysMs) => {
+			const delay = fullJitterBackoff({
+				baseMs: 250,
+				capMs: 2000,
+				random: () => draw,
+			});
 
-		expect([0, 1, 2, 3, 4, 10].map(delay)).toEqual([
-			125, 250, 500, 1000, 1000, 1000,
-		]);
-	});
+			expect([0, 1, 2, 3, 4, 10].map(delay)).toEqual(delaysMs);
+		},
+	);
 });
