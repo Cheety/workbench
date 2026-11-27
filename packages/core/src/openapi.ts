@@ -1,0 +1,172 @@
+import { fileURLToPath } from "node:url";
+import { DATABASE_CAPABILITY } from "@workbench/sdk";
+import { setSystemTimer } from "./hook-timeout.ts";
+import { OPERATION_PATH_TEMPLATE } from "./http-api.ts";
+import type { JsonSchema } from "./json-schema.ts";
+import type { PluginPackage } from "./kernel.ts";
+import type { RegisteredOperation } from "./operation-registry.ts";
+import { catalogPlugins } from "./plugin-catalog.ts";
+import { PROBLEM_CONTENT_TYPE } from "./problem-details.ts";
+
+export const OPENAPI_DOCUMENT_PATH = fileURLToPath(
+	new URL("../../../docs/openapi.json", import.meta.url),
+);
+
+const OPENAPI_VERSION = "3.1.1";
+
+const API_VERSION = "1";
+
+const JSON_CONTENT_TYPE = "application/json";
+
+const LOAD_TIMEOUT_MS = 10_000;
+
+const PROBLEM_DETAILS_REF = "#/components/schemas/ProblemDetails";
+
+type Content = {
+	readonly [contentType: string]: { readonly schema: JsonSchema };
+};
+
+export type OpenApiOperation = {
+	readonly operationId: string;
+	readonly "x-workbench-kind": string;
+	readonly "x-workbench-right": string;
+	readonly parameters: readonly JsonSchema[];
+	readonly requestBody: { readonly required: true; readonly content: Content };
+	readonly responses: {
+		readonly [status: string]: {
+			readonly description: string;
+			readonly content: Content;
+		};
+	};
+};
+
+export type OpenApiDocument = {
+	readonly openapi: string;
+	readonly info: { readonly title: string; readonly version: string };
+	readonly security: readonly JsonSchema[];
+	readonly components: JsonSchema;
+	readonly paths: {
+		readonly [path: string]: { readonly post: OpenApiOperation } | undefined;
+	};
+};
+
+export class HttpApiDescriptionError extends Error {
+	constructor(detail: string) {
+		super(`the HTTP API cannot be described: ${detail}`);
+		this.name = "HttpApiDescriptionError";
+	}
+}
+
+const PROBLEM_DETAILS_SCHEMA: JsonSchema = {
+	type: "object",
+	properties: {
+		type: { type: "string" },
+		title: { type: "string" },
+		status: { type: "integer" },
+		detail: { type: "string" },
+		code: { type: "string" },
+		correlationId: { type: "string" },
+		issues: {
+			type: "array",
+			items: {
+				type: "object",
+				properties: {
+					path: {
+						type: "array",
+						items: { type: ["string", "integer"] },
+					},
+					message: { type: "string" },
+				},
+				required: ["path", "message"],
+			},
+		},
+	},
+	required: [
+		"type",
+		"title",
+		"status",
+		"detail",
+		"code",
+		"correlationId",
+		"issues",
+	],
+};
+
+const PROBLEM_CONTENT: Content = {
+	[PROBLEM_CONTENT_TYPE]: { schema: { $ref: PROBLEM_DETAILS_REF } },
+};
+
+export async function describeHttpApi(
+	packages: readonly PluginPackage[],
+): Promise<OpenApiDocument> {
+	const operations = await operationsOf(packages);
+	return {
+		openapi: OPENAPI_VERSION,
+		info: { title: "Workbench HTTP API", version: API_VERSION },
+		security: [{ apiToken: [] }],
+		components: {
+			securitySchemes: { apiToken: { type: "http", scheme: "bearer" } },
+			schemas: { ProblemDetails: PROBLEM_DETAILS_SCHEMA },
+		},
+		paths: Object.fromEntries(
+			operations
+				.toSorted((left, right) => left.name.localeCompare(right.name))
+				.map((operation) => [
+					OPERATION_PATH_TEMPLATE.replace("{operation}", operation.name),
+					{ post: describeOperation(operation) },
+				]),
+		),
+	};
+}
+
+async function operationsOf(
+	packages: readonly PluginPackage[],
+): Promise<readonly RegisteredOperation[]> {
+	const catalog = catalogPlugins(packages, [DATABASE_CAPABILITY], {
+		ms: LOAD_TIMEOUT_MS,
+		setTimer: setSystemTimer,
+	});
+	const operations: RegisteredOperation[] = [];
+	for (const { pluginName } of packages) {
+		const load = await catalog.load(pluginName);
+		if (!load.loaded) throw new HttpApiDescriptionError(load.failure.detail);
+		operations.push(...load.plugin.operations);
+	}
+	return operations;
+}
+
+function describeOperation(operation: RegisteredOperation): OpenApiOperation {
+	return {
+		operationId: operation.name,
+		"x-workbench-kind": operation.kind,
+		"x-workbench-right": operation.right,
+		parameters: [
+			{
+				name: "workspace",
+				in: "path",
+				required: true,
+				schema: { type: "string", format: "uuid" },
+			},
+		],
+		requestBody: {
+			required: true,
+			content: { [JSON_CONTENT_TYPE]: { schema: operation.describeInput() } },
+		},
+		responses: {
+			"200": {
+				description: "the output of the operation",
+				content: {
+					[JSON_CONTENT_TYPE]: { schema: operation.describeOutput() },
+				},
+			},
+			"401": {
+				description: "the request carries no valid API token",
+				content: PROBLEM_CONTENT,
+			},
+			default: {
+				description: "the operation failed",
+				content: PROBLEM_CONTENT,
+			},
+		},
+	};
+}

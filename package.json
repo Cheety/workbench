@@ -10,7 +10,8 @@
 		"style": "biome ci .",
 		"format": "biome check --write .",
 		"typecheck": "tsc --noEmit",
-		"test": "bun test"
+		"test": "bun test",
+		"openapi": "bun packages/core/src/write-openapi.ts && biome format --write docs/openapi.json"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.6.9",

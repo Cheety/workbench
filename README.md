@@ -264,6 +264,16 @@ Das Kommando liest dieselben Umgebungsvariablen wie die Instanz (mindestens `DAT
 
 Scope (Operationen, Workspaces), Widerruf und Rechte folgen mit Identität und Zugriff; bisher darf jedes gültige Token jede Operation in jedem Workspace aufrufen.
 
+#### API-Vertrag
+
+`docs/openapi.json` beschreibt die HTTP-API als OpenAPI 3.1, erzeugt aus den Operationen aller Plugin-Pakete im Repository:
+
+```sh
+bun run openapi
+```
+
+Jede Operation erscheint mit ihrem Namen als `operationId`, Art und Recht als `x-workbench-kind` und `x-workbench-right`, Ein- und Ausgabe-Schema als JSON Schema und Problem Details für jedes Scheitern. Die Schemas kommen aus [Standard JSON Schema](https://standardschema.dev) (`~standard.jsonSchema`, etwa von zod 4); ein Schema ohne diese Erweiterung erscheint als `{}`. `bun run check` scheitert, wenn die Datei nicht zu den Operationen passt; dann `bun run openapi` ausführen und das Ergebnis committen.
+
 ### Contract
 
 Ein Plugin importiert aus einem anderen Plugin nur dessen Contract (ADR-0004). Ein Plugin-Paket veröffentlicht ihn als Subpath-Export `./contract`, der genau eine Datei nennt:

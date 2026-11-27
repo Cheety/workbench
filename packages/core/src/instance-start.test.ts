@@ -219,6 +219,8 @@ describe("operations of an instance", () => {
 		right: "board.label.edit",
 		validateInput: async (value) => ({ valid: true, value }),
 		validateOutput: async (value) => ({ valid: true, value }),
+		describeInput: () => ({}),
+		describeOutput: () => ({}),
 		execute: async () => ({}),
 	};
 
