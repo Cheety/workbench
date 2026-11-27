@@ -53,6 +53,12 @@ type EventNameParts = Pick<EventDefinition<unknown>, "plugin" | "name">;
 
 const EVENT_NAME_SEPARATOR = ".";
 
+const EVENT_DEFINITION_NAME = /^[A-Z][A-Za-z0-9]*$/;
+
+export function isEventDefinitionName(name: unknown): name is string {
+	return typeof name === "string" && EVENT_DEFINITION_NAME.test(name);
+}
+
 export function eventName(event: EventNameParts): string {
 	return `${event.plugin}${EVENT_NAME_SEPARATOR}${event.name}`;
 }

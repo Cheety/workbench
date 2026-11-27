@@ -3,6 +3,7 @@ import {
 	eventName,
 	eventNameParts,
 	eventSubscriptionCapability,
+	isEventDefinitionName,
 	type PublishedEvent,
 	subscribedEventOf,
 } from "@workbench/sdk";
@@ -47,15 +48,13 @@ export type SubscriptionsRead = {
 	readonly problems: readonly string[];
 };
 
-const EVENT_NAME = /^[A-Z][A-Za-z0-9]*$/;
-
 export function isEventSubscriptionCapability(capability: string): boolean {
 	const event = subscribedEventOf(capability);
 	const parts = event === undefined ? undefined : eventNameParts(event);
 	return (
 		parts !== undefined &&
 		isPluginName(parts.plugin) &&
-		EVENT_NAME.test(parts.name)
+		isEventDefinitionName(parts.name)
 	);
 }
 
@@ -123,7 +122,7 @@ function readDefinition(
 		return invalid(
 			`${subject}.plugin must be the name of the publishing plugin`,
 		);
-	if (typeof name !== "string" || !EVENT_NAME.test(name))
+	if (!isEventDefinitionName(name))
 		return invalid(
 			`${subject}.name must be in PascalCase, such as "WorkspaceRenamed"`,
 		);
