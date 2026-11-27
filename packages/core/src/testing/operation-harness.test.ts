@@ -44,13 +44,26 @@ const drawId = defineOperation({
 	execute: async (_input, ctx) => ({ id: ctx.newId() }),
 });
 
+const nameDatabase = defineOperation({
+	name: "nameDatabase",
+	kind: "query",
+	target: "workspace",
+	right: "ledger.entry.read",
+	input: z.object({}),
+	output: z.object({ name: z.string() }),
+	execute: async (_input, ctx) => {
+		const [row] = await ctx.sql`SELECT current_database() AS name`;
+		return z.object({ name: z.string() }).parse(row);
+	},
+});
+
 const ledger: PluginPackage = {
 	packageName: "@workbench/plugin-ledger",
 	pluginName: "ledger",
 	version: "1.0.0",
 	loadDefinition: async () => ({
 		...definePlugin({ manifest: { name: "ledger" } }),
-		operations: [describeCall, drawId],
+		operations: [describeCall, drawId, nameDatabase],
 	}),
 };
 
@@ -67,12 +80,25 @@ const unstoppable: PluginPackage = {
 		}),
 };
 
-async function countTestDatabases(): Promise<number> {
+async function databaseOf(harness: OperationHarness): Promise<string> {
+	const named = await harness.call({
+		actor: ALICE,
+		workspace: await harness.createWorkspace("Accounts"),
+		operation: "ledger.nameDatabase",
+		input: {},
+	});
+	return z
+		.object({ ok: z.literal(true), output: z.object({ name: z.string() }) })
+		.parse(named).output.name;
+}
+
+async function existingDatabasesNamed(name: string): Promise<unknown[]> {
 	const admin = new SQL(TEST_DATABASE_URL, { max: 1 });
-	const [row] =
-		await admin`SELECT count(*)::int AS databases FROM pg_database WHERE datname LIKE 'workbench\_test\_%'`;
-	await admin.close();
-	return z.object({ databases: z.number() }).parse(row).databases;
+	try {
+		return await admin`SELECT datname FROM pg_database WHERE datname = ${name}`;
+	} finally {
+		await admin.close();
+	}
 }
 
 const harnesses: OperationHarness[] = [];
@@ -93,11 +119,24 @@ async function startLedger(
 }
 
 describe("the operation harness", () => {
-	test("drops its database even when deactivating the plugins fails", async () => {
-		const databases = await countTestDatabases();
-		const harness = await startOperationHarness({ plugins: [unstoppable] });
+	test("has a database of its own while it runs and drops it when stopped", async () => {
+		const harness = await startOperationHarness({ plugins: [ledger] });
+		const database = await databaseOf(harness);
+		const whileRunning = await existingDatabasesNamed(database);
 
-		await harness.stop().catch(() => undefined);
+		await harness.stop();
+
+		expect(whileRunning).toEqual([{ datname: database }]);
+		expect(await existingDatabasesNamed(database)).toEqual([]);
+	});
+
+	test("drops its database when stopped although a plugin fails to deactivate, and logs the failure", async () => {
+		const harness = await startOperationHarness({
+			plugins: [ledger, unstoppable],
+		});
+		const database = await databaseOf(harness);
+
+		await harness.stop();
 
 		expect(harness.logEntries).toContainEqual(
 			expect.objectContaining({
@@ -105,7 +144,7 @@ describe("the operation harness", () => {
 				plugin: "unstoppable",
 			}),
 		);
-		expect(await countTestDatabases()).toBe(databases);
+		expect(await existingDatabasesNamed(database)).toEqual([]);
 	});
 
 	test("gives the operation a fixed clock, sequential ids and a fixed random number by default", async () => {
