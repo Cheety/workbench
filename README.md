@@ -173,6 +173,20 @@ Wirft `execute` oder passt die Ausgabe nicht zum Schema, wird die Transaktion zu
 
 Ein `internal_error` steht mit `correlationId`, `operation` und `reason` im Log als Eintrag `operation failed`: `use_case_failed` mit dem Fehler in `error`, oder `invalid_output` mit den Befunden des Ausgabe-Schemas in `issues`.
 
+Jedes Scheitern lässt sich als Problem Details nach RFC 9457 abbilden (`toProblemDetails` in `packages/core/src/problem-details.ts`), mit `type` `urn:workbench:problem:<code>`, `title` und `status` nach der Art (`invalid_input` 400, `not_found` 404, `conflict` 409, `rejected` 422, `internal` 500), `detail`, `code`, `correlationId` und `issues`:
+
+```json
+{
+	"type": "urn:workbench:problem:invalid_input",
+	"title": "Bad Request",
+	"status": 400,
+	"detail": "the input does not match the input schema of the operation",
+	"code": "invalid_input",
+	"correlationId": "request-7",
+	"issues": [{ "path": ["title"], "message": "Too small" }]
+}
+```
+
 Die Pipeline prüft bisher weder Rechte noch Idempotency-Keys und schreibt kein Audit; das folgt mit Identität und Zugriff.
 
 ### Test-Harness
