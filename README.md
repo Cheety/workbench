@@ -76,7 +76,7 @@ export default definePlugin({
 });
 ```
 
-- `name` ist der Name, unter dem die Instanz-Config und andere Plugins das Plugin ansprechen: Kleinbuchstaben, Ziffern und Bindestriche, beginnend mit einem Buchstaben, höchstens 56 Zeichen, damit der Name seines Schemas (`plugin_<name>`) in die 63 Zeichen passt, die Postgres für Namen vorsieht. Er muss dem Namen in der `package.json` gleichen. Die Version ist die `version` der `package.json`.
+- `name` ist der Name, unter dem die Instanz-Config und andere Plugins das Plugin ansprechen: Kleinbuchstaben, Ziffern und Bindestriche, beginnend mit einem Buchstaben, höchstens 56 Zeichen, damit der Name seines Schemas (`plugin_<name>`) in die 63 Zeichen passt, die Postgres für Namen vorsieht. Er muss dem Namen in der `package.json` gleichen. `core` ist vergeben: Unter `core.<name>` bietet der Core eigene Operationen an, und ein Plugin dieses Namens ist ungültig (`invalid_manifest`). Die Version ist die `version` der `package.json`.
 - `requires` nennt vorausgesetzte Plugins mit SemVer-Range (`^`, `~`, Vergleichsoperatoren, `x`/`*`, mit Leerzeichen oder `||` kombiniert).
 - `capabilities` nennt die Capabilities, die das Plugin braucht. `ctx.capability(name)` liefert nur deklarierte und wirft sonst einen Fehler. Der Core bietet bisher nur `database` an (`DATABASE_CAPABILITY` aus `@workbench/sdk`); ein Manifest, das eine unbekannte deklariert, ist ungültig.
 

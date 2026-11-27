@@ -40,7 +40,7 @@ const OPERATION_NAME = /^[a-z]+(?:[A-Z][a-z0-9]*)+$/;
 
 const RIGHT_NAME = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*$/;
 
-const CORE_OWNER_NAME = "core";
+export const CORE_OWNER_NAME = "core";
 
 export function ownerName(owner: OperationOwner): string {
 	switch (owner.kind) {
