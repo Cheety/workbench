@@ -37,6 +37,7 @@ export type OperationHarnessOptions = {
 	readonly plugins: readonly PluginPackage[];
 	readonly now?: () => Date;
 	readonly newId?: () => string;
+	readonly newAuditEntryId?: () => string;
 	readonly random?: () => number;
 	readonly newCorrelationId?: () => string;
 };
@@ -155,7 +156,8 @@ function harnessOf(
 		events: plugins.events,
 		now,
 		newId,
-		newAuditEntryId: sequentialIds(AUDIT_ENTRY_ID_GROUP),
+		newAuditEntryId:
+			options.newAuditEntryId ?? sequentialIds(AUDIT_ENTRY_ID_GROUP),
 		newEventId: sequentialIds(EVENT_ID_GROUP),
 		eventsCommitted: () => {},
 		jobs: plugins.jobs,

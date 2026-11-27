@@ -247,4 +247,40 @@ describe("the operation harness", () => {
 			},
 		});
 	});
+
+	test("gives audit entries the ids a test passes", async () => {
+		const ids = [
+			"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+			"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+		];
+		const harness = await startLedger({
+			newAuditEntryId: () => ids.shift() ?? "exhausted",
+		});
+		const workspace = await harness.createWorkspace("Accounts");
+		await harness.call({
+			actor: ALICE,
+			workspace,
+			operation: "ledger.drawId",
+			input: {},
+		});
+
+		const audit = await harness.call({
+			actor: ALICE,
+			workspace,
+			operation: "core.listAuditEntries",
+			input: { limit: 10, cursor: null },
+		});
+
+		expect(audit).toEqual({
+			ok: true,
+			output: {
+				entries: [
+					expect.objectContaining({
+						id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+					}),
+				],
+				nextCursor: null,
+			},
+		});
+	});
 });
