@@ -168,6 +168,7 @@ function harnessOf(
 	});
 	const delivery = createEventDelivery({
 		sql: database.sql,
+		cancellation: database.cancellation,
 		events: plugins.events,
 		now,
 		newId,
@@ -177,6 +178,7 @@ function harnessOf(
 	});
 	const jobQueue = createJobQueue({
 		sql: database.sql,
+		cancellation: database.cancellation,
 		jobs: plugins.jobs,
 		now,
 		newId,

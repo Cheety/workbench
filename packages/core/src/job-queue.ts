@@ -68,6 +68,7 @@ export async function enqueueJob(
 
 export type JobQueueOptions = {
 	readonly sql: SQL;
+	readonly cancellation: SQL;
 	readonly jobs: JobRegistry;
 	readonly now: () => Date;
 	readonly newId: () => string;
@@ -393,7 +394,7 @@ async function run(
 	job: RegisteredJob,
 	options: Pick<
 		JobQueueOptions,
-		"now" | "newId" | "random" | "runTimeout" | "logger"
+		"now" | "newId" | "random" | "runTimeout" | "cancellation" | "logger"
 	>,
 ): Promise<void> {
 	await transaction.unsafe(
@@ -403,7 +404,11 @@ async function run(
 		transaction,
 		async () =>
 			callRun(await callOf(job, claimed), contextOf(transaction, options)),
-		{ timeout: options.runTimeout, logger: loggerOf(claimed, options) },
+		{
+			timeout: options.runTimeout,
+			cancellation: options.cancellation,
+			logger: loggerOf(claimed, options),
+		},
 	);
 	if (outcome === "timed_out")
 		throw new JobFailedError({

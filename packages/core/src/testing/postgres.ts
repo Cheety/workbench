@@ -1,5 +1,6 @@
 import { type Socket, SQL, type TCPSocketListener } from "bun";
 import { z } from "zod";
+import { openStatementCancellation } from "../transaction-deadline.ts";
 
 const DEFAULT_TEST_DATABASE_URL =
 	"postgres://workbench:workbench@127.0.0.1:54329/workbench_test";
@@ -52,9 +53,12 @@ function oncePerProcess(run: () => Promise<void>): () => Promise<void> {
 
 const testDatabaseIsSupported = oncePerProcess(assertTestDatabaseIsSupported);
 
+const CANCELLATION_STATEMENT_TIMEOUT_MS = 60_000;
+
 export type FreshDatabase = {
 	readonly url: string;
 	readonly sql: SQL;
+	readonly cancellation: SQL;
 	drop(): Promise<void>;
 };
 
@@ -66,10 +70,16 @@ export async function createFreshDatabase(): Promise<FreshDatabase> {
 	const url = new URL(TEST_DATABASE_URL);
 	url.pathname = `/${name}`;
 	const sql = new SQL(url.href, { max: 1 });
+	const cancellation = openStatementCancellation(
+		url.href,
+		CANCELLATION_STATEMENT_TIMEOUT_MS,
+	);
 	return {
 		url: url.href,
 		sql,
+		cancellation,
 		drop: async () => {
+			await cancellation.close();
 			await sql.close();
 			await admin.unsafe(`DROP DATABASE ${name} WITH (FORCE)`);
 			await admin.close();

@@ -232,7 +232,7 @@ async function publishLabelRenamed(
 }
 
 async function deliveredPayloads<Payload>(
-	sql: SQL,
+	database: FreshDatabase,
 	definition: EventDefinition<Payload>,
 	payload: Payload,
 ): Promise<Payload[]> {
@@ -243,8 +243,13 @@ async function deliveredPayloads<Payload>(
 			received.push(event.payload);
 		}),
 	);
+	const { sql } = database;
 	await publish({ sql, events }, definition, payload);
-	await deliveryOf({ sql, events }).delivery.deliverDue(NOT_STOPPED);
+	await deliveryOf({
+		sql,
+		cancellation: database.cancellation,
+		events,
+	}).delivery.deliverDue(NOT_STOPPED);
 	return received;
 }
 
@@ -306,6 +311,7 @@ async function attemptsOf(sql: SQL, eventId: string): Promise<unknown[]> {
 
 type DeliveryScenario = {
 	readonly sql: SQL;
+	readonly cancellation: SQL;
 	readonly events: EventRegistry;
 	readonly now?: () => Date;
 	readonly random?: () => number;
@@ -316,6 +322,7 @@ function deliveryOf(scenario: DeliveryScenario) {
 	const { logger, entries } = recordingLogger();
 	const delivery = createEventDelivery({
 		sql: scenario.sql,
+		cancellation: scenario.cancellation,
 		events: scenario.events,
 		now: scenario.now ?? (() => NOW),
 		newId: () => "00000000-0000-4000-8000-000000000001",
@@ -412,6 +419,7 @@ describe("event delivery", () => {
 		await publishLabelRenamed(database.sql, events, EVENT);
 		const { delivery, entries } = deliveryOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			events,
 			now: () => now,
 			handlerTimeout: { ms: 250, setTimer: timer.setTimer },
@@ -452,6 +460,7 @@ describe("event delivery", () => {
 		await publishLabelRenamed(database.sql, events, EVENT);
 		const { delivery, entries } = deliveryOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			events,
 			handlerTimeout: { ms: 250, setTimer: timer.setTimer },
 		});
@@ -487,6 +496,7 @@ describe("event delivery", () => {
 		await publishLabelRenamed(database.sql, events, EVENT);
 		const { delivery, entries } = deliveryOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			events,
 			now: () => now,
 			random: () => {
@@ -522,6 +532,7 @@ describe("event delivery", () => {
 		await publishLabelRenamed(database.sql, events, EVENT);
 		const { delivery, entries } = deliveryOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			events,
 			now: clock.now,
 			random: () => 0.999,
@@ -573,11 +584,13 @@ describe("event delivery", () => {
 
 		await deliveryOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			events: registryOf(subscription("statistics", async () => {})),
 		}).delivery.deliverDue(NOT_STOPPED);
 		const handledWhileInactive = [...handled];
 		await deliveryOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			events: withSearch,
 		}).delivery.deliverDue(NOT_STOPPED);
 
@@ -589,6 +602,7 @@ describe("event delivery", () => {
 		const database = await freshDatabase();
 		const { delivery } = deliveryOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			events: registerEvents({ active: [], notActive: [] }),
 		});
 
@@ -613,10 +627,15 @@ describe("event delivery", () => {
 
 		const first = deliveryOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			events,
 		}).delivery.deliverDue(NOT_STOPPED);
 		await entered.promise;
-		await deliveryOf({ sql: second, events }).delivery.deliverDue(NOT_STOPPED);
+		await deliveryOf({
+			sql: second,
+			cancellation: database.cancellation,
+			events,
+		}).delivery.deliverDue(NOT_STOPPED);
 		release.resolve();
 		await first;
 
@@ -638,9 +657,11 @@ describe("event delivery", () => {
 		await publishLabelRenamed(database.sql, events, LATER_EVENT);
 		await publishLabelRenamed(database.sql, events, EVENT);
 
-		await deliveryOf({ sql: database.sql, events }).delivery.deliverDue(
-			NOT_STOPPED,
-		);
+		await deliveryOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			events,
+		}).delivery.deliverDue(NOT_STOPPED);
 
 		expect(handled).toEqual([
 			`archive ${LATER_EVENT}`,
@@ -666,9 +687,11 @@ describe("event delivery", () => {
 			CORE_MIGRATIONS_DIRECTORY,
 			NOT_STOPPED,
 		);
-		await deliveryOf({ sql: database.sql, events }).delivery.deliverDue(
-			NOT_STOPPED,
-		);
+		await deliveryOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			events,
+		}).delivery.deliverDue(NOT_STOPPED);
 
 		expect(migration).toBe("migrated");
 		expect(handled).toEqual([LATER_EVENT, EVENT]);
@@ -686,7 +709,11 @@ describe("event delivery", () => {
 		);
 		await publishLabelRenamed(database.sql, events, EVENT);
 		await publishLabelRenamed(database.sql, events, LATER_EVENT);
-		const { delivery } = deliveryOf({ sql: database.sql, events });
+		const { delivery } = deliveryOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			events,
+		});
 
 		await delivery.deliverDue(stopping.signal);
 		const handledUntilStopped = [...handled];
@@ -713,7 +740,11 @@ describe("a delivery that fails outside its handler", () => {
 		);
 		await publishLabelRenamed(database.sql, events, EVENT);
 		await publishLabelRenamed(database.sql, events, LATER_EVENT);
-		const { delivery, entries } = deliveryOf({ sql: database.sql, events });
+		const { delivery, entries } = deliveryOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			events,
+		});
 
 		await delivery.deliverDue(NOT_STOPPED);
 		await delivery.deliverDue(NOT_STOPPED);
@@ -744,7 +775,11 @@ describe("a delivery that fails outside its handler", () => {
 			}),
 		);
 		await publishLabelRenamed(database.sql, events, EVENT);
-		const { delivery, entries } = deliveryOf({ sql: database.sql, events });
+		const { delivery, entries } = deliveryOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			events,
+		});
 
 		await delivery.deliverDue(NOT_STOPPED);
 
@@ -779,6 +814,7 @@ describe("a handler that timed out", () => {
 		await publishLabelRenamed(database.sql, events, EVENT);
 		const { delivery, entries } = deliveryOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			events,
 			handlerTimeout: { ms: 250, setTimer: timer.setTimer },
 		});
@@ -813,6 +849,7 @@ describe("a handler whose time is up while a statement of it is running", () => 
 			await publishLabelRenamed(sql, events, EVENT);
 			const { delivery, entries } = deliveryOf({
 				sql,
+				cancellation: database.cancellation,
 				events,
 				handlerTimeout: { ms: 250, setTimer: timer.setTimer },
 			});
@@ -839,6 +876,7 @@ describe("a handler whose time is up while a statement of it is running", () => 
 		await publishLabelRenamed(database.sql, events, EVENT);
 		const { delivery, entries } = deliveryOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			events,
 			handlerTimeout: { ms: 250, setTimer: timer.setTimer },
 		});
@@ -887,7 +925,7 @@ describe("the payload of an event", () => {
 		const database = await migratedDatabase();
 
 		const delivered = await deliveredPayloads(
-			database.sql,
+			database,
 			boardEvent(z.coerce.date()),
 			NOW,
 		);
@@ -908,7 +946,7 @@ describe("the payload of an event", () => {
 		const database = await migratedDatabase();
 
 		const delivered = await deliveredPayloads(
-			database.sql,
+			database,
 			boardEvent<unknown>(z.unknown()),
 			payload,
 		);
@@ -929,7 +967,11 @@ describe("the event delivery loop on the outbox", () => {
 			}),
 		);
 		await publishLabelRenamed(database.sql, events, EVENT);
-		const { delivery } = deliveryOf({ sql: database.sql, events });
+		const { delivery } = deliveryOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			events,
+		});
 		const loop = startPollLoop({
 			run: (stopSignal) => delivery.deliverDue(stopSignal),
 			failureMessage: "event delivery failed",

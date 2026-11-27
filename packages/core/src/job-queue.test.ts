@@ -121,6 +121,7 @@ async function enqueueReminder(
 
 type QueueScenario = {
 	readonly sql: SQL;
+	readonly cancellation: SQL;
 	readonly jobs: JobRegistry;
 	readonly now?: () => Date;
 	readonly random?: () => number;
@@ -132,6 +133,7 @@ function queueOf(scenario: QueueScenario) {
 	const { logger, entries } = recordingLogger();
 	const queue = createJobQueue({
 		sql: scenario.sql,
+		cancellation: scenario.cancellation,
 		jobs: scenario.jobs,
 		now: scenario.now ?? (() => NOW),
 		newId: () => "00000000-0000-4000-8000-000000000001",
@@ -207,7 +209,7 @@ async function enqueue<Payload>(
 }
 
 async function payloadsRunWith<Payload>(
-	sql: SQL,
+	database: FreshDatabase,
 	schema: JobDefinition<Payload>["payload"],
 	payload: Payload,
 ): Promise<Payload[]> {
@@ -220,8 +222,13 @@ async function payloadsRunWith<Payload>(
 			received.push(job.payload);
 		},
 	});
+	const { sql } = database;
 	await enqueue(sql, definition, payload);
-	const { queue } = queueOf({ sql, jobs: registryOf(definition) });
+	const { queue } = queueOf({
+		sql,
+		cancellation: database.cancellation,
+		jobs: registryOf(definition),
+	});
 	await queue.runDue(NOT_STOPPED);
 	return received;
 }
@@ -291,6 +298,7 @@ describe("a job that exceeds its timeout", () => {
 		await enqueueReminder(database.sql, jobs, JOB);
 		const { queue, entries } = queueOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			jobs,
 			now: () => now,
 			runTimeout: { ms: 250, setTimer: timer.setTimer },
@@ -330,6 +338,7 @@ describe("a job that exceeds its timeout", () => {
 		);
 		const { queue, entries } = queueOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			jobs: registryOf(sendReminderWithStalledSchema),
 			runTimeout: { ms: 250, setTimer: timer.setTimer },
 		});
@@ -369,6 +378,7 @@ describe("a job that exceeds its timeout", () => {
 		await enqueueReminder(database.sql, jobs, JOB);
 		const { queue, entries } = queueOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			jobs,
 			runTimeout: { ms: 250, setTimer: timer.setTimer },
 		});
@@ -404,6 +414,7 @@ describe("a job whose time is up while a statement of its run is running", () =>
 			await enqueueReminder(sql, jobs, JOB);
 			const { queue, entries } = queueOf({
 				sql,
+				cancellation: database.cancellation,
 				jobs,
 				runTimeout: { ms: 250, setTimer: timer.setTimer },
 			});
@@ -432,6 +443,7 @@ describe("a job whose time is up while a statement of its run is running", () =>
 		await enqueueReminder(database.sql, jobs, JOB);
 		const { queue, entries } = queueOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			jobs,
 			runTimeout: { ms: 250, setTimer: timer.setTimer },
 		});
@@ -483,7 +495,7 @@ describe("the payload of a job", () => {
 	test("reaches the run as its schema reads what the queue stored of it", async () => {
 		const database = await migratedDatabase();
 
-		const received = await payloadsRunWith(database.sql, z.coerce.date(), NOW);
+		const received = await payloadsRunWith(database, z.coerce.date(), NOW);
 
 		expect(received).toEqual([NOW]);
 	});
@@ -501,7 +513,7 @@ describe("the payload of a job", () => {
 		const database = await migratedDatabase();
 
 		const received = await payloadsRunWith<unknown>(
-			database.sql,
+			database,
 			z.unknown(),
 			payload,
 		);
@@ -530,6 +542,7 @@ describe("a job whose attempt neither completed nor failed", () => {
 		const runTimeout: HookTimeout = { ms: 10_000, setTimer: () => () => {} };
 		const stalled = queueOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			jobs,
 			now: () => now,
 			runTimeout,
@@ -537,6 +550,7 @@ describe("a job whose attempt neither completed nor failed", () => {
 		await entered.promise;
 		const takingOver = queueOf({
 			sql: second,
+			cancellation: database.cancellation,
 			jobs,
 			now: () => now,
 			runTimeout,
@@ -570,14 +584,22 @@ describe("a job whose attempt neither completed nor failed", () => {
 			}),
 		);
 		await enqueueReminder(database.sql, jobs, JOB);
-		const stalled = queueOf({ sql: database.sql, jobs, now: () => now });
+		const stalled = queueOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			jobs,
+			now: () => now,
+		});
 		const stalledRun = stalled.queue.runDue(NOT_STOPPED);
 		await entered.promise;
 
 		now = new Date(NOW.getTime() + 70_000);
-		await queueOf({ sql: second, jobs, now: () => now }).queue.runDue(
-			NOT_STOPPED,
-		);
+		await queueOf({
+			sql: second,
+			cancellation: database.cancellation,
+			jobs,
+			now: () => now,
+		}).queue.runDue(NOT_STOPPED);
 		release.resolve();
 		await stalledRun;
 
@@ -612,12 +634,22 @@ describe("a job whose stalled attempt ends while the attempt that took it over s
 			}),
 		);
 		await enqueueReminder(database.sql, jobs, JOB);
-		const stalled = queueOf({ sql: database.sql, jobs, now: () => now });
+		const stalled = queueOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			jobs,
+			now: () => now,
+		});
 		const stalledRun = stalled.queue.runDue(NOT_STOPPED);
 		await stalledEntered.promise;
 
 		now = new Date(NOW.getTime() + 70_000);
-		const takeover = queueOf({ sql: second, jobs, now: () => now });
+		const takeover = queueOf({
+			sql: second,
+			cancellation: database.cancellation,
+			jobs,
+			now: () => now,
+		});
 		const takeoverRun = takeover.queue.runDue(NOT_STOPPED);
 		await takeoverEntered.promise;
 		releaseStalled.resolve();
@@ -655,15 +687,18 @@ describe("a job that no active plugin declares", () => {
 		await enqueueReminder(database.sql, declaring, JOB);
 		const whileNotDeclared = queueOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			jobs: notDeclaring,
 		});
 
 		await whileNotDeclared.queue.runDue(NOT_STOPPED);
 		const rowsWhileNotDeclared: unknown[] = await database.sql`
 			SELECT state, attempts FROM core.jobs`;
-		await queueOf({ sql: database.sql, jobs: declaring }).queue.runDue(
-			NOT_STOPPED,
-		);
+		await queueOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			jobs: declaring,
+		}).queue.runDue(NOT_STOPPED);
 
 		expect([...rowsWhileNotDeclared]).toEqual([
 			{ state: "pending", attempts: 0 },
@@ -695,10 +730,20 @@ describe("a job whose last attempt neither completed nor failed", () => {
 			}),
 		);
 		await enqueueReminder(database.sql, jobs, JOB);
-		const stalled = queueOf({ sql: database.sql, jobs, now: () => now });
+		const stalled = queueOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			jobs,
+			now: () => now,
+		});
 		const stalledRun = stalled.queue.runDue(NOT_STOPPED);
 		await entered.promise;
-		const takingOver = queueOf({ sql: second, jobs, now: () => now });
+		const takingOver = queueOf({
+			sql: second,
+			cancellation: database.cancellation,
+			jobs,
+			now: () => now,
+		});
 
 		now = new Date(NOW.getTime() + 70_000);
 		await takingOver.queue.runDue(NOT_STOPPED);
@@ -737,7 +782,11 @@ describe("a job that fails outside its run function", () => {
 			}),
 		);
 		await enqueueReminder(database.sql, jobs, JOB);
-		const { queue, entries } = queueOf({ sql: database.sql, jobs });
+		const { queue, entries } = queueOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			jobs,
+		});
 
 		await queue.runDue(NOT_STOPPED);
 		await queue.runDue(NOT_STOPPED);
@@ -769,7 +818,11 @@ describe("a job that fails outside its run function", () => {
 			}),
 		);
 		await enqueueReminder(database.sql, enqueuedWith, JOB);
-		const { queue, entries } = queueOf({ sql: database.sql, jobs: stricter });
+		const { queue, entries } = queueOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			jobs: stricter,
+		});
 
 		await queue.runDue(NOT_STOPPED);
 
@@ -800,6 +853,7 @@ describe("a job that fails", () => {
 		await enqueueReminder(database.sql, jobs, JOB);
 		const { queue, entries } = queueOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			jobs,
 			random: () => 0,
 		});
@@ -821,7 +875,12 @@ describe("a job that fails", () => {
 			}),
 		);
 		await enqueueReminder(database.sql, jobs, JOB);
-		const { queue } = queueOf({ sql: database.sql, jobs, now: () => now });
+		const { queue } = queueOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			jobs,
+			now: () => now,
+		});
 
 		await queue.runDue(NOT_STOPPED);
 		now = new Date(NOW.getTime() + 3_600_000);
@@ -858,6 +917,7 @@ describe("a job that fails", () => {
 		await enqueueReminder(database.sql, jobs, JOB);
 		const { queue, entries } = queueOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			jobs,
 			now: () => now,
 			random: () => 0.999,
@@ -911,6 +971,7 @@ describe("a cron job whose due times pass before a run of the queue enqueues the
 		let now = new Date("2026-11-27T12:00:30.000Z");
 		const { queue } = queueOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			jobs: everyMinute(run),
 			now: () => now,
 		});
@@ -934,6 +995,7 @@ describe("a cron job whose due times pass before a run of the queue enqueues the
 		let now = new Date("2026-11-27T12:00:30.000Z");
 		const { queue } = queueOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			jobs: everyMinute(run),
 			now: () => now,
 		});
@@ -963,6 +1025,7 @@ describe("a cron job whose due times pass before a run of the queue enqueues the
 		let now = new Date("2026-11-27T12:00:30.000Z");
 		const { queue, entries } = queueOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			jobs: everyMinute([]),
 			now: () => now,
 		});
@@ -989,6 +1052,7 @@ describe("a cron job whose due times pass before a run of the queue enqueues the
 		let now = new Date("2026-11-27T12:00:30.000Z");
 		const { queue, entries } = queueOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			jobs: everyMinute(run),
 			now: () => now,
 		});
@@ -1008,8 +1072,18 @@ describe("a cron job whose due times pass before a run of the queue enqueues the
 		const run: Date[] = [];
 		const jobs = everyMinute(run);
 		let now = new Date("2026-11-27T12:00:30.000Z");
-		const first = queueOf({ sql: database.sql, jobs, now: () => now });
-		const other = queueOf({ sql: second, jobs, now: () => now });
+		const first = queueOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			jobs,
+			now: () => now,
+		});
+		const other = queueOf({
+			sql: second,
+			cancellation: database.cancellation,
+			jobs,
+			now: () => now,
+		});
 
 		await first.queue.runDue(NOT_STOPPED);
 		now = new Date("2026-11-27T12:01:00.000Z");
@@ -1047,8 +1121,18 @@ describe("a cron job of an instance with two processes", () => {
 			}).value,
 		);
 		let now = new Date("2026-11-27T09:00:30.000Z");
-		const first = queueOf({ sql: database.sql, jobs, now: () => now });
-		const other = queueOf({ sql: second, jobs, now: () => now });
+		const first = queueOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			jobs,
+			now: () => now,
+		});
+		const other = queueOf({
+			sql: second,
+			cancellation: database.cancellation,
+			jobs,
+			now: () => now,
+		});
 		const runDueInBoth = () =>
 			Promise.all([
 				first.queue.runDue(NOT_STOPPED),
@@ -1158,14 +1242,20 @@ describe("a settled job", () => {
 				}),
 			);
 			await enqueueReminder(database.sql, jobs, JOB);
-			await queueOf({ sql: database.sql, jobs }).queue.runDue(NOT_STOPPED);
+			await queueOf({
+				sql: database.sql,
+				cancellation: database.cancellation,
+				jobs,
+			}).queue.runDue(NOT_STOPPED);
 			const justBefore = queueOf({
 				sql: database.sql,
+				cancellation: database.cancellation,
 				jobs,
 				now: () => new Date(NOW.getTime() + days * DAY_MS - 1),
 			});
 			const onTheDay = queueOf({
 				sql: database.sql,
+				cancellation: database.cancellation,
 				jobs,
 				now: () => new Date(NOW.getTime() + days * DAY_MS),
 			});
@@ -1203,6 +1293,7 @@ describe("a pending job", () => {
 		);
 		const { queue } = queueOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			jobs: notDeclaring,
 			now: () => new Date(NOW.getTime() + 365 * DAY_MS),
 		});
@@ -1224,6 +1315,7 @@ describe("settled jobs past their retention", () => {
 		);
 		const { queue } = queueOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			jobs: registryOf(sendingReminders(async () => {})),
 		});
 
@@ -1240,6 +1332,7 @@ describe("settled jobs past their retention", () => {
 		let now = NOW;
 		const { queue } = queueOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			jobs: registryOf(sendingReminders(async () => {})),
 			now: () => now,
 		});
@@ -1275,10 +1368,12 @@ describe("a cron job whose due times are all past their retention", () => {
 		const run: Date[] = [];
 		const whileNotDeclared = queueOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			jobs: registryOf(sendingReminders(async () => {})),
 		});
 		const declaredAgain = queueOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			jobs: everyMinute(run),
 			now: () => new Date("2026-11-27T09:00:30.000Z"),
 		});
@@ -1308,7 +1403,11 @@ describe("the job loop on the queue", () => {
 			}),
 		);
 		await enqueueReminder(database.sql, jobs, JOB);
-		const { queue } = queueOf({ sql: database.sql, jobs });
+		const { queue } = queueOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			jobs,
+		});
 		const loop = startPollLoop({
 			run: (stopSignal) => queue.runDue(stopSignal),
 			failureMessage: "job queue failed",
@@ -1329,7 +1428,11 @@ describe("the job loop on the queue", () => {
 	test("tells the operator when a run of the queue fails as a whole, and waits for the next interval", async () => {
 		const database = await freshDatabase();
 		const jobs = registryOf(sendingReminders(async () => {}));
-		const { queue, entries } = queueOf({ sql: database.sql, jobs });
+		const { queue, entries } = queueOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			jobs,
+		});
 		const timer = manualTimer();
 		const { logger, entries: loopEntries } = recordingLogger();
 		const loop = startPollLoop({
@@ -1361,6 +1464,7 @@ describe("the job queue", () => {
 		const database = await freshDatabase();
 		const { queue } = queueOf({
 			sql: database.sql,
+			cancellation: database.cancellation,
 			jobs: registryOf(),
 		});
 
@@ -1385,11 +1489,17 @@ describe("the job queue", () => {
 		);
 		await enqueueReminder(database.sql, jobs, JOB);
 
-		const first = queueOf({ sql: database.sql, jobs }).queue.runDue(
-			NOT_STOPPED,
-		);
+		const first = queueOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			jobs,
+		}).queue.runDue(NOT_STOPPED);
 		await entered.promise;
-		await queueOf({ sql: second, jobs }).queue.runDue(NOT_STOPPED);
+		await queueOf({
+			sql: second,
+			cancellation: database.cancellation,
+			jobs,
+		}).queue.runDue(NOT_STOPPED);
 		release.resolve();
 		await first;
 
@@ -1412,7 +1522,11 @@ describe("the job queue", () => {
 			jobs,
 			"00000000-0000-4000-b000-000000000002",
 		);
-		const { queue } = queueOf({ sql: database.sql, jobs });
+		const { queue } = queueOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			jobs,
+		});
 
 		await queue.runDue(stopping.signal);
 		const runBeforeTheNextRun = run.length;

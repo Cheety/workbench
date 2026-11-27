@@ -373,6 +373,7 @@ async function startInstanceOn(
 	});
 	const delivery = createEventDelivery({
 		...sources,
+		cancellation: database.cancellation,
 		handlerTimeout: { ms: 10_000, setTimer: setSystemTimer },
 	});
 	return {

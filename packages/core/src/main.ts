@@ -30,6 +30,7 @@ import {
 } from "./server.ts";
 import { reportFailedStart, shutDownInstance } from "./shutdown.ts";
 import { systemFailureReason } from "./system-error.ts";
+import { openStatementCancellation } from "./transaction-deadline.ts";
 
 const PACKAGES_DIRECTORY = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -145,8 +146,13 @@ const sql = new SQL(config.databaseUrl.reveal(), {
 	connectionTimeout: OPERATION_CONNECTION_TIMEOUT_S,
 	connection: { statement_timeout: OPERATION_STATEMENT_TIMEOUT_MS },
 });
+const cancellation = openStatementCancellation(
+	config.databaseUrl.reveal(),
+	OPERATION_STATEMENT_TIMEOUT_MS,
+);
 const dueDeliveries = createEventDelivery({
 	sql,
+	cancellation,
 	events: instance.events,
 	now,
 	newId: () => crypto.randomUUID(),
@@ -166,6 +172,7 @@ const eventDelivery = startPollLoop({
 });
 const dueJobs = createJobQueue({
 	sql,
+	cancellation,
 	jobs: instance.jobs,
 	now,
 	newId: () => crypto.randomUUID(),
@@ -224,7 +231,10 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 				jobQueue,
 				plugins,
 				database: {
-					close: () => sql.close({ timeout: DATABASE_CLOSE_TIMEOUT_S }),
+					close: async () => {
+						await cancellation.close({ timeout: DATABASE_CLOSE_TIMEOUT_S });
+						await sql.close({ timeout: DATABASE_CLOSE_TIMEOUT_S });
+					},
 				},
 			},
 			logger,

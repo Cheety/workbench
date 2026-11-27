@@ -80,6 +80,7 @@ export async function recordEvent(
 
 export type EventDeliveryOptions = {
 	readonly sql: SQL;
+	readonly cancellation: SQL;
 	readonly events: EventRegistry;
 	readonly now: () => Date;
 	readonly newId: () => string;
@@ -365,7 +366,11 @@ async function handle(
 						event,
 						contextOf(savepoint, options),
 					),
-				{ timeout: options.handlerTimeout, logger },
+				{
+					timeout: options.handlerTimeout,
+					cancellation: options.cancellation,
+					logger,
+				},
 			);
 			if (outcome === "timed_out")
 				throw new HandlerFailedError({
