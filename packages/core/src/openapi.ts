@@ -7,6 +7,7 @@ import type { PluginPackage } from "./kernel.ts";
 import type { RegisteredOperation } from "./operation-registry.ts";
 import { catalogPlugins } from "./plugin-catalog.ts";
 import { PROBLEM_CONTENT_TYPE } from "./problem-details.ts";
+import { CORRELATION_ID_HEADER, VALID_CORRELATION_ID } from "./server.ts";
 
 export const OPENAPI_DOCUMENT_PATH = fileURLToPath(
 	new URL("../../../docs/openapi.json", import.meta.url),
@@ -22,6 +23,8 @@ const LOAD_TIMEOUT_MS = 10_000;
 
 const PROBLEM_DETAILS_REF = "#/components/schemas/ProblemDetails";
 
+const CORRELATION_ID_REF = "#/components/headers/CorrelationId";
+
 type Content = {
 	readonly [contentType: string]: { readonly schema: JsonSchema };
 };
@@ -33,6 +36,7 @@ export type OpenApiOperation = {
 	readonly responses: {
 		readonly [status: string]: {
 			readonly description: string;
+			readonly headers: { readonly [name: string]: JsonSchema };
 			readonly content: Content;
 		};
 	};
@@ -90,6 +94,16 @@ const PROBLEM_DETAILS_SCHEMA: JsonSchema = {
 	],
 };
 
+const CORRELATION_ID_HEADER_SCHEMA: JsonSchema = {
+	description: "the correlation ID of the request, also in its log entries",
+	required: true,
+	schema: { type: "string", pattern: VALID_CORRELATION_ID.source },
+};
+
+const RESPONSE_HEADERS = {
+	[CORRELATION_ID_HEADER]: { $ref: CORRELATION_ID_REF },
+};
+
 const PROBLEM_CONTENT: Content = {
 	[PROBLEM_CONTENT_TYPE]: { schema: { $ref: PROBLEM_DETAILS_REF } },
 };
@@ -106,6 +120,7 @@ export async function describeHttpApi(
 		components: {
 			securitySchemes: { apiToken: { type: "http", scheme: "bearer" } },
 			schemas: { ProblemDetails: PROBLEM_DETAILS_SCHEMA },
+			headers: { CorrelationId: CORRELATION_ID_HEADER_SCHEMA },
 		},
 		paths: Object.fromEntries(
 			operations
@@ -153,16 +168,19 @@ function describeOperation(operation: RegisteredOperation): OpenApiOperation {
 		responses: {
 			"200": {
 				description: "the output of the operation",
+				headers: RESPONSE_HEADERS,
 				content: {
 					[JSON_CONTENT_TYPE]: { schema: operation.describeOutput() },
 				},
 			},
 			"401": {
 				description: "the request carries no valid API token",
+				headers: RESPONSE_HEADERS,
 				content: PROBLEM_CONTENT,
 			},
 			default: {
 				description: "the operation failed",
+				headers: RESPONSE_HEADERS,
 				content: PROBLEM_CONTENT,
 			},
 		},

@@ -46,6 +46,10 @@ const board: PluginPackage = {
 	}),
 };
 
+const CORRELATION_ID_HEADERS = {
+	"X-Correlation-ID": { $ref: "#/components/headers/CorrelationId" },
+};
+
 describe("the OpenAPI document of the HTTP API", () => {
 	test("describes each operation as a POST with its schemas, the bearer token and problem details", async () => {
 		const document = await describeHttpApi([board], setSystemTimer);
@@ -55,6 +59,12 @@ describe("the OpenAPI document of the HTTP API", () => {
 			security: [{ apiToken: [] }],
 			components: {
 				securitySchemes: { apiToken: { type: "http", scheme: "bearer" } },
+				headers: {
+					CorrelationId: {
+						required: true,
+						schema: { type: "string", pattern: "^[A-Za-z0-9._-]{1,128}$" },
+					},
+				},
 			},
 			paths: {
 				"/api/workspaces/{workspace}/operations/board.renameLabel": {
@@ -82,6 +92,7 @@ describe("the OpenAPI document of the HTTP API", () => {
 						},
 						responses: {
 							"200": {
+								headers: CORRELATION_ID_HEADERS,
 								content: {
 									"application/json": {
 										schema: {
@@ -92,6 +103,7 @@ describe("the OpenAPI document of the HTTP API", () => {
 								},
 							},
 							"401": {
+								headers: CORRELATION_ID_HEADERS,
 								content: {
 									"application/problem+json": {
 										schema: { $ref: "#/components/schemas/ProblemDetails" },
@@ -99,6 +111,7 @@ describe("the OpenAPI document of the HTTP API", () => {
 								},
 							},
 							default: {
+								headers: CORRELATION_ID_HEADERS,
 								content: {
 									"application/problem+json": {
 										schema: { $ref: "#/components/schemas/ProblemDetails" },
