@@ -95,7 +95,7 @@ Eine Ausführung eines Jobs; sie gelingt, scheitert oder überschreitet ihre Fri
 _Avoid_: Retry (das ist die Wiederholung, also jeder Versuch nach dem ersten), Run, Durchlauf
 
 **Dead-Letter**:
-Die Ablage der Jobs, deren letzter Versuch gescheitert ist; der Core führt sie nicht mehr aus, bis ein Betreiber sie wieder einreiht.
+Die Ablage der Jobs, deren letzter Versuch gescheitert ist; der Core führt sie nicht mehr aus, es sei denn, ein Betreiber reiht sie wieder ein, und löscht sie 30 Tage, nachdem sie dort gelandet sind.
 _Avoid_: Fehlerliste, Papierkorb, Failed Jobs
 
 **Wiederzustellungsfrist**:
