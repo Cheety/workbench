@@ -271,24 +271,51 @@ describe("schema migrations", () => {
 		);
 	});
 
-	test.each([
-		["an invalid schema name", "Plugin-Notes", "0001_create_notes.sql"],
-		["an invalid file name", "plugin_notes", "create_notes.sql"],
-	])(
-		"refuse to record a migration with %s",
-		async (_case, schema, migration) => {
-			const database = await freshDatabase();
-			await migrateSchemas(
-				runnerFor(database.url, recordingLogger().logger),
-				[],
-				NOT_STOPPED,
-			);
+	test("refuse a migration whose file name is no migration name: nothing of it stays, and the log says so", async () => {
+		const database = await freshDatabase();
+		const { logger, entries } = recordingLogger();
 
-			const recording = database.sql`INSERT INTO core.migrations (schema_name, migration) VALUES (${schema}, ${migration})`;
+		const run = await migrateSchemas(
+			runnerFor(database.url, logger),
+			[
+				{
+					schema: schemaName("plugin_notes"),
+					migrations: [
+						{
+							name: "create_notes.sql",
+							sql: "CREATE TABLE notes (id bigint PRIMARY KEY);",
+						},
+					],
+				},
+			],
+			NOT_STOPPED,
+		);
 
-			await expect(recording).rejects.toMatchObject({ errno: "23514" });
-		},
-	);
+		expect(run).toEqual({
+			stopped: false,
+			outcomes: [
+				expect.objectContaining({
+					schema: schemaName("plugin_notes"),
+					migrated: false,
+					applied: [],
+				}),
+			],
+		});
+		expect(
+			await database.sql`SELECT table_name FROM information_schema.tables WHERE table_schema = 'plugin_notes'`,
+		).toEqual([]);
+		expect(await database.sql`SELECT migration FROM core.migrations`).toEqual(
+			[],
+		);
+		expect(entries).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				message: "migration failed",
+				schema: schemaName("plugin_notes"),
+				migration: "create_notes.sql",
+			}),
+		);
+	});
 
 	test("report the outcome and log why the lock could not be released when the connection is lost during a migration", async () => {
 		const database = await freshDatabase();
