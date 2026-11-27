@@ -3,6 +3,7 @@ import {
 	type OperationContext,
 	OperationError,
 	type OperationErrorKind,
+	type OperationKind,
 } from "@workbench/sdk";
 import type { SQL } from "bun";
 import { describeThrown } from "./failure-reason.ts";
@@ -121,6 +122,14 @@ async function invoke(
 	}
 }
 
+const BEGIN_TRANSACTION: Record<
+	OperationKind,
+	(sql: SQL, body: (transaction: SQL) => Promise<unknown>) => Promise<unknown>
+> = {
+	query: (sql, body) => sql.begin("read only", body),
+	mutation: (sql, body) => sql.begin(body),
+};
+
 function inTransaction(
 	operation: RegisteredOperation,
 	{ sql }: OperationPipelineOptions,
@@ -131,9 +140,7 @@ function inTransaction(
 		await transaction.unsafe(`SET LOCAL search_path TO "${schema}"`);
 		return run(transaction);
 	};
-	return operation.kind === "query"
-		? sql.begin("read only", body)
-		: sql.begin(body);
+	return BEGIN_TRANSACTION[operation.kind](sql, body);
 }
 
 async function execute(
