@@ -285,6 +285,7 @@ async function failureOf(sql: SQL): Promise<unknown[]> {
 
 describe("a job that exceeds its timeout", () => {
 	test("counts as failed and runs again once its retry is due", async () => {
+		const started = Promise.withResolvers<void>();
 		const database = await migratedDatabase();
 		const timer = manualTimer();
 		const attempts: number[] = [];
@@ -292,6 +293,7 @@ describe("a job that exceeds its timeout", () => {
 		const jobs = registryOf(
 			sendingReminders((job) => {
 				attempts.push(job.attempt);
+				started.resolve();
 				return job.attempt === 1 ? new Promise(() => {}) : Promise.resolve();
 			}),
 		);
@@ -307,6 +309,7 @@ describe("a job that exceeds its timeout", () => {
 		const timerSet = timer.set();
 		const running = queue.runDue(NOT_STOPPED);
 		await timerSet;
+		await started.promise;
 		timer.expire();
 		await running;
 		await queue.runDue(NOT_STOPPED);
@@ -360,7 +363,52 @@ describe("a job that exceeds its timeout", () => {
 		]);
 	});
 
+	test("is not run when its payload schema finishes validating after its time is up", async () => {
+		const database = await migratedDatabase();
+		const timer = manualTimer();
+		const validation =
+			Promise.withResolvers<SchemaResult<{ cardId: string }>>();
+		const run: string[] = [];
+		await enqueueReminder(
+			database.sql,
+			registryOf(sendingReminders(async () => {})),
+			JOB,
+		);
+		const { queue } = queueOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			jobs: registryOf(
+				defineJob({
+					name: "sendReminder",
+					payload: {
+						"~standard": {
+							version: 1,
+							vendor: "slow",
+							validate: () => validation.promise,
+						},
+					},
+					maxAttempts: 3,
+					run: async (job) => {
+						run.push(job.id);
+					},
+				}),
+			),
+			runTimeout: { ms: 250, setTimer: timer.setTimer },
+		});
+
+		const timerSet = timer.set();
+		const running = queue.runDue(NOT_STOPPED);
+		await timerSet;
+		timer.expire();
+		await running;
+		validation.resolve({ value: { cardId: "card-1" } });
+		await database.sql`SELECT 1`;
+
+		expect(run).toEqual([]);
+	});
+
 	test("is refused what it writes after its time is up, and leaves nothing of it behind", async () => {
+		const started = Promise.withResolvers<void>();
 		const database = await migratedDatabase();
 		await createMailerSchema(database.sql);
 		const timer = manualTimer();
@@ -368,6 +416,7 @@ describe("a job that exceeds its timeout", () => {
 		const lateWrite = Promise.withResolvers<"written" | "refused">();
 		const jobs = registryOf(
 			sendingReminders(async (job, ctx) => {
+				started.resolve();
 				await timeIsUp.promise;
 				await ctx.sql`INSERT INTO sent_reminders (job_id) VALUES (${job.id})`.then(
 					() => lateWrite.resolve("written"),
@@ -386,6 +435,7 @@ describe("a job that exceeds its timeout", () => {
 		const timerSet = timer.set();
 		const running = queue.runDue(NOT_STOPPED);
 		await timerSet;
+		await started.promise;
 		timer.expire();
 		await running;
 		timeIsUp.resolve();

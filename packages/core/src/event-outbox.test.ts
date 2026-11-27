@@ -406,6 +406,7 @@ const LATER_EVENT = "00000000-0000-4000-e000-000000000002";
 
 describe("event delivery", () => {
 	test("gives up on a handler that does not finish in time and delivers the event again once its retry is due", async () => {
+		const started = Promise.withResolvers<void>();
 		const database = await migratedDatabase();
 		const timer = manualTimer();
 		let attempts = 0;
@@ -413,6 +414,7 @@ describe("event delivery", () => {
 		const events = registryOf(
 			subscription("search", () => {
 				attempts += 1;
+				started.resolve();
 				return attempts === 1 ? new Promise(() => {}) : Promise.resolve();
 			}),
 		);
@@ -428,6 +430,7 @@ describe("event delivery", () => {
 		const timerSet = timer.set();
 		const delivering = delivery.deliverDue(NOT_STOPPED);
 		await timerSet;
+		await started.promise;
 		timer.expire();
 		await delivering;
 		now = LATER;
@@ -480,6 +483,49 @@ describe("event delivery", () => {
 				attempt: 1,
 			}),
 		]);
+	});
+
+	test("does not start a handler whose payload schema finishes validating after its time is up", async () => {
+		const database = await migratedDatabase();
+		const timer = manualTimer();
+		const validation =
+			Promise.withResolvers<SchemaResult<{ labelId: string }>>();
+		const handled: string[] = [];
+		const events = registryOf(
+			subscribing(
+				"search",
+				defineEvent({
+					...labelRenamed,
+					payload: {
+						"~standard": {
+							version: 1,
+							vendor: "slow",
+							validate: () => validation.promise,
+						},
+					},
+				}),
+				async (event) => {
+					handled.push(event.id);
+				},
+			),
+		);
+		await publishLabelRenamed(database.sql, events, EVENT);
+		const { delivery } = deliveryOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			events,
+			handlerTimeout: { ms: 250, setTimer: timer.setTimer },
+		});
+
+		const timerSet = timer.set();
+		const delivering = delivery.deliverDue(NOT_STOPPED);
+		await timerSet;
+		timer.expire();
+		await delivering;
+		validation.resolve({ value: { labelId: "label-1" } });
+		await database.sql`SELECT 1`;
+
+		expect(handled).toEqual([]);
 	});
 
 	test("tells the operator the wait it stored for the retry, though every draw of the jitter differs", async () => {
@@ -797,6 +843,7 @@ describe("a delivery that fails outside its handler", () => {
 
 describe("a handler that timed out", () => {
 	test("leaves nothing behind of what it writes after its time is up", async () => {
+		const started = Promise.withResolvers<void>();
 		const database = await migratedDatabase();
 		await createSearchSchema(database.sql);
 		const timer = manualTimer();
@@ -804,6 +851,7 @@ describe("a handler that timed out", () => {
 		const lateWrite = Promise.withResolvers<"written" | "refused">();
 		const events = registryOf(
 			subscription("search", async (event, ctx) => {
+				started.resolve();
 				await timeIsUp.promise;
 				await ctx.sql`INSERT INTO indexed_labels (event_id) VALUES (${event.id})`.then(
 					() => lateWrite.resolve("written"),
@@ -822,6 +870,7 @@ describe("a handler that timed out", () => {
 		const timerSet = timer.set();
 		const delivering = delivery.deliverDue(NOT_STOPPED);
 		await timerSet;
+		await started.promise;
 		timer.expire();
 		await delivering;
 		timeIsUp.resolve();

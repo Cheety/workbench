@@ -360,12 +360,11 @@ async function handle(
 			await savepoint.unsafe(`SET LOCAL search_path TO "${schema}"`);
 			const outcome = await runInTransactionWithin(
 				savepoint,
-				() =>
-					validateAndCallHandler(
-						subscription,
-						event,
-						contextOf(savepoint, options),
-					),
+				(expired) =>
+					validateAndCallHandler(subscription, event, {
+						ctx: contextOf(savepoint, options),
+						expired,
+					}),
 				{
 					timeout: options.handlerTimeout,
 					cancellation: options.cancellation,
@@ -388,7 +387,10 @@ async function handle(
 async function validateAndCallHandler(
 	subscription: RegisteredSubscription,
 	event: PublishedEvent<unknown>,
-	ctx: EventHandlerContext,
+	{
+		ctx,
+		expired,
+	}: { readonly ctx: EventHandlerContext; readonly expired: AbortSignal },
 ): Promise<void> {
 	const payload = await subscription.validatePayload(event.payload);
 	if (!payload.valid)
@@ -396,6 +398,7 @@ async function validateAndCallHandler(
 			reason: "invalid_payload",
 			issues: payload.issues,
 		});
+	if (expired.aborted) return;
 	await callHandler(subscription, { ...event, payload: payload.value }, ctx);
 }
 

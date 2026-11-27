@@ -2,6 +2,7 @@ import { SQL } from "bun";
 import { z } from "zod";
 import { describeThrown } from "./failure-reason.ts";
 import {
+	type Hook,
 	type HookOutcome,
 	type HookTimeout,
 	runWithin,
@@ -34,7 +35,7 @@ export function openStatementCancellation(
 
 export async function runInTransactionWithin(
 	transaction: SQL,
-	hook: () => Promise<void>,
+	hook: Hook,
 	{ timeout, cancellation, logger }: TransactionDeadline,
 ): Promise<HookOutcome> {
 	const [row]: unknown[] = await transaction`SELECT pg_backend_pid() AS pid`;

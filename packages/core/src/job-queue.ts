@@ -402,8 +402,11 @@ async function run(
 	);
 	const outcome = await runInTransactionWithin(
 		transaction,
-		async () =>
-			callRun(await callOf(job, claimed), contextOf(transaction, options)),
+		async (expired) => {
+			const call = await callOf(job, claimed);
+			if (expired.aborted) return;
+			await callRun(call, contextOf(transaction, options));
+		},
 		{
 			timeout: options.runTimeout,
 			cancellation: options.cancellation,
