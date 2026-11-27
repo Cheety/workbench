@@ -234,18 +234,15 @@ async function attempt(
 				await markDelivered(transaction, due, now);
 				return { outcome: "delivered" };
 			}
-			const retry = retryOf();
-			await postpone(transaction, due, retry);
-			return { outcome: "postponed", failure, retry };
+			return postpone(transaction, due, failure, retryOf());
 		});
 	} catch (error) {
-		const retry = retryOf();
-		await postpone(options.sql, due, retry);
-		return {
-			outcome: "postponed",
-			failure: { reason: "delivery_failed", error: describeThrown(error) },
-			retry,
-		};
+		return postpone(
+			options.sql,
+			due,
+			{ reason: "delivery_failed", error: describeThrown(error) },
+			retryOf(),
+		);
 	}
 }
 
@@ -278,15 +275,20 @@ async function markDelivered(
 async function postpone(
 	sql: SQL,
 	delivery: DueDelivery,
+	failure: DeliveryFailure,
 	retry: Retry,
-): Promise<void> {
-	await sql`
+): Promise<Attempt> {
+	const postponed: unknown[] = await sql`
 		UPDATE core.event_deliveries
 		SET attempts = ${delivery.attempts + 1}, next_attempt_at = ${retry.at}
 		WHERE event_id = ${delivery.id}
 			AND subscriber = ${delivery.subscriber}
 			AND delivered_at IS NULL
-			AND attempts = ${delivery.attempts}`;
+			AND attempts = ${delivery.attempts}
+		RETURNING event_id`;
+	return postponed.length === 0
+		? { outcome: "settled_elsewhere" }
+		: { outcome: "postponed", failure, retry };
 }
 
 function report(
