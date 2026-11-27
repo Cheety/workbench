@@ -65,7 +65,7 @@ export type JobQueueOptions = {
 	readonly sql: SQL;
 	readonly jobs: JobRegistry;
 	readonly now: () => Date;
-	readonly newIdForRun: () => string;
+	readonly newId: () => string;
 	readonly newJobId: () => string;
 	readonly random: () => number;
 	readonly runTimeout: HookTimeout;
@@ -307,10 +307,7 @@ async function run(
 	transaction: SQL,
 	claimed: ClaimedJob,
 	job: RegisteredJob,
-	options: Pick<
-		JobQueueOptions,
-		"now" | "newIdForRun" | "random" | "runTimeout"
-	>,
+	options: Pick<JobQueueOptions, "now" | "newId" | "random" | "runTimeout">,
 ): Promise<void> {
 	const call = await callOf(job, claimed);
 	await transaction.unsafe(
@@ -506,12 +503,12 @@ function report(
 
 function contextOf(
 	transaction: SQL,
-	sources: Pick<JobQueueOptions, "now" | "newIdForRun" | "random">,
+	sources: Pick<JobQueueOptions, "now" | "newId" | "random">,
 ): JobContext {
 	return {
 		sql: transaction,
 		now: sources.now,
-		newId: sources.newIdForRun,
+		newId: sources.newId,
 		random: sources.random,
 	};
 }

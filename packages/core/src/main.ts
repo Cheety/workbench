@@ -168,7 +168,7 @@ const jobQueue = startJobLoop({
 		sql,
 		jobs: instance.jobs,
 		now,
-		newIdForRun: () => crypto.randomUUID(),
+		newId: () => crypto.randomUUID(),
 		newJobId: () => crypto.randomUUID(),
 		random: Math.random,
 		runTimeout: {
