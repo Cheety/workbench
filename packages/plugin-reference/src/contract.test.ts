@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import packageJson from "../package.json" with { type: "json" };
 
 const PACKAGE_NAME = "@workbench/plugin-reference";
 const PACKAGE_ROOT = join(import.meta.dir, "..");
@@ -25,8 +26,8 @@ afterAll(async () => {
 
 describe("the contract of the reference plugin", () => {
 	test("is published as the subpath export ./contract", () => {
-		expect(Bun.resolveSync(`${PACKAGE_NAME}/contract`, consumer)).toStartWith(
-			`${import.meta.dir}/contract/`,
+		expect(Bun.resolveSync(`${PACKAGE_NAME}/contract`, consumer)).toBe(
+			resolve(PACKAGE_ROOT, packageJson.exports["./contract"]),
 		);
 	});
 
