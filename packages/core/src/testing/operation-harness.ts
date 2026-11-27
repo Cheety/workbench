@@ -67,6 +67,10 @@ const NOT_STOPPED = new AbortController().signal;
 
 const HOOK_TIMEOUT_MS = 10_000;
 
+const CONNECTION_TIMEOUT_MS = 10_000;
+
+const STATEMENT_TIMEOUT_MS = 60_000;
+
 export async function pluginPackageAt(
 	directory: string,
 ): Promise<PluginPackage> {
@@ -86,8 +90,8 @@ export async function startOperationHarness(
 	try {
 		const runner: MigrationRunner = {
 			databaseUrl: new Secret(database.url),
-			connectionTimeoutMs: HOOK_TIMEOUT_MS,
-			statementTimeoutMs: HOOK_TIMEOUT_MS,
+			connectionTimeoutMs: CONNECTION_TIMEOUT_MS,
+			statementTimeoutMs: STATEMENT_TIMEOUT_MS,
 			lockRetryDelayMs: () => 0,
 			setTimer: setSystemTimer,
 			logger,

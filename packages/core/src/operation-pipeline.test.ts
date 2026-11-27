@@ -330,6 +330,15 @@ describe("an actor calling an operation", () => {
 			failure: expect.objectContaining({ code: "internal_error" }),
 		});
 		expect(listed).toEqual({ ok: true, output: { entries: [] } });
+		expect(harness.logEntries).toContainEqual(
+			expect.objectContaining({
+				message: "operation failed",
+				operation: "ledger.sneakEntry",
+				error: expect.objectContaining({
+					message: "cannot execute INSERT in a read-only transaction",
+				}),
+			}),
+		);
 	});
 
 	test("is told unknown_operation for a name no active plugin registered", async () => {
