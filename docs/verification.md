@@ -47,6 +47,7 @@ Der Server läuft im Hintergrund, bis er gestoppt wird. Ist der Start fertig, en
 {"level":"info","message":"plugins discovered","packages":["@workbench/plugin-reference"]}
 {"level":"info","message":"plugins resolved","activationOrder":["reference"]}
 {"level":"info","message":"migration applied","schema":"plugin_reference","migration":"0001_create_notes.sql"}
+{"level":"info","message":"migration applied","schema":"plugin_reference","migration":"0002_add_workspace_to_notes.sql"}
 {"level":"info","message":"plugin activated","plugin":"reference","version":"0.1.0"}
 {"level":"info","message":"plugins started","active":["reference"],"notLoaded":[]}
 {"level":"info","message":"instance started"}
@@ -69,7 +70,7 @@ curl -si http://127.0.0.1:3123/health/live -H 'X-Correlation-ID: verify-1'
 docker compose -f compose.dev.yaml exec -T postgres psql -U workbench -d workbench_verify -c 'TABLE core.migrations' -c '\dt plugin_reference.*'
 ```
 
-`core.migrations` hat die Spalten `schema_name`, `migration` und `applied_at`; dort stehen `core | 0001_create_workspaces.sql` und für das Referenz-Plugin `plugin_reference | 0001_create_notes.sql`, und `\dt` zeigt dessen Tabelle `notes`.
+`core.migrations` hat die Spalten `schema_name`, `migration` und `applied_at`; dort stehen `core | 0001_create_workspaces.sql` und für das Referenz-Plugin `plugin_reference | 0001_create_notes.sql` und `plugin_reference | 0002_add_workspace_to_notes.sql`, und `\dt` zeigt dessen Tabelle `notes`.
 
 ## Einen Ladefehler auslösen
 

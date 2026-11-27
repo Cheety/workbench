@@ -302,12 +302,20 @@ describe("migrations at start", () => {
 				.flat()
 				.filter((entry) => entry.message === "migration applied")
 				.map((entry) => entry.migration),
-		).toEqual(["0001_create_workspaces.sql", "0001_create_notes.sql"]);
+		).toEqual([
+			"0001_create_workspaces.sql",
+			"0001_create_notes.sql",
+			"0002_add_workspace_to_notes.sql",
+		]);
 		expect(
 			await database.sql`SELECT schema_name, migration FROM core.migrations ORDER BY schema_name, migration`,
 		).toEqual([
 			{ schema_name: "core", migration: "0001_create_workspaces.sql" },
 			{ schema_name: "plugin_reference", migration: "0001_create_notes.sql" },
+			{
+				schema_name: "plugin_reference",
+				migration: "0002_add_workspace_to_notes.sql",
+			},
 		]);
 	});
 
