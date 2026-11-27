@@ -399,7 +399,7 @@ export const sendDigest = defineCronJob({
 - Der Cron-Job teilt sich den Namensraum mit den Jobs des Plugins und heißt `<plugin>.<name>`.
 - `job` nennt `id`, `name`, `attempt` und `dueAt`, die Fälligkeit, für die er läuft; `ctx` ist derselbe wie bei einem Job.
 
-Ein Zeitplan, der nicht diese Form hat oder nie fällig wird (`0 0 30 2 *`), macht das Plugin ungültig (`invalid_manifest`).
+Ein Zeitplan, der nicht diese Form hat oder nie fällig wird (`0 0 30 2 *`), macht das Plugin ungültig (`invalid_manifest`). Ein seltener Zeitplan ist gültig, wie lang der Abstand zweier Fälligkeiten auch ist: `0 0 29 2 */7`, der 29. Februar an einem Sonntag, wird nach 2088 erst 2128 wieder fällig.
 
 Der Core reiht jede Fälligkeit im Voraus ein: Ein Durchgang schreibt für jeden Cron-Job die nächste Fälligkeit nach dem Jetzt mit `due_at` nach `core.jobs`, und der Job läuft, sobald sie erreicht ist. Je Cron-Job und Fälligkeit gibt es höchstens eine Zeile (`UNIQUE (name, due_at)`); laufen zwei Prozesse gegen dieselbe Datenbank, legt nur einer sie an und nur einer führt sie aus. Von da an ist sie ein Job wie jeder andere, mit Versuchen, Wartezeit, Frist und Dead-Letter.
 

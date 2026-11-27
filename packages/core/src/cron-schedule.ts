@@ -9,10 +9,12 @@ export type CronScheduleRead =
 	| { readonly valid: true; readonly schedule: CronSchedule }
 	| { readonly valid: false; readonly problem: string };
 
-export class CronScheduleNeverDueError extends Error {
-	constructor(expression: string) {
-		super(`the cron schedule ${quote(expression)} never falls due`);
-		this.name = "CronScheduleNeverDueError";
+export class DueTimeOutOfRangeError extends Error {
+	constructor(expression: string, time: Date) {
+		super(
+			`the cron schedule ${quote(expression)} has no due time within the range of dates around the time ${time.getTime()}`,
+		);
+		this.name = "DueTimeOutOfRangeError";
 	}
 }
 
@@ -37,7 +39,9 @@ const FIELD_ITEM = /^(?:\*|(\d{1,2})(?:-(\d{1,2}))?)(?:\/(\d{1,2}))?$/;
 
 const MINUTE_MS = 60_000;
 
-const SEARCH_HORIZON_MS = 10 * 366 * 24 * 60 * MINUTE_MS;
+const DAYS_OF_CALENDAR_CYCLE = 146_097;
+
+const CALENDAR_CYCLE_MS = DAYS_OF_CALENDAR_CYCLE * 24 * 60 * MINUTE_MS;
 
 const WHITESPACE = /\s+/;
 
@@ -102,15 +106,16 @@ export function readCronSchedule(expression: unknown): CronScheduleRead {
 function scheduleOf(expression: string, fields: Fields): CronScheduleRead {
 	if (findDue(fields, new Date(0), FORWARD) === undefined)
 		return invalid("never falls due");
-	const found = (due: Date | undefined): Date => {
-		if (due === undefined) throw new CronScheduleNeverDueError(expression);
+	const dueFrom = (time: Date, direction: SearchDirection): Date => {
+		const due = findDue(fields, time, direction);
+		if (due === undefined) throw new DueTimeOutOfRangeError(expression, time);
 		return due;
 	};
 	return {
 		valid: true,
 		schedule: {
-			nextAfter: (time) => found(findDue(fields, time, FORWARD)),
-			latestUpTo: (time) => found(findDue(fields, time, BACKWARD)),
+			nextAfter: (time) => dueFrom(time, FORWARD),
+			latestUpTo: (time) => dueFrom(time, BACKWARD),
 		},
 	};
 }
@@ -152,7 +157,7 @@ function readItem(
 
 type SearchDirection = {
 	first(minute: number): number;
-	isWithinHorizon(candidate: number, first: number): boolean;
+	isWithinCycle(candidate: number, first: number): boolean;
 	pastMonth(at: Date): number;
 	pastDay(at: Date): number;
 	pastHour(at: Date): number;
@@ -161,7 +166,7 @@ type SearchDirection = {
 
 const FORWARD: SearchDirection = {
 	first: (minute) => minute + MINUTE_MS,
-	isWithinHorizon: (candidate, first) => candidate <= first + SEARCH_HORIZON_MS,
+	isWithinCycle: (candidate, first) => candidate <= first + CALENDAR_CYCLE_MS,
 	pastMonth: (at) => Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + 1, 1),
 	pastDay: (at) =>
 		Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate() + 1),
@@ -177,7 +182,7 @@ const FORWARD: SearchDirection = {
 
 const BACKWARD: SearchDirection = {
 	first: (minute) => minute,
-	isWithinHorizon: (candidate, first) => candidate >= first - SEARCH_HORIZON_MS,
+	isWithinCycle: (candidate, first) => candidate >= first - CALENDAR_CYCLE_MS,
 	pastMonth: (at) =>
 		Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), 1) - MINUTE_MS,
 	pastDay: (at) =>
@@ -202,7 +207,7 @@ function findDue(
 		Math.floor(time.getTime() / MINUTE_MS) * MINUTE_MS,
 	);
 	let candidate = first;
-	while (direction.isWithinHorizon(candidate, first)) {
+	while (direction.isWithinCycle(candidate, first)) {
 		const at = new Date(candidate);
 		if (!fields.months.has(at.getUTCMonth() + 1))
 			candidate = direction.pastMonth(at);

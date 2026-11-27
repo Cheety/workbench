@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { type CronSchedule, readCronSchedule } from "./cron-schedule.ts";
+import {
+	type CronSchedule,
+	DueTimeOutOfRangeError,
+	readCronSchedule,
+} from "./cron-schedule.ts";
 
 function scheduleOf(expression: string): CronSchedule {
 	const read = readCronSchedule(expression);
@@ -93,6 +97,18 @@ describe("a cron schedule", () => {
 			"2026-11-27T09:00:00.000Z",
 			"2027-01-01T08:00:00.000Z",
 		],
+		[
+			"a leap day on one of several days of the week sixteen years ahead",
+			"0 9-17 29 2 */2",
+			"2032-02-29T17:00:00.000Z",
+			"2048-02-29T09:00:00.000Z",
+		],
+		[
+			"a leap day on a Sunday forty years ahead, across a century without one",
+			"0 0 29 2 */7",
+			"2088-02-29T00:00:00.000Z",
+			"2128-02-29T00:00:00.000Z",
+		],
 	])("falls due at %s", (_case, expression, after, expected) => {
 		const schedule = scheduleOf(expression);
 
@@ -148,6 +164,18 @@ describe("a cron schedule", () => {
 			"2026-11-27T09:00:00.000Z",
 			"2024-02-29T00:00:00.000Z",
 		],
+		[
+			"a leap day on one of several days of the week sixteen years back",
+			"0 9-17 29 2 */2",
+			"2048-02-29T08:59:00.000Z",
+			"2032-02-29T17:00:00.000Z",
+		],
+		[
+			"a leap day on a Sunday forty years back, across a century without one",
+			"0 0 29 2 */7",
+			"2128-02-28T23:59:00.000Z",
+			"2088-02-29T00:00:00.000Z",
+		],
 	])("was last due at %s", (_case, expression, upTo, expected) => {
 		const schedule = scheduleOf(expression);
 
@@ -196,7 +224,21 @@ describe("a cron schedule", () => {
 			'has the day of week "8", which must be "*", a number, a range or a list of them within 0 to 7, each with an optional step',
 		],
 		["that never falls due", "0 0 31 2 *", "never falls due"],
+		[
+			"that never falls due on any of its days of the week",
+			"0 0 31 4,6,9,11 */2",
+			"never falls due",
+		],
 	])("is rejected %s", (_case, expression, problem) => {
 		expect(readCronSchedule(expression)).toEqual({ valid: false, problem });
+	});
+
+	test("refuses to name a due time beyond the latest time a date can hold", () => {
+		const schedule = scheduleOf("* * * * *");
+		const latestTime = new Date(8_640_000_000_000_000);
+
+		expect(() => schedule.nextAfter(latestTime)).toThrow(
+			new DueTimeOutOfRangeError("* * * * *", latestTime),
+		);
 	});
 });
