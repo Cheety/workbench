@@ -1,6 +1,7 @@
 import type { Actor } from "@workbench/sdk";
 import type { SQL } from "bun";
 import { z } from "zod";
+import { Secret } from "./config.ts";
 
 export const API_TOKEN_PREFIX = "wbt_";
 
@@ -19,8 +20,10 @@ const tokenRow = z.object({
 
 export function newApiToken(
 	randomBytes: (length: number) => Uint8Array,
-): string {
-	return `${API_TOKEN_PREFIX}${Buffer.from(randomBytes(API_TOKEN_BYTES)).toString("base64url")}`;
+): Secret {
+	return new Secret(
+		`${API_TOKEN_PREFIX}${Buffer.from(randomBytes(API_TOKEN_BYTES)).toString("base64url")}`,
+	);
 }
 
 export function apiTokenHash(token: string): string {

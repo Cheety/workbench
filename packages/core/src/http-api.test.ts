@@ -167,10 +167,10 @@ async function startApiInstance(): Promise<ApiInstance> {
 				{
 					now: () => clock,
 					newId,
-					newToken: () => `wbt_test-token-${issuedTokens}`,
+					newToken: () => new Secret(`wbt_test-token-${issuedTokens}`),
 				},
 			);
-			return issued.token;
+			return issued.token.reveal();
 		},
 		setClock: (now) => {
 			clock = now;

@@ -1,5 +1,6 @@
 import type { SQL } from "bun";
 import { apiTokenHash } from "./api-tokens.ts";
+import type { Secret } from "./config.ts";
 
 export type NewServiceAccount = {
 	readonly name: string;
@@ -9,12 +10,12 @@ export type NewServiceAccount = {
 export type ServiceAccountSources = {
 	readonly now: () => Date;
 	readonly newId: () => string;
-	readonly newToken: () => string;
+	readonly newToken: () => Secret;
 };
 
 export type IssuedToken = {
 	readonly serviceAccountId: string;
-	readonly token: string;
+	readonly token: Secret;
 	readonly expiresAt: Date;
 };
 
@@ -53,7 +54,7 @@ export async function createServiceAccount(
 	const expiresAt = new Date(createdAt.getTime() + account.validDays * DAY_MS);
 	await sql.begin(async (transaction) => {
 		await transaction`INSERT INTO core.service_accounts (id, name, created_at) VALUES (${serviceAccountId}, ${account.name}, ${createdAt})`;
-		await transaction`INSERT INTO core.api_tokens (id, service_account_id, token_hash, created_at, expires_at) VALUES (${tokenId}, ${serviceAccountId}, ${apiTokenHash(token)}, ${createdAt}, ${expiresAt})`;
+		await transaction`INSERT INTO core.api_tokens (id, service_account_id, token_hash, created_at, expires_at) VALUES (${tokenId}, ${serviceAccountId}, ${apiTokenHash(token.reveal())}, ${createdAt}, ${expiresAt})`;
 	});
 	return { serviceAccountId, token, expiresAt };
 }

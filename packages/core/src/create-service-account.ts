@@ -151,7 +151,7 @@ const created = await createServiceAccount(
 process.stdout.write(
 	`${JSON.stringify({
 		serviceAccount: created.serviceAccountId,
-		token: created.token,
+		token: created.token.reveal(),
 		expiresAt: created.expiresAt.toISOString(),
 	})}\n`,
 );

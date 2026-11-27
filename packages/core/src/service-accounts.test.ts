@@ -44,7 +44,7 @@ async function migratedDatabase(): Promise<FreshDatabase> {
 const sources = {
 	now: () => NOW,
 	newId: () => crypto.randomUUID(),
-	newToken: () => "wbt_test-token",
+	newToken: () => new Secret("wbt_test-token"),
 };
 
 describe("creating a service account", () => {
@@ -59,7 +59,7 @@ describe("creating a service account", () => {
 
 		expect(issued).toEqual({
 			serviceAccountId: expect.any(String),
-			token: "wbt_test-token",
+			token: expect.any(Secret),
 			expiresAt: THIRTY_DAYS_LATER,
 		});
 		expect(
@@ -79,6 +79,20 @@ describe("creating a service account", () => {
 				THIRTY_DAYS_LATER,
 			),
 		).toEqual({ authenticated: false, reason: "expired_token" });
+	});
+
+	test("issues a token that neither serializing nor stringifying reveals", async () => {
+		const database = await migratedDatabase();
+
+		const issued = await createServiceAccount(
+			database.sql,
+			{ name: "deploy agent", validDays: 30 },
+			sources,
+		);
+
+		expect(`${JSON.stringify(issued)} ${String(issued.token)}`).not.toContain(
+			"wbt_test-token",
+		);
 	});
 
 	test("accepts a validity of the maximum of 3650 days", async () => {
