@@ -74,7 +74,7 @@ function readRequest(
 function abort(
 	logger: Logger,
 	message: string,
-	details: Record<string, unknown> = {},
+	details: Record<string, unknown>,
 ): never {
 	logger.error(message, details);
 	process.exit(1);
