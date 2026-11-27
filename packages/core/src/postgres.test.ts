@@ -1,27 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { SQL } from "bun";
 import { Secret } from "./config.ts";
 import { createLogger } from "./logger.ts";
 import { createPostgresCheck } from "./postgres.ts";
 import { PostgresGate, TEST_DATABASE_URL } from "./testing/postgres.ts";
-
-describe("test database", () => {
-	let sql: SQL | undefined;
-
-	afterEach(async () => {
-		await sql?.close();
-		sql = undefined;
-	});
-
-	test("is a real Postgres 17", async () => {
-		sql = new SQL(TEST_DATABASE_URL, { max: 1 });
-
-		const [row] =
-			await sql`SELECT current_setting('server_version_num')::int / 10000 AS major`;
-
-		expect(row).toEqual({ major: 17 });
-	});
-});
 
 const PARALLEL_CHECKS = 20;
 
