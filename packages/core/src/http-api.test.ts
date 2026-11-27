@@ -409,6 +409,23 @@ describe("a failing call over HTTP", () => {
 		},
 	);
 
+	test("answers 400 problem details when the workspace in the path is not a UUID", async () => {
+		const api = await startApiInstance();
+		const token = await api.issueToken(IN_A_MONTH);
+
+		const response = await api.post(
+			"/api/workspaces/accounts/operations/ledger.addEntry",
+			JSON.stringify({ amount: 42 }),
+			bearer(token),
+		);
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toMatchObject({
+			code: "invalid_workspace_id",
+			detail: "the workspace in the path is not a UUID",
+		});
+	});
+
 	test("answers 404 problem details for an operation no plugin registered", async () => {
 		const api = await startApiInstance();
 		const token = await api.issueToken(IN_A_MONTH);

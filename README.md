@@ -232,16 +232,18 @@ curl -X POST "http://127.0.0.1:3000/api/workspaces/$WORKSPACE/operations/referen
 - Jeder Aufruf braucht ein API-Token als `Authorization: Bearer <token>`. Fehlt es, steht es in einem anderen Schema, ist es unbekannt oder abgelaufen, antwortet die API mit 401 und `WWW-Authenticate: Bearer`, als Problem Details mit `code` `unauthenticated`. Die Antwort sagt nicht, welcher Fall vorlag; das Log nennt ihn im Eintrag `request not authenticated` mit `reason` (`missing_token`, `unknown_token`, `expired_token`). Der Akteur des Aufrufs ist der Service-Account des Tokens.
 - Jedes Scheitern kommt als Problem Details mit `Content-Type: application/problem+json` und der Korrelations-ID in `correlationId`, mit dem Status nach der Art (siehe [Aufruf einer Operation](#aufruf-einer-operation)). Ein interner Fehler nennt nur `internal_error` und eine neutrale Meldung, nie Stacktrace, Pfad oder Query; die Details stehen unter derselben Korrelations-ID im Log.
 
-| Code                 | Status | Bedeutung                                                                     |
-| -------------------- | ------ | ----------------------------------------------------------------------------- |
-| `unauthenticated`    | 401    | Kein gültiges API-Token.                                                      |
-| `invalid_input`      | 400    | Der Body ist kein JSON, oder die Eingabe passt nicht zum Eingabe-Schema.      |
-| `route_not_found`    | 404    | Weder Methode noch Pfad passen zu einer Route.                                |
-| `malformed_path`     | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                            |
-| `unknown_operation`  | 404    | Kein aktives Plugin hat eine Operation dieses Namens registriert.             |
-| `body_too_large`     | 413    | Der Body ist größer als 1 MiB.                                                |
-| `instance_not_ready` | 503    | Die Instanz startet noch; die Operationen der Plugins stehen noch nicht fest. |
-| `internal_error`     | 500    | Die Anfrage scheiterte aus einem internen Grund.                              |
+| Code                   | Status | Bedeutung                                                                     |
+| ---------------------- | ------ | ----------------------------------------------------------------------------- |
+| `unauthenticated`      | 401    | Kein gültiges API-Token.                                                      |
+| `invalid_input`        | 400    | Der Body ist kein JSON, oder die Eingabe passt nicht zum Eingabe-Schema.      |
+| `route_not_found`      | 404    | Weder Methode noch Pfad passen zu einer Route.                                |
+| `malformed_path`       | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                            |
+| `invalid_workspace_id` | 400    | Der Workspace im Pfad ist keine UUID.                                         |
+| `workspace_not_found`  | 404    | Kein Workspace hat diese UUID.                                                |
+| `unknown_operation`    | 404    | Kein aktives Plugin hat eine Operation dieses Namens registriert.             |
+| `body_too_large`       | 413    | Der Body ist größer als 1 MiB.                                                |
+| `instance_not_ready`   | 503    | Die Instanz startet noch; die Operationen der Plugins stehen noch nicht fest. |
+| `internal_error`       | 500    | Die Anfrage scheiterte aus einem internen Grund.                              |
 
 #### Service-Account und API-Token anlegen
 

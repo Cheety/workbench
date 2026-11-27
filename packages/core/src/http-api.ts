@@ -6,6 +6,7 @@ import {
 	problemResponse,
 	ROUTE_NOT_FOUND,
 } from "./problem-details.ts";
+import { isWorkspaceId } from "./workspaces.ts";
 
 export const API_PATH_PREFIX = "/api/";
 
@@ -55,6 +56,13 @@ const MALFORMED_PATH: Problem = {
 	issues: [],
 };
 
+const INVALID_WORKSPACE_ID: Problem = {
+	code: "invalid_workspace_id",
+	kind: "invalid_input",
+	detail: "the workspace in the path is not a UUID",
+	issues: [],
+};
+
 const BODY_NOT_JSON: Problem = {
 	code: "invalid_input",
 	kind: "invalid_input",
@@ -87,6 +95,8 @@ export async function answerApiRequest(
 	const operation = decodedSegment(encodedOperation);
 	if (workspace === undefined || operation === undefined)
 		return problemResponse(MALFORMED_PATH, correlationId);
+	if (!isWorkspaceId(workspace))
+		return problemResponse(INVALID_WORKSPACE_ID, correlationId);
 	const body = await limitedText(request);
 	if (body === undefined) return problemResponse(BODY_TOO_LARGE, correlationId);
 	const input = parsedJson(body);
