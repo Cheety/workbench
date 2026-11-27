@@ -11,6 +11,7 @@ CREATE TABLE jobs (
 	settled_at timestamptz(3),
 	failure_reason text CHECK (failure_reason <> ''),
 	CHECK ((state = 'pending') = (settled_at IS NULL)),
+	CHECK (state <> 'dead' OR failure_reason IS NOT NULL),
 	CHECK ((due_at IS NULL) <> (workspace_id IS NULL)),
 	UNIQUE (name, due_at)
 );
