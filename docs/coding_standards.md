@@ -20,12 +20,35 @@ Die Ermessensfragen, die keine Prüfung entscheidet. Alles Mechanische prüft `b
 - Ein Plugin liest und schreibt nur sein eigenes Schema `plugin_<name>` (ADR-0003). Fremde Daten kommen über den Contract oder ein eigenes, per Event gepflegtes Read Model.
 - Modulpfade stehen als einfaches String-Literal da; einen berechneten Import sieht kein Architekturtest.
 
+## Typen
+
+- Jedes `any` ist ein Leck: Es schaltet die Typprüfung für alles ab, was hindurchfließt. Eine bekannte Form bekommt einen benannten Typ, eine unbekannte `unknown` und wird eingeengt, ein Typparameter eine Schranke (`<T extends PluginDefinition>`). Fremde Werte (Umgebung, `package.json`, JSON) werden einmal am Rand eingeengt, etwa per zod wie in `config.ts`.
+- Eine Assertion (`as`, `x!`) ist ein verstecktes `any`. Erlaubt ist sie nur im validierenden Konstruktor eines Werte-Typs, direkt nach der Prüfung (`schemaName()` in `schema-name.ts`); `as const` und `satisfies` sind keine Assertionen.
+- Eine Fallunterscheidung über eine Union nennt jedes Mitglied: als `Record<Union, …>` (wie `EXPECTATIONS` in `config.ts`) oder als `switch` ohne `default`. Ein neues Mitglied, etwa ein neuer Grund eines Ladefehlers, bricht dann `tsc`, bis jede Stelle entschieden hat, statt still im Rückfallzweig zu landen.
+- Optionale Parameter und Felder sind verdächtig: Wer sie weglässt, bekommt still ein Verhalten, das niemand gewählt hat. Ein Parameter ist Pflicht, außer das Weglassen ist fachlich richtig.
+
+## Fehler
+
+- Geworfen wird ein `Error` oder eine Unterklasse mit eigenem `name` (`InvalidSchemaNameError`), nie ein String oder Objekt; sonst fehlen Stacktrace und `instanceof`.
+- Jedes Promise wird mit `await` erwartet, per `.catch` behandelt oder bewusst mit `void` als Fire-and-forget markiert (`void shutDownInstance(…)` im Signal-Handler). Eine `async`-Funktion geht nie an eine Stelle, die einen `void`-Callback erwartet (`forEach`, Event-Listener), weil dort niemand ihre Ablehnung fängt.
+- Ein `catch` übersetzt den Fehler in ein Ergebnis (`{ reachable: false, reason }`, einen Ladefehler), loggt ihn mit `describeThrown()` oder wirft ihn weiter. Er fängt nur, was er erwartet, und wirft den Rest unverändert weiter (`main.ts`).
+
+## Globale APIs
+
+- Jede globale API hat einen Besitzer: `process.env` liest nur `config.ts` (in Tests `testing/postgres.ts`), Uhr (`new Date()`) und Zufall (`Math.random`) erzeugt `main.ts` und reicht sie als Parameter hinein, eine Frist, deren Ablauf ein Test steuern muss, kommt als `SetTimer` aus `hook-timeout.ts` herein, und statt `console` schreibt jeder über den `Logger`. So steuert ein Test Zeit, Zufall und Fristen, statt auf sie zu warten.
+
+## Kommentare
+
+- Ein Kommentar sagt nur, was der Code nicht zeigen kann: warum, etwa eine Bedingung von Postgres (`schema-migrations.ts`, Schlüssel der Advisory-Lock). Was der Code tut, sagen seine Namen; Entscheidungen stehen in ADRs.
+
 ## Tests
 
 - Zuerst der Test, der aus dem erwarteten Grund rot wird, dann der Code.
 - Ein Test prüft, was ein Aufrufer sieht: Rückgabe, HTTP-Antwort, Log-Eintrag, Zustand in Postgres. Er bleibt grün, wenn sich nur die Implementierung ändert.
 - Postgres läuft echt. Jeder Test, der eine Datenbank braucht, holt sich mit `createFreshDatabase()` aus `packages/core/src/testing/postgres.ts` eine eigene und räumt sie mit `drop()` ab. Ausfälle der Datenbank (verweigert, stumm, wieder da) stellt `PostgresGate` aus derselben Datei her, nicht ein Mock.
-- Log-Einträge prüft `recordingLogger()` aus `packages/core/src/testing/recording-logger.ts`, mit fester Uhr. Uhr, Timer und Zufall kommen als Parameter herein, damit der Test sie steuert.
+- Log-Einträge prüft `recordingLogger()` aus `packages/core/src/testing/recording-logger.ts`, mit fester Uhr.
+- Jeder Test kann an einem plausiblen Fehler scheitern, den ein Aufrufer oder Betreiber bemerken würde. Lässt sich dieser Fehler nicht benennen, entfällt der Test.
+- Tests verbinden sich nur mit Datenbanken aus `packages/core/src/testing/postgres.ts` (`TEST_DATABASE_URL` oder `createFreshDatabase()`), nie mit `DATABASE_URL`.
 - Ein Test wartet auf einen Zustand, den er sehen kann (eine Antwort, einen Log-Eintrag, eine Zeile), nie eine Dauer ab. Ein Test, der nur mit mehr Zeit grün wird, zeigt einen Fehler im Code.
 - Fixture-Plugins in Tests dürfen eigene Fachlichkeit haben; die Architekturtests nehmen Tests aus.
 
