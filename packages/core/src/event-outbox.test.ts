@@ -137,6 +137,24 @@ function deliveryOf(scenario: DeliveryScenario) {
 	return { delivery, entries };
 }
 
+async function createSearchSchema(sql: SQL): Promise<void> {
+	await sql.unsafe(`
+		CREATE SCHEMA plugin_search;
+		CREATE TABLE plugin_search.indexed_labels (event_id uuid PRIMARY KEY);
+		CREATE TABLE plugin_search.label_owners (
+			event_id uuid PRIMARY KEY
+				REFERENCES plugin_search.indexed_labels (event_id)
+				DEFERRABLE INITIALLY DEFERRED
+		);
+	`);
+}
+
+async function indexedLabels(sql: SQL): Promise<unknown[]> {
+	const rows: unknown[] =
+		await sql`SELECT event_id FROM plugin_search.indexed_labels ORDER BY event_id`;
+	return [...rows];
+}
+
 function failuresIn(entries: readonly LogEntry[]): LogEntry[] {
 	return entries.filter((entry) => entry.message === "event not delivered");
 }
@@ -303,6 +321,110 @@ describe("event delivery", () => {
 
 		expect(handledUntilStopped).toEqual([EVENT]);
 		expect(handled).toEqual([EVENT, LATER_EVENT]);
+	});
+});
+
+describe("a delivery that fails outside its handler", () => {
+	test("counts the attempt, waits for its retry and still delivers later events when its transaction cannot be committed", async () => {
+		const database = await migratedDatabase();
+		await createSearchSchema(database.sql);
+		const attempted: string[] = [];
+		const events = registryOf(
+			subscription("search", async (event, ctx) => {
+				attempted.push(event.id);
+				if (event.id === EVENT)
+					await ctx.sql`INSERT INTO label_owners (event_id) VALUES (${event.id})`;
+				else
+					await ctx.sql`INSERT INTO indexed_labels (event_id) VALUES (${event.id})`;
+			}),
+		);
+		await publishLabelRenamed(database.sql, events, EVENT);
+		await publishLabelRenamed(database.sql, events, LATER_EVENT);
+		const { delivery, entries } = deliveryOf({ sql: database.sql, events });
+
+		await delivery.deliverDue(NOT_STOPPED);
+		await delivery.deliverDue(NOT_STOPPED);
+
+		expect(attempted).toEqual([EVENT, LATER_EVENT]);
+		expect(await indexedLabels(database.sql)).toEqual([
+			{ event_id: LATER_EVENT },
+		]);
+		expect(failuresIn(entries)).toEqual([
+			expect.objectContaining({
+				event: EVENT,
+				name: "board.LabelRenamed",
+				subscriber: "search",
+				reason: "delivery_failed",
+				error: expect.objectContaining({ name: "PostgresError" }),
+				attempt: 1,
+				retryInMs: 500,
+			}),
+		]);
+	});
+
+	test("is not blamed on the handler when the payload schema of the subscribing plugin throws", async () => {
+		const database = await migratedDatabase();
+		const handled: string[] = [];
+		const events = registryOf({
+			...subscription("search", async (event) => {
+				handled.push(event.id);
+			}),
+			validatePayload: async () => {
+				throw new Error("the schema is broken");
+			},
+		});
+		await publishLabelRenamed(database.sql, events, EVENT);
+		const { delivery, entries } = deliveryOf({ sql: database.sql, events });
+
+		await delivery.deliverDue(NOT_STOPPED);
+
+		expect(handled).toEqual([]);
+		expect(failuresIn(entries)).toEqual([
+			expect.objectContaining({
+				event: EVENT,
+				reason: "delivery_failed",
+				error: expect.objectContaining({ message: "the schema is broken" }),
+				attempt: 1,
+			}),
+		]);
+	});
+});
+
+describe("a handler that timed out", () => {
+	test("leaves nothing behind of what it writes after its time is up", async () => {
+		const database = await migratedDatabase();
+		await createSearchSchema(database.sql);
+		const timer = manualTimer();
+		const timeIsUp = deferred();
+		const lateWrite = Promise.withResolvers<"written" | "refused">();
+		const events = registryOf(
+			subscription("search", async (event, ctx) => {
+				await timeIsUp.promise;
+				await ctx.sql`INSERT INTO indexed_labels (event_id) VALUES (${event.id})`.then(
+					() => lateWrite.resolve("written"),
+					() => lateWrite.resolve("refused"),
+				);
+			}),
+		);
+		await publishLabelRenamed(database.sql, events, EVENT);
+		const { delivery, entries } = deliveryOf({
+			sql: database.sql,
+			events,
+			handlerTimeout: { ms: 250, setTimer: timer.setTimer },
+		});
+
+		const timerSet = timer.set();
+		const delivering = delivery.deliverDue(NOT_STOPPED);
+		await timerSet;
+		timer.expire();
+		timeIsUp.resolve();
+		await delivering;
+		await lateWrite.promise;
+
+		expect(await indexedLabels(database.sql)).toEqual([]);
+		expect(failuresIn(entries)).toEqual([
+			expect.objectContaining({ reason: "handler_timed_out", attempt: 1 }),
+		]);
 	});
 });
 

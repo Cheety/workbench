@@ -286,19 +286,22 @@ Ein Event wird erst nach dem Festschreiben seiner Mutation zugestellt, jedem abo
 - `event` nennt `id`, `name` (`board.LabelRenamed`), `version`, `occurredAt`, `workspace` und `payload`, geprüft gegen das Schema der Definition, die das abonnierende Plugin importiert hat.
 - `ctx` nennt `sql`, `now()`, `newId()` und `random()`. `sql` ist eine Transaktion mit dem Schema des abonnierenden Plugins als `search_path`. Einen Akteur hat ein Handler bisher nicht; der Plugin-Service-Account folgt mit Identität und Zugriff.
 
-Der Core vermerkt die Zustellung in der Transaktion des Handlers. Was der Handler über `ctx.sql` schreibt, gibt es deshalb nur zusammen mit der gelungenen Zustellung. Wirft der Handler, wird er nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` fertig oder lehnt das Schema die Payload ab, wird zurückgerollt, was er geschrieben hat, und der Core stellt später erneut zu, mit derselben `id`. Die Wartezeit wächst mit jedem Versuch exponentiell mit Zufallsanteil (bis 1 s nach dem ersten, höchstens 5 min); eine Obergrenze der Versuche gibt es bisher nicht.
+Der Core vermerkt die Zustellung in der Transaktion des Handlers. Was der Handler über `ctx.sql` schreibt, gibt es deshalb nur zusammen mit der gelungenen Zustellung. Wirft der Handler, wird er nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` fertig, lehnt das Schema die Payload ab oder lässt sich die Transaktion nicht festschreiben, wird zurückgerollt, was er geschrieben hat, und der Core stellt später erneut zu, mit derselben `id`. Ein Handler, der seine Frist überschritten hat, kann danach nichts mehr schreiben. Die Wartezeit wächst mit jedem Versuch exponentiell mit Zufallsanteil (bis 1 s nach dem ersten, höchstens 5 min); eine Obergrenze der Versuche gibt es bisher nicht.
 
 Ein Handler ist deshalb idempotent: Eine Wirkung außerhalb der eigenen Datenbank, etwa eine Mail, kann sich wiederholen, wenn der Handler nach ihr scheitert. Die `id` des Events ist der Schlüssel, an dem er eine Wiederholung erkennt.
 
 Eine gelungene Zustellung steht nur mit `LOG_LEVEL=debug` im Log, als Eintrag `event delivered` mit `event`, `name` und `subscriber`. Jede gescheiterte Zustellung steht im Log als Eintrag `event not delivered` mit `event` (der ID), `name`, `subscriber`, `attempt`, `retryInMs` und `reason`:
 
-| `reason`            | Bedeutung                                                                                    |
-| ------------------- | -------------------------------------------------------------------------------------------- |
-| `handler_threw`     | Der Handler hat einen Fehler geworfen; er steht mit Name, Meldung und Stacktrace in `error`. |
-| `handler_timed_out` | Der Handler wurde nicht innerhalb von `timeoutMs` (`PLUGIN_HOOK_TIMEOUT_MS`) fertig.         |
-| `invalid_payload`   | Die Payload passt nicht zum Schema des abonnierenden Plugins; `issues` nennt die Befunde.    |
+| `reason`            | Bedeutung                                                                                                                                                                     |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `handler_threw`     | Der Handler hat einen Fehler geworfen; er steht mit Name, Meldung und Stacktrace in `error`.                                                                                  |
+| `handler_timed_out` | Der Handler wurde nicht innerhalb von `timeoutMs` (`PLUGIN_HOOK_TIMEOUT_MS`) fertig.                                                                                          |
+| `invalid_payload`   | Die Payload passt nicht zum Schema des abonnierenden Plugins; `issues` nennt die Befunde.                                                                                     |
+| `delivery_failed`   | Die Zustellung scheiterte außerhalb des Handlers, etwa beim Festschreiben (ein aufgeschobener Constraint) oder weil das Schema der Payload warf; der Fehler steht in `error`. |
 
-- Die Reihenfolge ist nicht zugesichert: Ein Event, dessen Zustellung scheitert, hält die folgenden nicht auf.
+- Die Reihenfolge ist nicht zugesichert: Ein Event, dessen Zustellung scheitert, hält die folgenden nicht auf, gleich aus welchem Grund sie scheitert.
+- Ein Plugin, das beim Publizieren nicht aktiv ist, etwa wegen eines Ladefehlers, erhält dieses Event nie, auch nicht nach dem nächsten Start: Eine Zustellung entsteht nur für Plugins, die beim Publizieren aktiv sind. „Mindestens einmal“ gilt für entstandene Zustellungen.
+- Die Version eines Events wird nicht mit der Version verglichen, die das abonnierende Plugin importiert hat. Passt die Payload einer anderen Version nicht zu dessen Schema, scheitert die Zustellung bei jedem Versuch mit `invalid_payload`, ohne Ende, bis es eine Obergrenze der Versuche gibt.
 - Eine Zustellung an ein Plugin, das gerade nicht aktiv ist, bleibt liegen, bis es wieder aktiv ist. Ein Plugin, das ein Event erst später abonniert, erhält die Events von davor nicht.
 - Ein Handler publiziert bisher selbst keine Events.
 
