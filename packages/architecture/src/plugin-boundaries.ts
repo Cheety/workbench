@@ -66,17 +66,19 @@ export async function findPluginBoundaryViolations(
 				rule: plugin.contract.rule,
 				file: relative(packagesDirectory, join(plugin.root, PACKAGE_JSON)),
 			});
+		const contractImports = new Map<string, string[]>();
 		for await (const path of SOURCE_FILES.scan(plugin.root)) {
 			if (path.split(sep).includes(INSTALLED_DEPENDENCIES)) continue;
 			const file = join(plugin.root, path);
-			if (isBesideContract(file, plugin.contract))
-				violations.push({
-					rule: "contract_beside_other_code",
-					file: relative(packagesDirectory, file),
-				});
-			for (const { importPath, isPath } of importsIn(
-				await Bun.file(file).text(),
-			)) {
+			const imports = importsIn(await Bun.file(file).text());
+			if (isContractFile(file, plugin.contract))
+				contractImports.set(
+					file,
+					imports.flatMap(({ importPath, isPath }) =>
+						isPath ? [resolve(dirname(file), importPath)] : [],
+					),
+				);
+			for (const { importPath, isPath } of imports) {
 				const rule = violatedRule(
 					{ file, importPath, isPath },
 					plugin,
@@ -90,6 +92,11 @@ export async function findPluginBoundaryViolations(
 					});
 			}
 		}
+		for (const file of unreachedContractFiles(plugin.contract, contractImports))
+			violations.push({
+				rule: "contract_beside_other_code",
+				file: relative(packagesDirectory, file),
+			});
 	}
 	return violations;
 }
@@ -104,11 +111,28 @@ function violatedRule(
 	if (target === undefined || isContractImport(target, importPath))
 		return undefined;
 	if (target !== plugin) return "foreign_plugin_internals";
-	const isFromContract =
-		plugin.contract.kind === "published" && plugin.contract.file === file;
-	return isFromContract && importedFile !== file
+	return isContractFile(file, plugin.contract) &&
+		(importedFile === undefined ||
+			!isContractFile(importedFile, plugin.contract))
 		? "contract_imports_plugin_code"
 		: undefined;
+}
+
+function unreachedContractFiles(
+	contract: ContractExport,
+	contractImports: ReadonlyMap<string, readonly string[]>,
+): string[] {
+	if (contract.kind !== "published") return [];
+	const reached = new Set<string>();
+	const pending = [contract.file];
+	for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
+		if (reached.has(file)) continue;
+		reached.add(file);
+		pending.push(...(contractImports.get(file) ?? []));
+	}
+	return Array.from(contractImports.keys()).filter(
+		(file) => !reached.has(file),
+	);
 }
 
 async function findPluginPackages(
@@ -179,10 +203,9 @@ function importsIn(source: string): Omit<Import, "file">[] {
 	return [...modules, ...references];
 }
 
-function isBesideContract(file: string, contract: ContractExport): boolean {
+function isContractFile(file: string, contract: ContractExport): boolean {
 	return (
 		contract.kind === "published" &&
-		file !== contract.file &&
 		isWithin(file, dirname(contract.file)) &&
 		!TEST_FILE.test(file)
 	);
