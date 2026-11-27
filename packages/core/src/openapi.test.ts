@@ -134,6 +134,37 @@ describe("the OpenAPI document of the HTTP API", () => {
 		).toEqual({});
 	});
 
+	test("describes the operations of the core next to those of the plugin packages", async () => {
+		const document = await describeHttpApi([board], setSystemTimer);
+
+		expect(
+			document.paths[
+				"/api/workspaces/{workspace}/operations/core.listAuditEntries"
+			]?.post,
+		).toMatchObject({
+			operationId: "core.listAuditEntries",
+			requestBody: {
+				content: {
+					"application/json": {
+						schema: {
+							type: "object",
+							properties: {
+								limit: { type: "integer", minimum: 1, maximum: 100 },
+								cursor: {
+									anyOf: [{ type: "string", maxLength: 200 }, { type: "null" }],
+								},
+							},
+							required: ["limit", "cursor"],
+						},
+					},
+				},
+			},
+		});
+		expect(Object.keys(document.paths)).toContain(
+			"/api/workspaces/{workspace}/operations/board.renameLabel",
+		);
+	});
+
 	test("in the repository matches the operations of all plugin packages", async () => {
 		const { packages } = await discoverPluginPackages(PACKAGES_DIRECTORY)();
 		const expected = await describeHttpApi(packages, setSystemTimer);

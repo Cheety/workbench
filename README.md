@@ -302,7 +302,7 @@ Scope (Operationen, Workspaces), Widerruf und Rechte folgen mit Identität und Z
 
 #### API-Vertrag
 
-`docs/openapi.json` beschreibt die HTTP-API als OpenAPI 3.1, erzeugt aus den Operationen aller Plugin-Pakete im Repository:
+`docs/openapi.json` beschreibt die HTTP-API als OpenAPI 3.1, erzeugt aus den Operationen des Cores und aller Plugin-Pakete im Repository:
 
 ```sh
 bun run openapi

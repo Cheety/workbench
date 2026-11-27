@@ -49,6 +49,123 @@
 		}
 	},
 	"paths": {
+		"/api/workspaces/{workspace}/operations/core.listAuditEntries": {
+			"post": {
+				"operationId": "core.listAuditEntries",
+				"parameters": [
+					{
+						"name": "workspace",
+						"in": "path",
+						"required": true,
+						"schema": { "type": "string", "format": "uuid" }
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"properties": {
+									"limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+									"cursor": {
+										"anyOf": [
+											{ "type": "string", "maxLength": 200 },
+											{ "type": "null" }
+										]
+									}
+								},
+								"required": ["limit", "cursor"]
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "the output of the operation",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"properties": {
+										"entries": {
+											"type": "array",
+											"items": {
+												"type": "object",
+												"properties": {
+													"id": { "type": "string" },
+													"occurredAt": { "type": "string" },
+													"actor": {
+														"type": "object",
+														"properties": {
+															"kind": {
+																"type": "string",
+																"enum": ["user", "service_account"]
+															},
+															"id": { "type": "string" }
+														},
+														"required": ["kind", "id"],
+														"additionalProperties": false
+													},
+													"apiTokenId": { "type": ["string", "null"] },
+													"operation": { "type": "string" },
+													"workspace": { "type": "string" },
+													"result": { "type": "string", "enum": ["succeeded"] }
+												},
+												"required": [
+													"id",
+													"occurredAt",
+													"actor",
+													"apiTokenId",
+													"operation",
+													"workspace",
+													"result"
+												],
+												"additionalProperties": false
+											}
+										},
+										"nextCursor": { "type": ["string", "null"] }
+									},
+									"required": ["entries", "nextCursor"],
+									"additionalProperties": false
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "the request carries no valid API token",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": { "$ref": "#/components/schemas/ProblemDetails" }
+							}
+						}
+					},
+					"default": {
+						"description": "the operation failed",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": { "$ref": "#/components/schemas/ProblemDetails" }
+							}
+						}
+					}
+				}
+			}
+		},
 		"/api/workspaces/{workspace}/operations/reference.createNote": {
 			"post": {
 				"operationId": "reference.createNote",
