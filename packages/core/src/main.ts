@@ -7,16 +7,15 @@ import {
 	loadConfigFromEnvironment,
 } from "./config.ts";
 import { fullJitterBackoff, untilDatabaseReachable } from "./database-wait.ts";
-import { startEventDeliveryLoop } from "./event-delivery-loop.ts";
 import { createEventDelivery } from "./event-outbox.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import { createInstanceStart } from "./instance-start.ts";
-import { startJobLoop } from "./job-loop.ts";
 import { createJobQueue } from "./job-queue.ts";
 import { startPlugins } from "./kernel.ts";
 import { createLogger } from "./logger.ts";
 import { createOperationPipeline } from "./operation-pipeline.ts";
 import { discoverPluginPackages } from "./plugin-discovery.ts";
+import { startPollLoop } from "./poll-loop.ts";
 import { createPostgresCheck } from "./postgres.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
@@ -146,37 +145,41 @@ const sql = new SQL(config.databaseUrl.reveal(), {
 	connectionTimeout: OPERATION_CONNECTION_TIMEOUT_S,
 	connection: { statement_timeout: OPERATION_STATEMENT_TIMEOUT_MS },
 });
-const eventDelivery = startEventDeliveryLoop({
-	delivery: createEventDelivery({
-		sql,
-		events: instance.events,
-		now,
-		newId: () => crypto.randomUUID(),
-		random: Math.random,
-		handlerTimeout: {
-			ms: config.pluginHookTimeoutMs,
-			setTimer: setSystemTimer,
-		},
-		logger,
-	}),
+const dueDeliveries = createEventDelivery({
+	sql,
+	events: instance.events,
+	now,
+	newId: () => crypto.randomUUID(),
+	random: Math.random,
+	handlerTimeout: {
+		ms: config.pluginHookTimeoutMs,
+		setTimer: setSystemTimer,
+	},
+	logger,
+});
+const eventDelivery = startPollLoop({
+	run: (stopSignal) => dueDeliveries.deliverDue(stopSignal),
+	failureMessage: "event delivery failed",
 	pollIntervalMs: EVENT_DELIVERY_POLL_INTERVAL_MS,
 	setTimer: setSystemTimer,
 	logger,
 });
-const jobQueue = startJobLoop({
-	queue: createJobQueue({
-		sql,
-		jobs: instance.jobs,
-		now,
-		newId: () => crypto.randomUUID(),
-		newJobId: () => crypto.randomUUID(),
-		random: Math.random,
-		runTimeout: {
-			ms: config.pluginHookTimeoutMs,
-			setTimer: setSystemTimer,
-		},
-		logger,
-	}),
+const dueJobs = createJobQueue({
+	sql,
+	jobs: instance.jobs,
+	now,
+	newId: () => crypto.randomUUID(),
+	newJobId: () => crypto.randomUUID(),
+	random: Math.random,
+	runTimeout: {
+		ms: config.pluginHookTimeoutMs,
+		setTimer: setSystemTimer,
+	},
+	logger,
+});
+const jobQueue = startPollLoop({
+	run: (stopSignal) => dueJobs.runDue(stopSignal),
+	failureMessage: "job queue failed",
 	pollIntervalMs: JOB_QUEUE_POLL_INTERVAL_MS,
 	setTimer: setSystemTimer,
 	logger,

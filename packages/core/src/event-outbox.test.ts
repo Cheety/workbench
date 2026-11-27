@@ -10,7 +10,6 @@ import {
 import { SQL } from "bun";
 import { z } from "zod";
 import { Secret } from "./config.ts";
-import { startEventDeliveryLoop } from "./event-delivery-loop.ts";
 import { createEventDelivery, recordEvent } from "./event-outbox.ts";
 import {
 	type EventParticipant,
@@ -25,6 +24,7 @@ import {
 	setSystemTimer,
 } from "./hook-timeout.ts";
 import { readMigrations } from "./migration-files.ts";
+import { startPollLoop } from "./poll-loop.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
 	type MigrationRunner,
@@ -930,8 +930,9 @@ describe("the event delivery loop on the outbox", () => {
 		);
 		await publishLabelRenamed(database.sql, events, EVENT);
 		const { delivery } = deliveryOf({ sql: database.sql, events });
-		const loop = startEventDeliveryLoop({
-			delivery,
+		const loop = startPollLoop({
+			run: (stopSignal) => delivery.deliverDue(stopSignal),
+			failureMessage: "event delivery failed",
 			pollIntervalMs: 1_000,
 			setTimer: () => () => {},
 			logger: recordingLogger().logger,

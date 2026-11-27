@@ -13,9 +13,9 @@ import {
 	type SetTimer,
 	setSystemTimer,
 } from "./hook-timeout.ts";
-import { startJobLoop } from "./job-loop.ts";
 import { createJobQueue, enqueueJob } from "./job-queue.ts";
 import { type JobRegistry, readJobs, registerJobs } from "./job-registry.ts";
+import { startPollLoop } from "./poll-loop.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
 	type MigrationRunner,
@@ -1309,8 +1309,9 @@ describe("the job loop on the queue", () => {
 		);
 		await enqueueReminder(database.sql, jobs, JOB);
 		const { queue } = queueOf({ sql: database.sql, jobs });
-		const loop = startJobLoop({
-			queue,
+		const loop = startPollLoop({
+			run: (stopSignal) => queue.runDue(stopSignal),
+			failureMessage: "job queue failed",
 			pollIntervalMs: 1_000,
 			setTimer: () => () => {},
 			logger: recordingLogger().logger,
@@ -1331,8 +1332,9 @@ describe("the job loop on the queue", () => {
 		const { queue, entries } = queueOf({ sql: database.sql, jobs });
 		const timer = manualTimer();
 		const { logger, entries: loopEntries } = recordingLogger();
-		const loop = startJobLoop({
-			queue,
+		const loop = startPollLoop({
+			run: (stopSignal) => queue.runDue(stopSignal),
+			failureMessage: "job queue failed",
 			pollIntervalMs: 1_000,
 			setTimer: timer.setTimer,
 			logger,

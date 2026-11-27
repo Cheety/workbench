@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { startEventDeliveryLoop } from "./event-delivery-loop.ts";
 import type { SetTimer } from "./hook-timeout.ts";
+import { startPollLoop } from "./poll-loop.ts";
 import { recordingLogger } from "./testing/recording-logger.ts";
 
 const POLL_INTERVAL_MS = 1_000;
@@ -84,8 +84,9 @@ function startLoop() {
 	const timer = manualTimer();
 	const deliveries = controlledDelivery();
 	const { logger, entries } = recordingLogger();
-	const loop = startEventDeliveryLoop({
-		delivery: deliveries.delivery,
+	const loop = startPollLoop({
+		run: () => deliveries.delivery.deliverDue(),
+		failureMessage: "event delivery failed",
 		pollIntervalMs: POLL_INTERVAL_MS,
 		setTimer: timer.setTimer,
 		logger,
@@ -93,7 +94,7 @@ function startLoop() {
 	return { loop, timer, deliveries, entries };
 }
 
-describe("the event delivery loop", () => {
+describe("the poll loop", () => {
 	test("delivers nothing until it is woken or its poll interval expires", () => {
 		const { timer, deliveries } = startLoop();
 
@@ -157,18 +158,17 @@ describe("the event delivery loop", () => {
 		const journal: string[] = [];
 		const woundDown = Promise.withResolvers<void>();
 		let started = 0;
-		const loop = startEventDeliveryLoop({
-			delivery: {
-				deliverDue: (stopSignal) => {
-					started += 1;
-					stopSignal.addEventListener("abort", () => {
-						setImmediate(() => {
-							journal.push("delivery wound down");
-							woundDown.resolve();
-						});
+		const loop = startPollLoop({
+			failureMessage: "event delivery failed",
+			run: (stopSignal) => {
+				started += 1;
+				stopSignal.addEventListener("abort", () => {
+					setImmediate(() => {
+						journal.push("delivery wound down");
+						woundDown.resolve();
 					});
-					return woundDown.promise;
-				},
+				});
+				return woundDown.promise;
 			},
 			pollIntervalMs: POLL_INTERVAL_MS,
 			setTimer: timer.setTimer,

@@ -1,4 +1,3 @@
-import type { EventDeliveryLoop } from "./event-delivery-loop.ts";
 import { describeThrown } from "./failure-reason.ts";
 import type { RunningPlugins } from "./kernel.ts";
 import type { Logger } from "./logger.ts";
@@ -13,7 +12,7 @@ type Deactivatable = Pick<RunningPlugins, "deactivate">;
 export type RunningInstance = {
 	readonly stopStartingPlugins: () => void;
 	readonly server: Pick<RunningServer, "stop">;
-	readonly eventDelivery: Pick<EventDeliveryLoop, "stop">;
+	readonly eventDelivery: Pick<PollLoop, "stop">;
 	readonly jobQueue: Pick<PollLoop, "stop">;
 	readonly plugins: Deactivatable | Promise<Deactivatable>;
 	readonly database: { readonly close: () => Promise<void> };
