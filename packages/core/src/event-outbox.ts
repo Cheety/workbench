@@ -196,19 +196,20 @@ async function attemptNext(
 			);
 			if (failure === undefined) {
 				await markDelivered(transaction, claimed, now);
-				return { claimed, failure };
+				return { claimed, failed: undefined };
 			}
-			await postpone(transaction, claimed, retryOf(claimed));
-			return { claimed, failure };
+			const retry = retryOf(claimed);
+			await postpone(transaction, claimed, retry);
+			return { claimed, failed: { failure, retry } };
 		});
 		if (settled === undefined) return undefined;
-		if (settled.failure === undefined)
+		if (settled.failed === undefined)
 			loggerOf(settled.claimed, options).debug("event delivered");
 		else
 			reportFailure(
 				settled.claimed,
-				settled.failure,
-				retryOf(settled.claimed),
+				settled.failed.failure,
+				settled.failed.retry,
 				options,
 			);
 		return settled.claimed;

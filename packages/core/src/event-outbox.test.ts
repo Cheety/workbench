@@ -151,6 +151,7 @@ type DeliveryScenario = {
 	readonly sql: SQL;
 	readonly events: EventRegistry;
 	readonly now?: () => Date;
+	readonly random?: () => number;
 	readonly handlerTimeout?: HookTimeout;
 };
 
@@ -161,7 +162,7 @@ function deliveryOf(scenario: DeliveryScenario) {
 		events: scenario.events,
 		now: scenario.now ?? (() => NOW),
 		newId: () => "00000000-0000-4000-8000-000000000001",
-		random: () => 0.5,
+		random: scenario.random ?? (() => 0.5),
 		handlerTimeout: scenario.handlerTimeout ?? NEVER_EXPIRING,
 		logger,
 	});
@@ -266,6 +267,42 @@ describe("event delivery", () => {
 				retryInMs: 500,
 			}),
 		]);
+	});
+
+	test("tells the operator the wait it stored for the retry, though every draw of the jitter differs", async () => {
+		const database = await migratedDatabase();
+		let attempts = 0;
+		let now = NOW;
+		let draws = 0;
+		const events = registryOf(
+			subscription("search", async () => {
+				attempts += 1;
+				if (attempts === 1) throw new Error("the index is locked");
+			}),
+		);
+		await publishLabelRenamed(database.sql, events, EVENT);
+		const { delivery, entries } = deliveryOf({
+			sql: database.sql,
+			events,
+			now: () => now,
+			random: () => {
+				draws += 1;
+				return draws / 4;
+			},
+		});
+
+		await delivery.deliverDue(NOT_STOPPED);
+		now = new Date(NOW.getTime() + 249);
+		await delivery.deliverDue(NOT_STOPPED);
+		const attemptsBeforeTheWaitIsOver = attempts;
+		now = new Date(NOW.getTime() + 250);
+		await delivery.deliverDue(NOT_STOPPED);
+
+		expect(failuresIn(entries)).toEqual([
+			expect.objectContaining({ attempt: 1, retryInMs: 250 }),
+		]);
+		expect(attemptsBeforeTheWaitIsOver).toBe(1);
+		expect(attempts).toBe(2);
 	});
 
 	test("keeps an event for a subscribing plugin that is not active and delivers it once the plugin is active again", async () => {
