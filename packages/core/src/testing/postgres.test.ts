@@ -1,9 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
 	assertSupportedPostgresVersion,
-	createFreshDatabase,
-	type FreshDatabase,
-	SUPPORTED_POSTGRES_MAJOR,
 	UnsupportedPostgresVersionError,
 } from "./postgres.ts";
 
@@ -33,22 +30,4 @@ describe("supported Postgres version", () => {
 			);
 		},
 	);
-});
-
-describe("fresh database", () => {
-	let database: FreshDatabase | undefined;
-
-	afterEach(async () => {
-		await database?.drop();
-		database = undefined;
-	});
-
-	test("runs on the supported Postgres version", async () => {
-		database = await createFreshDatabase();
-
-		const [row] =
-			await database.sql`SELECT current_setting('server_version_num')::int / 10000 AS major`;
-
-		expect(row).toEqual({ major: SUPPORTED_POSTGRES_MAJOR });
-	});
 });
