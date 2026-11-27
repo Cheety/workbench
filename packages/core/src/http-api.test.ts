@@ -5,7 +5,7 @@ import {
 	definePlugin,
 } from "@workbench/sdk";
 import { z } from "zod";
-import { authenticateToken, createServiceAccount } from "./api-tokens.ts";
+import { authenticateToken } from "./api-tokens.ts";
 import { Secret } from "./config.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import { type PluginPackage, startPlugins } from "./kernel.ts";
@@ -17,6 +17,7 @@ import {
 	migrateSchemas,
 } from "./schema-migrations.ts";
 import { type RunningServer, startServer } from "./server.ts";
+import { createServiceAccount } from "./service-accounts.ts";
 import { createFreshDatabase, type FreshDatabase } from "./testing/postgres.ts";
 import { type LogEntry, recordingLogger } from "./testing/recording-logger.ts";
 import { createWorkspace } from "./workspaces.ts";
@@ -160,13 +161,15 @@ async function startApiInstance(): Promise<ApiInstance> {
 		logEntries: entries,
 		issueToken: async (expiresAt) => {
 			issuedTokens += 1;
-			const issued = await createServiceAccount(database.sql, {
-				name: `agent ${issuedTokens}`,
-				now: clock,
-				expiresAt,
-				newId,
-				newToken: () => `wbt_test-token-${issuedTokens}`,
-			});
+			const issued = await createServiceAccount(
+				database.sql,
+				{ name: `agent ${issuedTokens}`, expiresAt },
+				{
+					now: () => clock,
+					newId,
+					newToken: () => `wbt_test-token-${issuedTokens}`,
+				},
+			);
 			return issued.token;
 		},
 		setClock: (now) => {

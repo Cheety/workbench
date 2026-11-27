@@ -1,11 +1,7 @@
 import { parseArgs } from "node:util";
 import { SQL } from "bun";
 import { z } from "zod";
-import {
-	API_TOKEN_BYTES,
-	apiTokenFrom,
-	createServiceAccount,
-} from "./api-tokens.ts";
+import { API_TOKEN_BYTES, apiTokenFrom } from "./api-tokens.ts";
 import {
 	type Config,
 	InvalidConfigError,
@@ -18,6 +14,7 @@ import {
 	CORE_MIGRATIONS_DIRECTORY,
 	migrateCoreSchema,
 } from "./schema-migrations.ts";
+import { createServiceAccount } from "./service-accounts.ts";
 
 const USAGE =
 	"usage: create-service-account --name <name> --valid-days <1-3650>";
@@ -125,15 +122,19 @@ if (migrated !== "migrated")
 	});
 
 const sql = new SQL(config.databaseUrl.reveal(), { max: 1 });
-const createdAt = now();
-const created = await createServiceAccount(sql, {
-	name: wanted.name,
-	now: createdAt,
-	expiresAt: new Date(createdAt.getTime() + wanted.validDays * DAY_MS),
-	newId: () => crypto.randomUUID(),
-	newToken: () =>
-		apiTokenFrom(crypto.getRandomValues(new Uint8Array(API_TOKEN_BYTES))),
-}).catch((error: unknown) =>
+const created = await createServiceAccount(
+	sql,
+	{
+		name: wanted.name,
+		expiresAt: new Date(now().getTime() + wanted.validDays * DAY_MS),
+	},
+	{
+		now,
+		newId: () => crypto.randomUUID(),
+		newToken: () =>
+			apiTokenFrom(crypto.getRandomValues(new Uint8Array(API_TOKEN_BYTES))),
+	},
+).catch((error: unknown) =>
 	abort(logger, "service account not created", {
 		reason: "database_failed",
 		error: describeThrown(error),
@@ -142,7 +143,7 @@ const created = await createServiceAccount(sql, {
 await sql.close();
 process.stdout.write(
 	`${JSON.stringify({
-		serviceAccount: created.serviceAccount,
+		serviceAccount: created.serviceAccountId,
 		token: created.token,
 		expiresAt: created.expiresAt.toISOString(),
 	})}\n`,
