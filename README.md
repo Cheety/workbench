@@ -252,7 +252,7 @@ curl -X POST "http://127.0.0.1:3000/api/workspaces/$WORKSPACE/operations/referen
 Den ersten Service-Account samt API-Token legt der Betreiber im Container an:
 
 ```sh
-bun packages/core/src/create-service-account.ts --name "deploy agent" --valid-days 90
+bun run create-service-account --name "deploy agent" --valid-days 90
 ```
 
 Das Kommando liest dieselben Umgebungsvariablen wie die Instanz (mindestens `DATABASE_URL` oder `DATABASE_URL_FILE`), migriert bei Bedarf das Schema `core`, legt den Service-Account an und schreibt eine JSON-Zeile auf die Standardausgabe:

@@ -11,6 +11,7 @@
 		"format": "biome check --write .",
 		"typecheck": "tsc --noEmit",
 		"test": "bun test",
+		"create-service-account": "bun packages/core/src/create-service-account.ts",
 		"openapi": "bun packages/core/src/write-openapi.ts && biome format --write docs/openapi.json"
 	},
 	"devDependencies": {
