@@ -14,6 +14,7 @@ import type { Logger } from "./logger.ts";
 import { quote } from "./quote.ts";
 import { pluginSchemaName } from "./schema-name.ts";
 import type { ValidationIssue } from "./schema-validation.ts";
+import { storedPayloadOf } from "./stored-payload.ts";
 
 export class UndeclaredJobError extends Error {
 	constructor(plugin: string, job: string) {
@@ -54,11 +55,14 @@ export async function enqueueJob(
 	const job = jobs.find(name);
 	if (job === undefined || job.kind !== "enqueued")
 		throw new UndeclaredJobError(enqueueing.plugin, name);
-	const payload = await job.validatePayload(enqueueing.payload);
+	const payload = await storedPayloadOf(
+		enqueueing.payload,
+		job.validatePayload,
+	);
 	if (!payload.valid) throw new InvalidJobPayloadError(name, payload.issues);
 	await transaction`
 		INSERT INTO core.jobs (id, name, payload, workspace_id, enqueued_at, next_attempt_at)
-		VALUES (${enqueueing.id}, ${name}, ${payload.value}, ${enqueueing.workspace}, ${enqueueing.enqueuedAt}, ${enqueueing.enqueuedAt})`;
+		VALUES (${enqueueing.id}, ${name}, ${payload.json}::text::jsonb, ${enqueueing.workspace}, ${enqueueing.enqueuedAt}, ${enqueueing.enqueuedAt})`;
 }
 
 export type JobQueueOptions = {

@@ -41,8 +41,8 @@ function sendingReminders(run: SendReminder["run"]): SendReminder {
 	});
 }
 
-function registryOf(
-	...definitions: readonly JobDefinition<{ cardId: string }>[]
+function registryOf<Payload = { cardId: string }>(
+	...definitions: readonly JobDefinition<Payload>[]
 ): JobRegistry {
 	return registerJobs(
 		readJobs("mailer", { jobs: definitions, cronJobs: undefined }).value,
@@ -167,6 +167,43 @@ function failuresIn(entries: readonly LogEntry[]): LogEntry[] {
 	return entries.filter((entry) => entry.message === "job failed");
 }
 
+async function enqueue<Payload>(
+	sql: SQL,
+	definition: JobDefinition<Payload>,
+	payload: Payload,
+): Promise<void> {
+	await sql.begin((transaction) =>
+		enqueueJob(transaction, registryOf(definition), {
+			id: JOB,
+			plugin: "mailer",
+			definition,
+			payload,
+			enqueuedAt: NOW,
+			workspace: WORKSPACE,
+		}),
+	);
+}
+
+async function payloadsRunWith<Payload>(
+	sql: SQL,
+	schema: JobDefinition<Payload>["payload"],
+	payload: Payload,
+): Promise<Payload[]> {
+	const received: Payload[] = [];
+	const definition = defineJob({
+		name: "sendReminder",
+		payload: schema,
+		maxAttempts: 3,
+		run: async (job) => {
+			received.push(job.payload);
+		},
+	});
+	await enqueue(sql, definition, payload);
+	const { queue } = queueOf({ sql, jobs: registryOf(definition) });
+	await queue.runDue(NOT_STOPPED);
+	return received;
+}
+
 describe("a job that exceeds its timeout", () => {
 	test("counts as failed and runs again once its retry is due", async () => {
 		const database = await migratedDatabase();
@@ -246,6 +283,54 @@ describe("a job that exceeds its timeout", () => {
 		expect(failuresIn(entries)).toEqual([
 			expect.objectContaining({ reason: "run_timed_out", attempt: 1 }),
 		]);
+	});
+});
+
+describe("the payload of a job", () => {
+	test("is rejected when it is enqueued if its schema does not accept what the queue stores of it", async () => {
+		const database = await migratedDatabase();
+		const remindOn = defineJob({
+			name: "sendReminder",
+			payload: z.date(),
+			maxAttempts: 3,
+			run: async () => {},
+		});
+
+		const enqueueing = enqueue(database.sql, remindOn, NOW);
+
+		expect(await enqueueing.catch((error: unknown) => error)).toMatchObject({
+			name: "InvalidJobPayloadError",
+			issues: [{ path: [], message: expect.stringContaining("date") }],
+		});
+	});
+
+	test("reaches the run as its schema reads what the queue stored of it", async () => {
+		const database = await migratedDatabase();
+
+		const received = await payloadsRunWith(database.sql, z.coerce.date(), NOW);
+
+		expect(received).toEqual([NOW]);
+	});
+
+	test.each([
+		["a number", 7],
+		["a fraction", 1.5],
+		["true", true],
+		["false", false],
+		["a string", "card-1"],
+		["a string that reads as JSON", '{"cardId":7}'],
+		["null", null],
+		["a list", [7, "card-1", null]],
+	])("reaches the run unchanged when it is %s", async (_case, payload) => {
+		const database = await migratedDatabase();
+
+		const received = await payloadsRunWith<unknown>(
+			database.sql,
+			z.unknown(),
+			payload,
+		);
+
+		expect(received).toEqual([payload]);
 	});
 });
 

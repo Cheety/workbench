@@ -17,6 +17,7 @@ import type { Logger } from "./logger.ts";
 import { quote } from "./quote.ts";
 import { pluginSchemaName } from "./schema-name.ts";
 import type { ValidationIssue } from "./schema-validation.ts";
+import { storedPayloadOf } from "./stored-payload.ts";
 
 export class UndeclaredEventError extends Error {
 	constructor(publisher: string, event: string) {
@@ -60,11 +61,14 @@ export async function recordEvent(
 		publication.definition.plugin !== publication.publisher
 	)
 		throw new UndeclaredEventError(publication.publisher, name);
-	const payload = await event.validatePayload(publication.payload);
+	const payload = await storedPayloadOf(
+		publication.payload,
+		event.validatePayload,
+	);
 	if (!payload.valid) throw new InvalidEventPayloadError(name, payload.issues);
 	await transaction`
 		INSERT INTO core.events (id, name, version, occurred_at, workspace_id, payload)
-		VALUES (${publication.id}, ${name}, ${event.version}, ${publication.occurredAt}, ${publication.workspace}, ${payload.value})`;
+		VALUES (${publication.id}, ${name}, ${event.version}, ${publication.occurredAt}, ${publication.workspace}, ${payload.json}::text::jsonb)`;
 	await transaction`
 		INSERT INTO core.event_deliveries (event_id, event_sequence, subscriber, next_attempt_at)
 		SELECT e.id, e.sequence, subscriber, ${publication.occurredAt}

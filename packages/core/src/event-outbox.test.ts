@@ -55,10 +55,10 @@ const labelRenamed = defineEvent({
 
 type LabelRenamedHandler = EventSubscription<{ labelId: string }>["handle"];
 
-function subscribing(
+function subscribing<Payload>(
 	subscriber: string,
-	event: EventDefinition<{ labelId: string }>,
-	handle: LabelRenamedHandler,
+	event: EventDefinition<Payload>,
+	handle: EventSubscription<Payload>["handle"],
 ): EventParticipant {
 	return {
 		events: [],
@@ -77,14 +77,21 @@ function subscription(
 	return subscribing(subscriber, labelRenamed, handle);
 }
 
-function registryOf(
+function registryOfBoardPublishing<Payload>(
+	event: EventDefinition<Payload>,
 	...subscribers: readonly EventParticipant[]
 ): EventRegistry {
 	const board: EventParticipant = {
-		events: readEvents("board", [labelRenamed]).value,
+		events: readEvents("board", [event]).value,
 		subscriptions: [],
 	};
 	return registerEvents({ active: [board, ...subscribers], notActive: [] });
+}
+
+function registryOf(
+	...subscribers: readonly EventParticipant[]
+): EventRegistry {
+	return registryOfBoardPublishing(labelRenamed, ...subscribers);
 }
 
 const labelRenamedWithBrokenSchema = defineEvent({
@@ -175,6 +182,23 @@ async function recordLabelRenamedBeforeTheEventSequence(
 		VALUES (${id}, 'search', ${NOW})`;
 }
 
+async function publish<Payload>(
+	{ sql, events }: Pick<DeliveryScenario, "sql" | "events">,
+	definition: EventDefinition<Payload>,
+	payload: Payload,
+): Promise<void> {
+	await sql.begin((transaction) =>
+		recordEvent(transaction, events, {
+			id: EVENT,
+			publisher: "board",
+			definition,
+			payload,
+			occurredAt: NOW,
+			workspace: WORKSPACE,
+		}),
+	);
+}
+
 async function publishLabelRenamed(
 	sql: SQL,
 	events: EventRegistry,
@@ -190,6 +214,29 @@ async function publishLabelRenamed(
 			workspace: WORKSPACE,
 		}),
 	);
+}
+
+async function deliveredPayloads<Payload>(
+	sql: SQL,
+	definition: EventDefinition<Payload>,
+	payload: Payload,
+): Promise<Payload[]> {
+	const received: Payload[] = [];
+	const events = registryOfBoardPublishing(
+		definition,
+		subscribing("search", definition, async (event) => {
+			received.push(event.payload);
+		}),
+	);
+	await publish({ sql, events }, definition, payload);
+	await deliveryOf({ sql, events }).delivery.deliverDue(NOT_STOPPED);
+	return received;
+}
+
+function boardEvent<Payload>(
+	payload: EventDefinition<Payload>["payload"],
+): EventDefinition<Payload> {
+	return defineEvent({ plugin: "board", name: "CardDue", version: 1, payload });
 }
 
 type DeliveryScenario = {
@@ -650,6 +697,54 @@ describe("a handler that timed out", () => {
 		expect(failuresIn(entries)).toEqual([
 			expect.objectContaining({ reason: "handler_timed_out", attempt: 1 }),
 		]);
+	});
+});
+
+describe("the payload of an event", () => {
+	test("is rejected when it is published if its schema does not accept what the outbox stores of it", async () => {
+		const database = await migratedDatabase();
+		const cardDue = boardEvent(z.date());
+		const events = registryOfBoardPublishing(cardDue);
+
+		const publishing = publish({ sql: database.sql, events }, cardDue, NOW);
+
+		expect(await publishing.catch((error: unknown) => error)).toMatchObject({
+			name: "InvalidEventPayloadError",
+			issues: [{ path: [], message: expect.stringContaining("date") }],
+		});
+	});
+
+	test("reaches the handler as its schema reads what the outbox stored of it", async () => {
+		const database = await migratedDatabase();
+
+		const delivered = await deliveredPayloads(
+			database.sql,
+			boardEvent(z.coerce.date()),
+			NOW,
+		);
+
+		expect(delivered).toEqual([NOW]);
+	});
+
+	test.each([
+		["a number", 7],
+		["a fraction", 1.5],
+		["true", true],
+		["false", false],
+		["a string", "label-1"],
+		["a string that reads as JSON", '{"labelId":7}'],
+		["null", null],
+		["a list", [7, "label-1", null]],
+	])("reaches the handler unchanged when it is %s", async (_case, payload) => {
+		const database = await migratedDatabase();
+
+		const delivered = await deliveredPayloads(
+			database.sql,
+			boardEvent<unknown>(z.unknown()),
+			payload,
+		);
+
+		expect(delivered).toEqual([payload]);
 	});
 });
 
