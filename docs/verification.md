@@ -88,7 +88,7 @@ curl -s -X POST http://127.0.0.1:3123/api/workspaces/00000000-0000-4000-8000-000
 docker compose -f compose.dev.yaml exec -T postgres psql -U workbench -d workbench_verify -c 'SELECT name, version, payload FROM core.events' -c 'TABLE core.event_deliveries'
 ```
 
-`core.events` nennt `reference.NoteCreated` in Version 1 mit der `noteId` der Antwort. `core.event_deliveries` bleibt leer, solange kein aktives Plugin das Event abonniert; mit einem abonnierenden Plugin steht dort je Plugin eine Zeile mit `attempts` und `delivered_at`, und mit `LOG_LEVEL=debug` meldet das Log `event delivered`, sonst nur `event not delivered` mit `reason`. Wie ein Handler ein Event erhält und eine gescheiterte Zustellung wiederholt wird, zeigen die Tests in `packages/core/src/events.test.ts`.
+`core.events` nennt `reference.NoteCreated` in Version 1 mit der `noteId` der Antwort. `core.event_deliveries` bleibt leer, solange kein in `PLUGINS` aktiviertes Plugin das Event abonniert; mit einem abonnierenden Plugin steht dort je Plugin eine Zeile mit `attempts` und `delivered_at`, und mit `LOG_LEVEL=debug` meldet das Log `event delivered`, sonst nur `event not delivered` mit `reason`. Wie ein Handler ein Event erhält und eine gescheiterte Zustellung wiederholt wird, zeigen die Tests in `packages/core/src/events.test.ts`.
 
 ## Einen Ladefehler auslösen
 
