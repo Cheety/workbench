@@ -72,6 +72,11 @@ const addEntry = defineOperation({
 	},
 });
 
+const entryAddedOfAnyPayload = defineEvent({
+	...entryAdded,
+	payload: z.unknown(),
+});
+
 const entryRemoved = defineEvent({
 	plugin: "ledger",
 	name: "EntryRemoved",
@@ -107,7 +112,7 @@ const addEntryWithForeignEvent = addingEntryAndPublishing(
 
 const addEntryWithMalformedEvent = addingEntryAndPublishing(
 	"addEntryWithMalformedEvent",
-	(ctx) => ctx.publish(entryAdded, { entryId: 7 as unknown as string }),
+	(ctx) => ctx.publish(entryAddedOfAnyPayload, { entryId: 7 }),
 );
 
 const countEntries = defineOperation({
