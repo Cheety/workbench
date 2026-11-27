@@ -8,9 +8,12 @@ const POLL_INTERVAL_MS = 1_000;
 function manualTimer() {
 	const delaysMs: number[] = [];
 	let pending: (() => void) | undefined;
+	let announce: (() => void) | undefined;
 	const setTimer: SetTimer = (expire, delayMs) => {
 		delaysMs.push(delayMs);
 		pending = expire;
+		announce?.();
+		announce = undefined;
 		return () => {
 			if (pending === expire) pending = undefined;
 		};
@@ -19,6 +22,10 @@ function manualTimer() {
 		setTimer,
 		delaysMs,
 		isPending: () => pending !== undefined,
+		nextSet: () =>
+			new Promise<void>((resolve) => {
+				announce = resolve;
+			}),
 		expire: () => {
 			if (pending === undefined) throw new Error("no timer is pending");
 			const expire = pending;
@@ -28,13 +35,8 @@ function manualTimer() {
 	};
 }
 
-function settled(): Promise<void> {
-	return new Promise((resolve) => setImmediate(resolve));
-}
-
 function controlledDelivery() {
 	const running: {
-		readonly stopSignal: AbortSignal;
 		finish(): void;
 		fail(error: Error): void;
 	}[] = [];
@@ -44,13 +46,12 @@ function controlledDelivery() {
 	let announce: (() => void) | undefined;
 	return {
 		delivery: {
-			deliverDue: (stopSignal: AbortSignal) => {
+			deliverDue: () => {
 				started += 1;
 				atOnce += 1;
 				mostAtOnce = Math.max(mostAtOnce, atOnce);
 				return new Promise<void>((resolve, reject) => {
 					running.push({
-						stopSignal,
 						finish: () => {
 							atOnce -= 1;
 							resolve();
@@ -113,11 +114,10 @@ describe("the event delivery loop", () => {
 
 		timer.expire();
 		const pendingWhileDelivering = timer.isPending();
-		const secondStart = deliveries.nextStart();
+		const waitingForNextInterval = timer.nextSet();
 		deliveries.current().finish();
-		await settled();
+		await waitingForNextInterval;
 		timer.expire();
-		await secondStart;
 
 		expect(pendingWhileDelivering).toBe(false);
 		expect(deliveries.started()).toBe(2);
@@ -125,7 +125,7 @@ describe("the event delivery loop", () => {
 	});
 
 	test("delivers once more after wakes that arrive while it delivers, never twice at once", async () => {
-		const { loop, deliveries } = startLoop();
+		const { loop, timer, deliveries } = startLoop();
 
 		loop.wake();
 		loop.wake();
@@ -134,8 +134,9 @@ describe("the event delivery loop", () => {
 		const secondStart = deliveries.nextStart();
 		deliveries.current().finish();
 		await secondStart;
+		const waitingForNextInterval = timer.nextSet();
 		deliveries.current().finish();
-		await settled();
+		await waitingForNextInterval;
 
 		expect(startedWhileDelivering).toBe(1);
 		expect(deliveries.started()).toBe(2);
@@ -146,8 +147,9 @@ describe("the event delivery loop", () => {
 		const { loop, timer, deliveries, entries } = startLoop();
 
 		loop.wake();
+		const waitingForNextInterval = timer.nextSet();
 		deliveries.current().fail(new Error("connection refused"));
-		await settled();
+		await waitingForNextInterval;
 		timer.expire();
 
 		expect(entries).toEqual([
@@ -160,24 +162,37 @@ describe("the event delivery loop", () => {
 		expect(deliveries.started()).toBe(2);
 	});
 
-	test("tells a running delivery to stop, waits for it and delivers nothing afterwards", async () => {
-		const { loop, timer, deliveries } = startLoop();
-		loop.wake();
-		let stopped = false;
-
-		const stopping = loop.stop().then(() => {
-			stopped = true;
+	test("tells a running delivery to stop, waits until it has wound down and delivers nothing afterwards", async () => {
+		const timer = manualTimer();
+		const journal: string[] = [];
+		const woundDown = Promise.withResolvers<void>();
+		let started = 0;
+		const loop = startEventDeliveryLoop({
+			delivery: {
+				deliverDue: (stopSignal) => {
+					started += 1;
+					stopSignal.addEventListener("abort", () => {
+						setImmediate(() => {
+							journal.push("delivery wound down");
+							woundDown.resolve();
+						});
+					});
+					return woundDown.promise;
+				},
+			},
+			pollIntervalMs: POLL_INTERVAL_MS,
+			setTimer: timer.setTimer,
+			logger: recordingLogger().logger,
 		});
-		await settled();
-		const stoppedWhileDelivering = stopped;
-		const toldToStop = deliveries.current().stopSignal.aborted;
-		deliveries.current().finish();
-		await stopping;
 		loop.wake();
 
-		expect(toldToStop).toBe(true);
-		expect(stoppedWhileDelivering).toBe(false);
-		expect(deliveries.started()).toBe(1);
+		await loop.stop();
+		journal.push("loop stopped");
+		await woundDown.promise;
+		loop.wake();
+
+		expect(journal).toEqual(["delivery wound down", "loop stopped"]);
+		expect(started).toBe(1);
 		expect(timer.isPending()).toBe(false);
 	});
 });
