@@ -371,6 +371,7 @@ UPDATE core.jobs SET state = 'pending', settled_at = NULL, attempts = 0, next_at
 
 - Beginnt ein Versuch, zählt der Core ihn sofort und stellt den Job für die Wiederzustellungsfrist zurück: die Frist eines Versuchs (`PLUGIN_HOOK_TIMEOUT_MS`) plus 60 s. Endet der Prozess mitten im Versuch, läuft der Job nach dieser Frist erneut, auch in einem anderen Prozess; der abgebrochene Versuch zählt mit, und war es der letzte, landet der Job mit `attempt_lost` im Dead-Letter. Weil die Frist länger ist als die eines Versuchs, laufen nie zwei Versuche desselben Jobs zugleich, solange `run` seine Frist einhält.
 - Die Reihenfolge ist nicht zugesichert: Ein Job, der scheitert, hält die übrigen nicht auf.
+- Findet der Core zu einem Job, den er gerade für einen Versuch gewählt hat, keine Definition eines aktiven Plugins mehr, führt er ihn nicht aus und meldet die Warnung `job claimed but not declared` mit `jobId`, `job` und `attempt`; der gezählte Versuch bleibt gezählt, und der Job wird nach der Wiederzustellungsfrist wieder fällig.
 - Ein Job eines Plugins, das gerade nicht aktiv ist, bleibt liegen, bis es wieder aktiv ist, ohne Frist.
 - Ein Job hat bisher keinen Akteur, publiziert keine Events und reiht selbst keine Jobs ein; das gilt auch für einen Cron-Job.
 

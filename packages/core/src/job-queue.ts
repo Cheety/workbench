@@ -163,7 +163,10 @@ export function createJobQueue(options: JobQueueOptions): JobQueue {
 				const claimed = await claimNext(options, dueBy);
 				if (claimed === undefined) return;
 				const job = options.jobs.find(claimed.name);
-				if (job === undefined) continue;
+				if (job === undefined) {
+					loggerOf(claimed, options).warn("job claimed but not declared");
+					continue;
+				}
 				const settled =
 					claimed.attempts > job.maxAttempts
 						? await giveUpLost(claimed, job, options)
@@ -434,16 +437,23 @@ async function giveUpLost(
 	};
 }
 
+function loggerOf(
+	claimed: ClaimedJob,
+	{ logger }: Pick<JobQueueOptions, "logger">,
+): Logger {
+	return logger.with({
+		jobId: claimed.id,
+		job: claimed.name,
+		attempt: claimed.attempts,
+	});
+}
+
 function report(
 	claimed: ClaimedJob,
 	attempt: Attempt,
 	{ logger }: Pick<JobQueueOptions, "logger">,
 ): void {
-	const jobLogger = logger.with({
-		jobId: claimed.id,
-		job: claimed.name,
-		attempt: claimed.attempts,
-	});
+	const jobLogger = loggerOf(claimed, { logger });
 	switch (attempt.outcome) {
 		case "completed":
 			jobLogger.debug("job completed");

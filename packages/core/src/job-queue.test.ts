@@ -373,6 +373,31 @@ describe("a job whose stalled attempt ends while the attempt that took it over s
 	});
 });
 
+describe("a job that is claimed while no active plugin declares it", () => {
+	test("is not run, and the operator learns that its attempt was counted", async () => {
+		const database = await migratedDatabase();
+		const declared = registryOf(sendingReminders(async () => {}));
+		await enqueueReminder(database.sql, declared, JOB);
+		const { queue, entries } = queueOf({
+			sql: database.sql,
+			jobs: { ...declared, find: () => undefined },
+		});
+
+		await queue.runDue(NOT_STOPPED);
+
+		expect(entries).toEqual([
+			{
+				time: "2026-11-26T08:00:00.000Z",
+				level: "warn",
+				message: "job claimed but not declared",
+				jobId: JOB,
+				job: "mailer.sendReminder",
+				attempt: 1,
+			},
+		]);
+	});
+});
+
 describe("a job whose last attempt neither completed nor failed", () => {
 	test("is dead-lettered once its redelivery deadline has passed, without a further attempt", async () => {
 		const database = await migratedDatabase();
