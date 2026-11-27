@@ -5,6 +5,7 @@ import {
 	type HookOutcome,
 	type HookTimeout,
 	runWithin,
+	type SetTimer,
 } from "./hook-timeout.ts";
 import type { Logger } from "./logger.ts";
 
@@ -35,6 +36,8 @@ const CANCELLATION_CONNECTION_TIMEOUT_S = 5;
 
 const CANCELLATION_IDLE_TIMEOUT_S = 30;
 
+const CANCEL_AGAIN_AFTER_MS = 100;
+
 const backend = z.object({ pid: z.number().int() });
 
 export function openStatementCancellation(
@@ -56,33 +59,65 @@ export async function runInTransactionWithin(
 ): Promise<HookOutcome> {
 	const [row]: unknown[] = await transaction`SELECT pg_backend_pid() AS pid`;
 	const { pid } = backend.parse(row);
+	const inFlight = new Set<Promise<unknown>>();
 	const outcome = await runWithin(
-		(expired) => hook({ sql: statementsUntil(expired, transaction), expired }),
+		(expired) =>
+			hook({ sql: statementsUntil(expired, transaction, inFlight), expired }),
 		timeout,
 	);
 	if (outcome === "timed_out")
-		await cancelStatementInFlight(cancellation, pid, logger);
+		await cancelStatements(inFlight, {
+			backendPid: pid,
+			cancellation,
+			setTimer: timeout.setTimer,
+			logger,
+		});
 	return outcome;
 }
 
 function statementsUntil(
 	expired: AbortSignal,
 	transaction: SQL,
+	inFlight: Set<Promise<unknown>>,
 ): TransactionStatements {
 	return async (strings, ...values) => {
 		if (expired.aborted) throw new StatementRefusedError();
-		return await transaction(strings, ...values);
+		const statement: Promise<readonly unknown[]> = transaction(
+			strings,
+			...values,
+		).execute();
+		inFlight.add(statement);
+		try {
+			return await statement;
+		} finally {
+			inFlight.delete(statement);
+		}
 	};
 }
 
-async function cancelStatementInFlight(
-	cancellation: SQL,
-	backendPid: number,
-	logger: Logger,
+type StatementCancellation = {
+	readonly backendPid: number;
+	readonly cancellation: SQL;
+	readonly setTimer: SetTimer;
+	readonly logger: Logger;
+};
+
+async function cancelStatements(
+	inFlight: ReadonlySet<Promise<unknown>>,
+	{ backendPid, cancellation, setTimer, logger }: StatementCancellation,
 ): Promise<void> {
-	try {
-		await cancellation`SELECT pg_cancel_backend(${backendPid})`;
-	} catch (error) {
-		logger.error("statement not cancelled", { error: describeThrown(error) });
+	while (inFlight.size > 0) {
+		try {
+			await cancellation`SELECT pg_cancel_backend(${backendPid})`;
+		} catch (error) {
+			logger.error("statement not cancelled", { error: describeThrown(error) });
+			return;
+		}
+		await runWithin(
+			async () => {
+				await Promise.allSettled(inFlight);
+			},
+			{ ms: CANCEL_AGAIN_AFTER_MS, setTimer },
+		);
 	}
 }

@@ -92,6 +92,32 @@ async function untilAStatementWaitsForTheLock(observer: SQL): Promise<void> {
 			WHERE datname = current_database() AND wait_event_type = 'Lock'`;
 }
 
+function poolBehindAGate(database: FreshDatabase): {
+	readonly gate: PostgresGate;
+	readonly pool: SQL;
+} {
+	const gate = PostgresGate.create(database.url);
+	gate.forward();
+	const pool = new SQL(gate.url, { max: 1 });
+	cleanups.push(async () => {
+		gate.release();
+		await pool.close();
+		gate.close();
+	});
+	return { gate, pool };
+}
+
+async function untilStatementsWaitForTheLock(
+	observer: SQL,
+	count: number,
+): Promise<void> {
+	let waiting: unknown[] = [];
+	while (waiting.length < count)
+		waiting = await observer`
+			SELECT FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'`;
+}
+
 async function notesIn(sql: SQL): Promise<unknown[]> {
 	const rows: unknown[] = await sql`SELECT note FROM notes`;
 	return [...rows];
@@ -141,5 +167,78 @@ describe("a hook whose time is up while a statement of it is running", () => {
 			message: "statement refused: the time of its hook is up",
 		});
 		expect(await notesIn(database.sql)).toEqual([]);
+	});
+
+	test("is given up while a statement of another connection goes on undisturbed", async () => {
+		const database = await databaseWithNotes();
+		const observer = await connectionHoldingTheHookLock(database);
+		const bystander = new SQL(database.url, { max: 1 });
+		cleanups.push(() => bystander.close());
+		const timer = manualTimer();
+
+		const timerSet = timer.set();
+		const undisturbed =
+			bystander`SELECT pg_advisory_xact_lock(${HOOK_LOCK})`.then(
+				() => "finished",
+				() => "cancelled",
+			);
+		const running = database.sql.begin(async (transaction) => {
+			const outcome = await runInTransactionWithin(
+				transaction,
+				async ({ sql }) => {
+					await sql`SELECT pg_advisory_xact_lock(${HOOK_LOCK})`;
+				},
+				{
+					timeout: { ms: 250, setTimer: timer.setTimer },
+					cancellation: database.cancellation,
+					logger: recordingLogger().logger,
+				},
+			);
+			if (outcome === "timed_out") throw new TimeIsUpError();
+		});
+		await timerSet;
+		await untilStatementsWaitForTheLock(observer, 2);
+		timer.expire();
+		const givenUp = await running.catch((error: unknown) => error);
+		await observer`SELECT pg_advisory_unlock(${HOOK_LOCK})`;
+
+		expect(givenUp).toBeInstanceOf(TimeIsUpError);
+		expect(await undisturbed).toBe("finished");
+	});
+});
+
+describe("a hook whose statement reaches Postgres only after its time is up", () => {
+	test("has it cancelled by a further attempt, so that it is given up while the lock is still held", async () => {
+		const database = await databaseWithNotes();
+		const observer = await connectionHoldingTheHookLock(database);
+		const { gate, pool } = poolBehindAGate(database);
+		const timer = manualTimer();
+		const begun = Promise.withResolvers<void>();
+		const hook: TransactionHook = async ({ sql }) => {
+			gate.holdRequests();
+			const statement = sql`SELECT pg_advisory_xact_lock(${HOOK_LOCK})`;
+			begun.resolve();
+			await statement;
+		};
+
+		const running = pool.begin(async (transaction) => {
+			const outcome = await runInTransactionWithin(transaction, hook, {
+				timeout: { ms: 250, setTimer: timer.setTimer },
+				cancellation: database.cancellation,
+				logger: recordingLogger().logger,
+			});
+			if (outcome === "timed_out") throw new TimeIsUpError();
+		});
+		await begun.promise;
+		const cancelledInVain = timer.set();
+		timer.expire();
+		await cancelledInVain;
+		gate.release();
+		await untilAStatementWaitsForTheLock(observer);
+		timer.expire();
+		const givenUp = await running.catch((error: unknown) => error);
+
+		expect(givenUp).toBeInstanceOf(TimeIsUpError);
+		expect([...(await pool`SELECT 1 AS served`)]).toEqual([{ served: 1 }]);
 	});
 });
