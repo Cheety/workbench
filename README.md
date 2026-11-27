@@ -144,8 +144,8 @@ const renameLabel = defineOperation({
 ```
 
 - `name` ist Verb und Objekt in camelCase (`createLabel`). Die Registry vergibt den Namen `<plugin>.<name>`, hier `board.renameLabel`.
-- `kind` ist `query` (nur lesen) oder `mutation`, `target` ist `object` oder `workspace`.
-- `right` nennt genau ein Recht des eigenen Plugins: `<plugin>.` gefolgt von Abschnitten aus Kleinbuchstaben, Ziffern und Bindestrichen, durch Punkte getrennt (`board.label.edit`).
+- `kind` ist `query` (nur lesen) oder `mutation`, `target` ist `object` oder `workspace`. Bisher wird `target` nur beim Laden geprüft; die Pipeline ruft jede Operation auf einem Workspace auf. Operationen auf einem einzelnen Objekt (`object`) folgen in einem späteren Ticket.
+- `right` nennt genau ein Recht des eigenen Plugins: `<plugin>.` gefolgt von Abschnitten aus Kleinbuchstaben, Ziffern und Bindestrichen, durch Punkte getrennt (`board.label.edit`). Das Recht wird bisher nur beim Laden geprüft, aber beim Aufruf nicht durchgesetzt: Jeder Akteur darf jede Operation aufrufen. Die Prüfung folgt in einem späteren Ticket mit Identität und Zugriff.
 - `input` und `output` sind Schemas nach [Standard Schema](https://standardschema.dev), etwa von zod 4 (ADR-0010).
 
 Eine Operation mit unbekannter Art oder unbekanntem Ziel, ohne Recht oder mit mehreren, mit dem Recht eines anderen Plugins, ohne Schema, ohne `execute` oder mit einem Namen, den das Plugin schon deklariert, macht das Plugin ungültig: Es wird nicht geladen (`invalid_manifest`), und `detail` nennt jede fehlerhafte Operation.
