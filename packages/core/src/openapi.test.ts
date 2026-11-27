@@ -59,8 +59,6 @@ describe("the OpenAPI document of the HTTP API", () => {
 				"/api/workspaces/{workspace}/operations/board.renameLabel": {
 					post: {
 						operationId: "board.renameLabel",
-						"x-workbench-kind": "mutation",
-						"x-workbench-right": "board.label.edit",
 						parameters: [
 							{
 								name: "workspace",

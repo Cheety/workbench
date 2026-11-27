@@ -45,8 +45,6 @@
 		"/api/workspaces/{workspace}/operations/reference.createNote": {
 			"post": {
 				"operationId": "reference.createNote",
-				"x-workbench-kind": "mutation",
-				"x-workbench-right": "reference.note.create",
 				"parameters": [
 					{
 						"name": "workspace",
@@ -113,8 +111,6 @@
 		"/api/workspaces/{workspace}/operations/reference.listNotes": {
 			"post": {
 				"operationId": "reference.listNotes",
-				"x-workbench-kind": "query",
-				"x-workbench-right": "reference.note.read",
 				"parameters": [
 					{
 						"name": "workspace",

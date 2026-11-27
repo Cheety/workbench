@@ -28,8 +28,6 @@ type Content = {
 
 export type OpenApiOperation = {
 	readonly operationId: string;
-	readonly "x-workbench-kind": string;
-	readonly "x-workbench-right": string;
 	readonly parameters: readonly JsonSchema[];
 	readonly requestBody: { readonly required: true; readonly content: Content };
 	readonly responses: {
@@ -138,8 +136,6 @@ async function operationsOf(
 function describeOperation(operation: RegisteredOperation): OpenApiOperation {
 	return {
 		operationId: operation.name,
-		"x-workbench-kind": operation.kind,
-		"x-workbench-right": operation.right,
 		parameters: [
 			{
 				name: "workspace",
