@@ -4,10 +4,11 @@ import { z } from "zod";
 import { fullJitterBackoff } from "./database-wait.ts";
 import { describeThrown, type ThrownError } from "./failure-reason.ts";
 import { type HookTimeout, runWithin } from "./hook-timeout.ts";
-import type {
-	JobRegistry,
-	RegisteredCronJob,
-	RegisteredJob,
+import {
+	getJob,
+	type JobRegistry,
+	type RegisteredCronJob,
+	type RegisteredJob,
 } from "./job-registry.ts";
 import type { Logger } from "./logger.ts";
 import { quote } from "./quote.ts";
@@ -164,12 +165,11 @@ export function createJobQueue(options: JobQueueOptions): JobQueue {
 			while (!stopSignal.aborted) {
 				const claimed = await claimNext(options, dueBy);
 				if (claimed === undefined) return;
-				const job = options.jobs.find(claimed.name);
-				if (job === undefined) {
-					loggerOf(claimed, options).warn("job claimed but not declared");
-					continue;
-				}
-				await attemptOrGiveUp(claimed, job, attemptOptions);
+				await attemptOrGiveUp(
+					claimed,
+					getJob(options.jobs, claimed.name),
+					attemptOptions,
+				);
 			}
 		},
 	};

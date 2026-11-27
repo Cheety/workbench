@@ -35,6 +35,19 @@ export type JobRegistry = {
 	cronJobs(): readonly RegisteredCronJob[];
 };
 
+export class JobNotRegisteredError extends Error {
+	constructor(job: string) {
+		super(`no active plugin declares the job ${quote(job)}`);
+		this.name = "JobNotRegisteredError";
+	}
+}
+
+export function getJob(jobs: JobRegistry, name: string): RegisteredJob {
+	const job = jobs.find(name);
+	if (job === undefined) throw new JobNotRegisteredError(name);
+	return job;
+}
+
 export type JobsRead = {
 	readonly value: readonly RegisteredJob[];
 	readonly problems: readonly string[];
