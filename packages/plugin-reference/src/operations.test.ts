@@ -159,6 +159,7 @@ describe("the notes of the reference plugin", () => {
 
 	test.each([
 		["an empty title", "reference.createNote", { title: "" }],
+		["a title of only spaces", "reference.createNote", { title: "   " }],
 		[
 			"a title over 200 characters",
 			"reference.createNote",
@@ -205,21 +206,5 @@ describe("the notes of the reference plugin", () => {
 				payload: { noteId: "00000000-0000-4000-8000-000000000002" },
 			},
 		]);
-	});
-
-	test("tell nobody about a note that was not created", async () => {
-		const received: PublishedEvent<{ noteId: string }>[] = [];
-		const reference = await startReference(searchIndexing(received));
-		const workspace = await reference.createWorkspace("Alpha");
-
-		await reference.call({
-			actor: ALICE,
-			workspace,
-			operation: "reference.createNote",
-			input: { title: "   " },
-		});
-		await reference.deliverEvents();
-
-		expect(received).toEqual([]);
 	});
 });
