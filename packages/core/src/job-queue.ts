@@ -180,21 +180,21 @@ function dueCronJobEnqueuerOf({
 	jobs,
 	newJobId,
 }: Pick<JobQueueOptions, "sql" | "jobs" | "newJobId">): (
-	now: Date,
+	dueBy: Date,
 ) => Promise<void> {
 	const enqueuedDue = new Map<string, number>();
-	const isEnqueuedBeyond = (job: RegisteredCronJob, now: Date): boolean => {
+	const isEnqueuedBeyond = (job: RegisteredCronJob, dueBy: Date): boolean => {
 		const due = enqueuedDue.get(job.name);
-		return due !== undefined && due > now.getTime();
+		return due !== undefined && due > dueBy.getTime();
 	};
-	return async (now) => {
+	return async (dueBy) => {
 		for (const job of jobs.cronJobs()) {
-			if (isEnqueuedBeyond(job, now)) continue;
-			const next = job.schedule.nextAfter(now);
-			const dueTimes = [...(await missedDueTimes(sql, job, now)), next];
+			if (isEnqueuedBeyond(job, dueBy)) continue;
+			const next = job.schedule.nextAfter(dueBy);
+			const dueTimes = [...(await missedDueTimes(sql, job, dueBy)), next];
 			await sql`
 				INSERT INTO core.jobs (id, name, due_at, enqueued_at, next_attempt_at)
-				SELECT due.id, ${job.name}, due.at::timestamptz, ${now}, due.at::timestamptz
+				SELECT due.id, ${job.name}, due.at::timestamptz, ${dueBy}, due.at::timestamptz
 				FROM unnest(
 					${sql.array(
 						dueTimes.map(() => newJobId()),
@@ -216,14 +216,14 @@ const latestDueTime = z.object({ latest: z.date().nullable() });
 async function missedDueTimes(
 	sql: SQL,
 	job: RegisteredCronJob,
-	now: Date,
+	dueBy: Date,
 ): Promise<readonly Date[]> {
 	const [row]: unknown[] = await sql`
 		SELECT max(due_at) AS latest FROM core.jobs WHERE name = ${job.name}`;
 	const { latest } = latestDueTime.parse(row);
 	if (latest === null) return [];
 	const missed: Date[] = [];
-	let due = job.schedule.latestUpTo(now);
+	let due = job.schedule.latestUpTo(dueBy);
 	while (due > latest && missed.length < MOST_CAUGHT_UP_DUE_TIMES) {
 		missed.push(due);
 		due = job.schedule.latestUpTo(new Date(due.getTime() - 1));
@@ -240,8 +240,9 @@ async function claimNext(
 	}: Pick<JobQueueOptions, "sql" | "jobs" | "now" | "runTimeout">,
 	dueBy: Date,
 ): Promise<ClaimedJob | undefined> {
+	const claimedAt = now();
 	const redeliverAt = new Date(
-		now().getTime() + runTimeout.ms + REDELIVERY_BUFFER_MS,
+		claimedAt.getTime() + runTimeout.ms + REDELIVERY_BUFFER_MS,
 	);
 	const [row]: unknown[] = await sql`
 		UPDATE core.jobs
@@ -268,14 +269,14 @@ async function attemptOrGiveUp(
 		report(claimed, await runAttempt(claimed, job, options), options);
 		return;
 	}
-	const lost = { ...claimed, attempts: job.maxAttempts };
+	const lastAttempted = { ...claimed, attempts: job.maxAttempts };
 	const outcome = await deadLetter(
 		options.sql,
 		claimed,
 		{ reason: "attempt_lost" },
-		{ at: options.now(), attempts: lost.attempts },
+		{ at: options.now(), attempts: lastAttempted.attempts },
 	);
-	report(lost, outcome, options);
+	report(lastAttempted, outcome, options);
 }
 
 async function runAttempt(
@@ -378,15 +379,28 @@ async function callRun(call: RunCall, ctx: JobContext): Promise<void> {
 async function complete(
 	transaction: SQL,
 	claimed: ClaimedJob,
-	now: Date,
+	completedAt: Date,
 ): Promise<void> {
-	const completed: unknown[] = await transaction`
-		UPDATE core.jobs SET state = 'completed', settled_at = ${now}
+	const isCompleted = await updateIfStillClaimed(
+		transaction,
+		claimed,
+		transaction`state = 'completed', settled_at = ${completedAt}`,
+	);
+	if (!isCompleted) throw new SettledElsewhereError();
+}
+
+async function updateIfStillClaimed(
+	sql: SQL,
+	claimed: ClaimedJob,
+	assignments: SQL.Query<unknown>,
+): Promise<boolean> {
+	const updated: unknown[] = await sql`
+		UPDATE core.jobs SET ${assignments}
 		WHERE id = ${claimed.id}
 			AND state = 'pending'
 			AND attempts = ${claimed.attempts}
 		RETURNING id`;
-	if (completed.length === 0) throw new SettledElsewhereError();
+	return updated.length > 0;
 }
 
 function settleFailed(
@@ -422,16 +436,14 @@ async function postpone(
 	failure: JobFailure,
 	retry: Retry,
 ): Promise<AttemptOutcome> {
-	const postponed: unknown[] = await sql`
-		UPDATE core.jobs
-		SET next_attempt_at = ${retry.at}, failure_reason = ${failure.reason}
-		WHERE id = ${claimed.id}
-			AND state = 'pending'
-			AND attempts = ${claimed.attempts}
-		RETURNING id`;
-	return postponed.length === 0
-		? SETTLED_ELSEWHERE
-		: { outcome: "postponed", failure, retryInMs: retry.inMs };
+	const isPostponed = await updateIfStillClaimed(
+		sql,
+		claimed,
+		sql`next_attempt_at = ${retry.at}, failure_reason = ${failure.reason}`,
+	);
+	return isPostponed
+		? { outcome: "postponed", failure, retryInMs: retry.inMs }
+		: SETTLED_ELSEWHERE;
 }
 
 type Death = {
@@ -445,19 +457,16 @@ async function deadLetter(
 	failure: JobFailure,
 	death: Death,
 ): Promise<AttemptOutcome> {
-	const dead: unknown[] = await sql`
-		UPDATE core.jobs
-		SET state = 'dead',
+	const isDead = await updateIfStillClaimed(
+		sql,
+		claimed,
+		sql`
+			state = 'dead',
 			settled_at = ${death.at},
 			attempts = ${death.attempts},
-			failure_reason = ${failure.reason}
-		WHERE id = ${claimed.id}
-			AND state = 'pending'
-			AND attempts = ${claimed.attempts}
-		RETURNING id`;
-	return dead.length === 0
-		? SETTLED_ELSEWHERE
-		: { outcome: "dead_lettered", failure };
+			failure_reason = ${failure.reason}`,
+	);
+	return isDead ? { outcome: "dead_lettered", failure } : SETTLED_ELSEWHERE;
 }
 
 function loggerOf(
