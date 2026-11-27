@@ -849,6 +849,192 @@ describe("a cron job of an instance with two processes", () => {
 	});
 });
 
+const DAY_MS = 86_400_000;
+
+const HOUR_MS = 3_600_000;
+
+function removalsIn(entries: readonly LogEntry[]): LogEntry[] {
+	return entries.filter((entry) => entry.message === "settled jobs removed");
+}
+
+async function insertRemindersCompletedAt(
+	sql: SQL,
+	completedAt: Date,
+	count: number,
+): Promise<void> {
+	await sql`
+		INSERT INTO core.jobs (id, name, payload, workspace_id, enqueued_at, next_attempt_at, state, settled_at)
+		SELECT gen_random_uuid(), 'mailer.sendReminder', '{"cardId": "card-1"}'::jsonb, ${WORKSPACE}, ${completedAt}, ${completedAt}, 'completed', ${completedAt}
+		FROM generate_series(1, ${count})`;
+}
+
+async function countJobs(sql: SQL): Promise<unknown> {
+	const [row]: unknown[] =
+		await sql`SELECT count(*)::integer AS jobs FROM core.jobs`;
+	return row;
+}
+
+describe("a settled job", () => {
+	test.each([
+		{ state: "completed", days: 7, run: async () => {} },
+		{
+			state: "dead",
+			days: 30,
+			run: async () => {
+				throw new Error("the address does not exist");
+			},
+		},
+	])(
+		"is removed from the queue $days days after it was settled as $state, and not before",
+		async ({ state, days, run }) => {
+			const database = await migratedDatabase();
+			const jobs = registryOf(
+				defineJob({
+					name: "sendReminder",
+					payload: z.object({ cardId: z.string() }),
+					maxAttempts: 1,
+					run,
+				}),
+			);
+			await enqueueReminder(database.sql, jobs, JOB);
+			await queueOf({ sql: database.sql, jobs }).queue.runDue(NOT_STOPPED);
+			const justBefore = queueOf({
+				sql: database.sql,
+				jobs,
+				now: () => new Date(NOW.getTime() + days * DAY_MS - 1),
+			});
+			const onTheDay = queueOf({
+				sql: database.sql,
+				jobs,
+				now: () => new Date(NOW.getTime() + days * DAY_MS),
+			});
+
+			await justBefore.queue.runDue(NOT_STOPPED);
+			const rowsJustBefore: unknown[] =
+				await database.sql`SELECT id, state FROM core.jobs`;
+			await onTheDay.queue.runDue(NOT_STOPPED);
+
+			expect([...rowsJustBefore]).toEqual([{ id: JOB, state }]);
+			expect(await countJobs(database.sql)).toEqual({ jobs: 0 });
+			expect(removalsIn(justBefore.entries)).toEqual([]);
+			expect(removalsIn(onTheDay.entries)).toEqual([
+				expect.objectContaining({ level: "debug", removed: 1 }),
+			]);
+		},
+	);
+});
+
+describe("a pending job", () => {
+	test("stays in the queue however long ago it was enqueued", async () => {
+		const database = await migratedDatabase();
+		await enqueueReminder(
+			database.sql,
+			registryOf(sendingReminders(async () => {})),
+			JOB,
+		);
+		const notDeclaring = registryOf(
+			defineJob({
+				name: "archiveCard",
+				payload: z.object({ cardId: z.string() }),
+				maxAttempts: 3,
+				run: async () => {},
+			}),
+		);
+		const { queue } = queueOf({
+			sql: database.sql,
+			jobs: notDeclaring,
+			now: () => new Date(NOW.getTime() + 365 * DAY_MS),
+		});
+
+		await queue.runDue(NOT_STOPPED);
+
+		const rows: unknown[] = await database.sql`SELECT id, state FROM core.jobs`;
+		expect([...rows]).toEqual([{ id: JOB, state: "pending" }]);
+	});
+});
+
+describe("settled jobs past their retention", () => {
+	test("are removed a thousand in a run of the queue, and the rest in the next run", async () => {
+		const database = await migratedDatabase();
+		await insertRemindersCompletedAt(
+			database.sql,
+			new Date(NOW.getTime() - 8 * DAY_MS),
+			1_001,
+		);
+		const { queue } = queueOf({
+			sql: database.sql,
+			jobs: registryOf(sendingReminders(async () => {})),
+		});
+
+		await queue.runDue(NOT_STOPPED);
+		const leftAfterTheFirstRun = await countJobs(database.sql);
+		await queue.runDue(NOT_STOPPED);
+
+		expect(leftAfterTheFirstRun).toEqual({ jobs: 1 });
+		expect(await countJobs(database.sql)).toEqual({ jobs: 0 });
+	});
+
+	test("are not looked for again by a process until an hour after it removed all there were", async () => {
+		const database = await migratedDatabase();
+		let now = NOW;
+		const { queue } = queueOf({
+			sql: database.sql,
+			jobs: registryOf(sendingReminders(async () => {})),
+			now: () => now,
+		});
+		await queue.runDue(NOT_STOPPED);
+		await insertRemindersCompletedAt(
+			database.sql,
+			new Date(NOW.getTime() - 8 * DAY_MS),
+			1,
+		);
+
+		now = new Date(NOW.getTime() + HOUR_MS - 1);
+		await queue.runDue(NOT_STOPPED);
+		const leftWithinTheHour = await countJobs(database.sql);
+		now = new Date(NOW.getTime() + HOUR_MS);
+		await queue.runDue(NOT_STOPPED);
+
+		expect(leftWithinTheHour).toEqual({ jobs: 1 });
+		expect(await countJobs(database.sql)).toEqual({ jobs: 0 });
+	});
+});
+
+describe("a cron job whose due times are all past their retention", () => {
+	test("keeps its latest due time in the queue, and catches up from it once its plugin is active again", async () => {
+		const database = await migratedDatabase();
+		await database.sql`
+			INSERT INTO core.jobs (id, name, due_at, enqueued_at, next_attempt_at, state, settled_at)
+			SELECT gen_random_uuid(), 'mailer.sendDigest', due.at, due.at, due.at, 'completed', due.at
+			FROM unnest(ARRAY[
+				'2026-10-01T12:01:00.000Z',
+				'2026-10-01T12:02:00.000Z',
+				'2026-10-01T12:03:00.000Z'
+			]::timestamptz[]) AS due (at)`;
+		const run: Date[] = [];
+		const whileNotDeclared = queueOf({
+			sql: database.sql,
+			jobs: registryOf(sendingReminders(async () => {})),
+		});
+		const declaredAgain = queueOf({
+			sql: database.sql,
+			jobs: everyMinute(run),
+			now: () => new Date("2026-11-27T09:00:30.000Z"),
+		});
+
+		await whileNotDeclared.queue.runDue(NOT_STOPPED);
+		const keptDueTimes: unknown[] =
+			await database.sql`SELECT due_at FROM core.jobs`;
+		await declaredAgain.queue.runDue(NOT_STOPPED);
+
+		expect([...keptDueTimes]).toEqual([
+			{ due_at: new Date("2026-10-01T12:03:00.000Z") },
+		]);
+		expect(run).toHaveLength(10);
+		expect(run.at(-1)).toEqual(new Date("2026-11-27T09:00:00.000Z"));
+	});
+});
+
 describe("the job loop on the queue", () => {
 	test("runs a job when it is woken, without waiting for its poll interval", async () => {
 		const database = await migratedDatabase();

@@ -84,6 +84,17 @@ const SHORTEST_RETRY_MS = 1;
 
 const MOST_CAUGHT_UP_DUE_TIMES = 10;
 
+const DAY_MS = 86_400_000;
+
+const RETENTIONS = [
+	{ state: "completed", ms: 7 * DAY_MS },
+	{ state: "dead", ms: 30 * DAY_MS },
+] as const;
+
+const MOST_REMOVED_PER_RUN = 1_000;
+
+const REMOVAL_INTERVAL_MS = 3_600_000;
+
 const claimedJob = z.object({
 	id: z.string(),
 	name: z.string(),
@@ -157,6 +168,7 @@ export function createJobQueue(options: JobQueueOptions): JobQueue {
 		retryDelayMs: fullJitterBackoff({ ...RETRY, random: options.random }),
 	};
 	const enqueueDueCronJobs = dueCronJobEnqueuerOf(options);
+	const removeExpiredJobs = expiredJobRemoverOf(options);
 	return {
 		runDue: async (stopSignal) => {
 			if (options.jobs.names().length === 0) return;
@@ -164,7 +176,10 @@ export function createJobQueue(options: JobQueueOptions): JobQueue {
 			await enqueueDueCronJobs(dueBy);
 			while (!stopSignal.aborted) {
 				const claimed = await claimNext(options, dueBy);
-				if (claimed === undefined) return;
+				if (claimed === undefined) {
+					await removeExpiredJobs(dueBy);
+					return;
+				}
 				await attemptOrGiveUp(
 					claimed,
 					getJob(options.jobs, claimed.name),
@@ -217,6 +232,54 @@ function dueCronJobEnqueuerOf({
 				});
 		}
 	};
+}
+
+function expiredJobRemoverOf({
+	sql,
+	logger,
+}: Pick<JobQueueOptions, "sql" | "logger">): (now: Date) => Promise<void> {
+	let restsUntil = Number.NEGATIVE_INFINITY;
+	return async (now) => {
+		if (now.getTime() < restsUntil) return;
+		let removed = 0;
+		for (const retention of RETENTIONS)
+			removed += await removeSettled(sql, {
+				state: retention.state,
+				settledBy: new Date(now.getTime() - retention.ms),
+				atMost: MOST_REMOVED_PER_RUN - removed,
+			});
+		if (removed < MOST_REMOVED_PER_RUN)
+			restsUntil = now.getTime() + REMOVAL_INTERVAL_MS;
+		if (removed > 0) logger.debug("settled jobs removed", { removed });
+	};
+}
+
+type ExpiredJobs = {
+	readonly state: (typeof RETENTIONS)[number]["state"];
+	readonly settledBy: Date;
+	readonly atMost: number;
+};
+
+async function removeSettled(sql: SQL, expired: ExpiredJobs): Promise<number> {
+	const removed: unknown[] = await sql`
+		DELETE FROM core.jobs
+		WHERE id = ANY(ARRAY(
+			SELECT id FROM core.jobs AS settled
+			WHERE state = ${expired.state}
+				AND settled_at <= ${expired.settledBy}
+				AND (
+					due_at IS NULL
+					OR due_at < (
+						SELECT max(due_at) FROM core.jobs AS latest
+						WHERE latest.name = settled.name
+					)
+				)
+			ORDER BY settled_at
+			LIMIT ${expired.atMost}
+			FOR UPDATE OF settled SKIP LOCKED
+		))
+		RETURNING id`;
+	return removed.length;
 }
 
 const latestDueTime = z.object({ latest: z.date().nullable() });

@@ -19,3 +19,7 @@ CREATE TABLE jobs (
 CREATE INDEX jobs_pending_idx
 	ON jobs (next_attempt_at, id)
 	WHERE state = 'pending';
+
+CREATE INDEX jobs_settled_idx
+	ON jobs (state, settled_at)
+	WHERE settled_at IS NOT NULL;
