@@ -39,7 +39,12 @@ const CANCELLATION_IDLE_TIMEOUT_S = 30;
 
 const CANCEL_AGAIN_AFTER_MS = 100;
 
-const backend = z.object({ pid: z.number().int() });
+const STATEMENT_TIMEOUT_GRACE_MS = 1000;
+
+const backend = z.object({
+	pid: z.number().int(),
+	statement_timeout_ms: z.coerce.number().int().nonnegative(),
+});
 
 export function openStatementCancellation(
 	url: string,
@@ -58,8 +63,14 @@ export async function runInTransactionWithin(
 	hook: TransactionHook,
 	{ timeout, cancellation, logger }: TransactionDeadline,
 ): Promise<HookOutcome> {
-	const [row]: unknown[] = await transaction`SELECT pg_backend_pid() AS pid`;
-	const { pid } = backend.parse(row);
+	const [row]: unknown[] = await transaction`
+		SELECT pg_backend_pid() AS pid, setting AS statement_timeout_ms
+		FROM pg_settings WHERE name = 'statement_timeout'`;
+	const { pid, statement_timeout_ms } = backend.parse(row);
+	await limitStatements(
+		transaction,
+		statementTimeoutWithin(timeout.ms, statement_timeout_ms),
+	);
 	const inFlight = new Set<Promise<unknown>>();
 	const outcome = await runWithin(
 		(expired) =>
@@ -73,7 +84,22 @@ export async function runInTransactionWithin(
 			setTimer: timeout.setTimer,
 			logger,
 		});
+	else await limitStatements(transaction, statement_timeout_ms);
 	return outcome;
+}
+
+function statementTimeoutWithin(
+	hookTimeoutMs: number,
+	statementTimeoutMs: number,
+): number {
+	const hookLimitMs = hookTimeoutMs + STATEMENT_TIMEOUT_GRACE_MS;
+	return statementTimeoutMs === 0
+		? hookLimitMs
+		: Math.min(hookLimitMs, statementTimeoutMs);
+}
+
+async function limitStatements(transaction: SQL, ms: number): Promise<void> {
+	await transaction`SELECT set_config('statement_timeout', ${String(ms)}, true)`;
 }
 
 function statementsUntil(

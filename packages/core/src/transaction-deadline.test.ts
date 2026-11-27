@@ -13,6 +13,7 @@ import {
 	openStatementCancellation,
 	runInTransactionWithin,
 	type TransactionHook,
+	type TransactionStatements,
 } from "./transaction-deadline.ts";
 
 const connectionSettings = z.object({
@@ -204,6 +205,119 @@ describe("a hook whose time is up while a statement of it is running", () => {
 
 		expect(givenUp).toBeInstanceOf(TimeIsUpError);
 		expect(await undisturbed).toBe("finished");
+	});
+});
+
+function poolWithTheStatementTimeoutOfAnInstance(database: FreshDatabase): SQL {
+	const pool = new SQL(database.url, {
+		max: 1,
+		connection: { statement_timeout: STATEMENT_TIMEOUT_MS },
+	});
+	cleanups.push(() => pool.close());
+	return pool;
+}
+
+function cancellationThatIsRefused(database: FreshDatabase): SQL {
+	const gate = PostgresGate.create(database.url);
+	gate.refuse();
+	const cancellation = new SQL(gate.url, { max: 1, connectionTimeout: 1 });
+	cleanups.push(async () => {
+		await cancellation.close();
+		gate.close();
+	});
+	return cancellation;
+}
+
+const STATEMENT_TIMEOUT_MS = 60_000;
+
+const statementTimeout = z.tuple([z.object({ statement_timeout: z.string() })]);
+
+async function statementTimeoutIn(sql: TransactionStatements): Promise<string> {
+	const [row] = statementTimeout.parse(await sql`SHOW statement_timeout`);
+	return row.statement_timeout;
+}
+
+describe("a hook whose time is up while a statement of it cannot be cancelled", () => {
+	test("is given up shortly after its time as Postgres ends the statement, not only after the statement_timeout of its connection", async () => {
+		const database = await databaseWithNotes();
+		const observer = await connectionHoldingTheHookLock(database);
+		const pool = poolWithTheStatementTimeoutOfAnInstance(database);
+		const { logger, entries } = recordingLogger();
+		const timer = manualTimer();
+
+		const timerSet = timer.set();
+		const running = pool.begin(async (transaction) => {
+			const outcome = await runInTransactionWithin(
+				transaction,
+				async ({ sql }) => {
+					await sql`SELECT pg_advisory_xact_lock(${HOOK_LOCK})`;
+				},
+				{
+					timeout: { ms: 50, setTimer: timer.setTimer },
+					cancellation: cancellationThatIsRefused(database),
+					logger,
+				},
+			);
+			if (outcome === "timed_out") throw new TimeIsUpError();
+		});
+		await timerSet;
+		await untilAStatementWaitsForTheLock(observer);
+		timer.expire();
+		const givenUp = await running.catch((error: unknown) => error);
+
+		expect(givenUp).toBeInstanceOf(TimeIsUpError);
+		expect(entries).toEqual([
+			expect.objectContaining({ message: "statement not cancelled" }),
+		]);
+		expect([...(await pool`SELECT 1 AS served`)]).toEqual([{ served: 1 }]);
+	});
+});
+
+describe("the statement_timeout around a hook", () => {
+	test("is never raised for the statements of a hook whose time is longer", async () => {
+		const database = await databaseWithNotes();
+		const pool = poolWithTheStatementTimeoutOfAnInstance(database);
+		const seen = Promise.withResolvers<string>();
+
+		await pool.begin(async (transaction) => {
+			await runInTransactionWithin(
+				transaction,
+				async ({ sql }) => {
+					seen.resolve(await statementTimeoutIn(sql));
+				},
+				{
+					timeout: { ms: 600_000, setTimer: manualTimer().setTimer },
+					cancellation: database.cancellation,
+					logger: recordingLogger().logger,
+				},
+			);
+		});
+
+		expect(await seen.promise).toBe("1min");
+	});
+
+	test("is again that of the connection for the statements after a hook that finished in time", async () => {
+		const database = await databaseWithNotes();
+		const pool = poolWithTheStatementTimeoutOfAnInstance(database);
+
+		const after = await pool.begin(async (transaction) => {
+			await runInTransactionWithin(
+				transaction,
+				async ({ sql }) => {
+					await sql`INSERT INTO notes (note) VALUES ('written in time')`;
+				},
+				{
+					timeout: { ms: 50, setTimer: manualTimer().setTimer },
+					cancellation: database.cancellation,
+					logger: recordingLogger().logger,
+				},
+			);
+			return statementTimeoutIn((strings, ...values) =>
+				transaction(strings, ...values),
+			);
+		});
+
+		expect(after).toBe("1min");
 	});
 });
 
