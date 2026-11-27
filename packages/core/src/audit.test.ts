@@ -360,6 +360,38 @@ describe("a page of the audit", () => {
 		});
 	});
 
+	test("continues after its cursor when a newer entry was written since the page before", async () => {
+		const clock = clockAt("2026-11-27T08:00:00.000Z");
+		const harness = await startLedger({ now: clock.now });
+		const workspace = await harness.createWorkspace("Accounts");
+		clock.set("2026-11-27T08:01:00.000Z");
+		await addEntries(harness, workspace, 1);
+		clock.set("2026-11-27T08:02:00.000Z");
+		await addEntries(harness, workspace, 1);
+		const first = pageOf(
+			await listAuditEntries(harness, workspace, { limit: 1, cursor: null }),
+		);
+		clock.set("2026-11-27T08:03:00.000Z");
+		await addEntries(harness, workspace, 1);
+
+		const second = pageOf(
+			await listAuditEntries(harness, workspace, {
+				limit: 1,
+				cursor: first.nextCursor,
+			}),
+		);
+
+		expect(first.entries.map((listed) => listed.occurredAt)).toEqual([
+			"2026-11-27T08:02:00.000Z",
+		]);
+		expect(second).toEqual({
+			entries: [
+				expect.objectContaining({ occurredAt: "2026-11-27T08:01:00.000Z" }),
+			],
+			nextCursor: null,
+		});
+	});
+
 	test("names no next cursor when it holds the last entries exactly up to the limit", async () => {
 		const harness = await startLedger();
 		const workspace = await harness.createWorkspace("Accounts");
