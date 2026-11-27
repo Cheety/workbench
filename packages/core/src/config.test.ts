@@ -35,19 +35,19 @@ describe("loadConfig", () => {
 	});
 
 	test.each([
-		["0", "1"],
-		["8080", "1500"],
-		["65535", "60000"],
+		["0", 0, "1", 1],
+		["8080", 8080, "1500", 1500],
+		["65535", 65535, "60000", 60000],
 	])(
-		"reads PORT %s and READINESS_TIMEOUT_MS %s as decimal integers",
-		(port, timeout) => {
+		"reads PORT %s as %d and READINESS_TIMEOUT_MS %s as %d",
+		(port, expectedPort, timeout, expectedTimeoutMs) => {
 			const config = loadConfig({
 				env: { DATABASE_URL, PORT: port, READINESS_TIMEOUT_MS: timeout },
 				readSecretFile: noSecretFiles,
 			});
 
-			expect(config.port).toBe(Number(port));
-			expect(config.readinessTimeoutMs).toBe(Number(timeout));
+			expect(config.port).toBe(expectedPort);
+			expect(config.readinessTimeoutMs).toBe(expectedTimeoutMs);
 		},
 	);
 
