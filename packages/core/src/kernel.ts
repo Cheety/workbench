@@ -221,22 +221,15 @@ function rejectUnmigrated(
 	outcomes: readonly SchemaMigrationOutcome[],
 	failures: LoadFailures,
 ): void {
-	const outcomeOf = new Map(
-		outcomes.map((outcome) => [outcome.schema, outcome]),
+	const failed = new Map(
+		outcomes.flatMap((outcome) =>
+			outcome.migrated ? [] : [[outcome.schema, outcome] as const],
+		),
 	);
 	for (const [schema, owner] of owners) {
-		const outcome = outcomeOf.get(schema);
-		if (outcome === undefined) {
-			failures.reject(
-				migrationFailed(
-					owner,
-					`the migration run reported no outcome for schema ${quote(schema)}`,
-					undefined,
-				),
-			);
-		} else if (!outcome.migrated) {
-			failures.reject(migrationFailed(owner, outcome.detail, outcome.error));
-		}
+		const failure = failed.get(schema);
+		if (failure !== undefined)
+			failures.reject(migrationFailed(owner, failure.detail, failure.error));
 	}
 }
 
