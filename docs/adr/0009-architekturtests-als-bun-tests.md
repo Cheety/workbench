@@ -10,10 +10,11 @@ Importe findet die Prüfung über die Modulpfade im Quelltext, reine Typ-Importe
 
 Fachsprache ist eine feste Liste von Begriffen der geplanten fachlichen Plugins und des Referenz-Plugins (etwa `kanban`, `issue tracker`, `note`). Geprüft werden der Core und das SDK; nach ADR-0004 kennt auch das SDK die Fachsprache der Plugins nicht. Die Prüfung zerlegt jede ihrer Dateien in Wörter (Bezeichner, Strings, SQL) und sucht die Begriffe darin; die Liste nennt zu jedem Begriff Einzahl und Mehrzahl (`agent factory`, `agent factories`), weil sich die Mehrzahl nicht verlässlich aus der Einzahl bilden lässt. Tests sind ausgenommen, weil ihre Fixture-Plugins eigene Fachlichkeit haben. `issue` allein steht nicht auf der Liste, weil der Core das Wort für Befunde einer Validierung braucht (`ConfigIssue`, `error.issues` von zod); erfasst wird `issue tracker`.
 
+Core und SDK importieren außerhalb ihrer Tests kein Plugin-Paket, auch nicht dessen Contract; nach ADR-0007 findet der Kernel die Plugin-Pakete erst zur Laufzeit über ihre `package.json`. Die Prüfung nutzt dieselbe Erkennung von Plugin-Paketen und Importen wie die Plugin-Grenzen und erfasst damit Paketname, jeden Subpath, relative Pfade in ein Plugin-Paket und Pfade durch `node_modules`. Tests sind ausgenommen, weil sie ein Plugin-Paket laden dürfen, um den Kernel damit zu prüfen.
+
 ## Consequences
 
 - Die Liste der Fachbegriffe ist nie vollständig. Wer ein fachliches Plugin anlegt, trägt dessen Kernbegriffe in `packages/architecture/src/domain-language.ts` ein.
 - Die Prüfung sieht nur Modulpfade, die als Literal im Quelltext stehen; ein berechneter dynamischer Import entgeht ihr. Ein Text in Kommentar oder String, der wie ein Import aussieht, zählt dagegen mit.
 - Ein Contract kann nicht als Bedingungsobjekt (`{ "types": …, "default": … }`) exportiert werden, sondern nennt genau eine Datei.
 - Ein Contract steht in einer einzigen Datei. Wird sie zu groß, braucht es eine neue Regel, die mehrere Dateien zulässt, ohne Server- oder Client-Code einzuschließen.
-- Ob der Core Plugin-Pakete importiert (ADR-0007), prüft bisher keiner der Tests.
