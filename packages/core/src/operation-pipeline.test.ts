@@ -7,6 +7,7 @@ import {
 	type OperationContext,
 	OperationError,
 } from "@workbench/sdk";
+import { SQL } from "bun";
 import { z } from "zod";
 import type { PluginPackage } from "./kernel.ts";
 import type {
@@ -19,6 +20,7 @@ import {
 	type OperationHarnessOptions,
 	startOperationHarness,
 } from "./testing/operation-harness.ts";
+import { TEST_DATABASE_URL } from "./testing/postgres.ts";
 
 const ALICE: Actor = { kind: "user", id: "alice" };
 
@@ -138,6 +140,33 @@ const ledger: PluginPackage = {
 		},
 	],
 };
+
+const unstoppable: PluginPackage = {
+	packageName: "@workbench/plugin-unstoppable",
+	pluginName: "unstoppable",
+	version: "1.0.0",
+	loadDefinition: async () =>
+		definePlugin({
+			manifest: { name: "unstoppable" },
+			deactivate: () => {
+				const error = new Error("cannot stop");
+				Object.defineProperty(error, "message", {
+					get: () => {
+						throw new Error("cannot describe why it cannot stop");
+					},
+				});
+				throw error;
+			},
+		}),
+};
+
+async function countTestDatabases(): Promise<number> {
+	const admin = new SQL(TEST_DATABASE_URL, { max: 1 });
+	const [row] =
+		await admin`SELECT count(*)::int AS databases FROM pg_database WHERE datname LIKE 'workbench\_test\_%'`;
+	await admin.close();
+	return z.object({ databases: z.number() }).parse(row).databases;
+}
 
 const harnesses: OperationHarness[] = [];
 
@@ -442,6 +471,16 @@ describe("an actor calling an operation", () => {
 });
 
 describe("the operation harness", () => {
+	test("drops its database even when deactivating the plugins fails", async () => {
+		const databases = await countTestDatabases();
+		const harness = await startOperationHarness({ plugins: [unstoppable] });
+
+		const stopped = harness.stop();
+
+		await expect(stopped).rejects.toThrow("cannot describe why it cannot stop");
+		expect(await countTestDatabases()).toBe(databases);
+	});
+
 	test("gives the use case a fixed clock, sequential ids and a fixed random number by default", async () => {
 		const harness = await startLedger();
 		const workspace = await harness.createWorkspace("Accounts");

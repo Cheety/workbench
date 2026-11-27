@@ -155,8 +155,11 @@ function harnessOf(
 		call: (call) =>
 			pipeline.invoke({ ...call, correlationId: newCorrelationId() }),
 		stop: async () => {
-			await plugins.deactivate();
-			await database.drop();
+			try {
+				await plugins.deactivate();
+			} finally {
+				await database.drop();
+			}
 		},
 	};
 }
