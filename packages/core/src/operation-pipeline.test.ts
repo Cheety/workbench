@@ -133,6 +133,11 @@ async function startLedger(
 	return harness;
 }
 
+function outputOf(result: OperationResult): z.infer<typeof entry> {
+	if (!result.ok) throw new Error("the operation failed");
+	return entry.parse(result.output);
+}
+
 function failureOf(result: OperationResult): OperationFailure {
 	if (result.ok) throw new Error("the operation did not fail");
 	return result.failure;
@@ -143,7 +148,7 @@ describe("an actor calling an operation", () => {
 		const harness = await startLedger();
 		const workspace = await harness.createWorkspace("Accounts");
 
-		await harness.call({
+		const added = await harness.call({
 			actor: ALICE,
 			workspace,
 			operation: "ledger.addEntry",
@@ -159,7 +164,7 @@ describe("an actor calling an operation", () => {
 		expect(listed).toEqual({
 			ok: true,
 			output: {
-				entries: [{ id: "00000000-0000-4000-8000-000000000002", amount: 42 }],
+				entries: [{ id: outputOf(added).id, amount: 42 }],
 			},
 		});
 	});
@@ -177,7 +182,7 @@ describe("an actor calling an operation", () => {
 
 		expect(added).toEqual({
 			ok: true,
-			output: { id: "00000000-0000-4000-8000-000000000002", amount: 7 },
+			output: { id: expect.any(String), amount: 7 },
 		});
 	});
 

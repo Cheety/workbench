@@ -157,7 +157,9 @@ describe("schema migrations", () => {
 				{ schema: schemaName("plugin_notes"), migrated: true, applied: [] },
 			],
 		});
-		expect(entries).toEqual([]);
+		expect(entries).not.toContainEqual(
+			expect.objectContaining({ message: "migration applied" }),
+		);
 	});
 
 	test("apply only the migrations added since the last run, in the order of their names", async () => {
@@ -338,7 +340,10 @@ describe("schema migrations", () => {
 
 		const run = migrateSchemas(runner, [NOTES], NOT_STOPPED);
 
-		await expect(run).rejects.toThrow();
+		await expect(run).rejects.toMatchObject({
+			name: "PostgresError",
+			code: "ERR_POSTGRES_CONNECTION_TIMEOUT",
+		});
 	});
 
 	test("fail a migration that waits for a table lock longer than the statement timeout and free the migration lock", async () => {

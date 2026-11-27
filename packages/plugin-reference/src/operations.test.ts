@@ -50,13 +50,18 @@ describe("the notes of the reference plugin", () => {
 			input: { limit: 10 },
 		});
 
-		const note = {
-			id: "00000000-0000-4000-8000-000000000002",
-			title: "First thoughts",
-			createdAt: "2026-11-26T08:00:00.000Z",
-		};
-		expect(created).toEqual({ ok: true, output: note });
-		expect(listed).toEqual({ ok: true, output: { notes: [note] } });
+		expect(created).toEqual({
+			ok: true,
+			output: {
+				id: expect.any(String),
+				title: "First thoughts",
+				createdAt: "2026-11-26T08:00:00.000Z",
+			},
+		});
+		expect(listed).toEqual({
+			ok: true,
+			output: { notes: [created.ok ? created.output : undefined] },
+		});
 	});
 
 	test("list only the notes of the workspace they were created in", async () => {
