@@ -17,7 +17,7 @@ const OPERATION_PATH = /^\/api\/workspaces\/([^/]+)\/operations\/([^/]+)$/;
 
 export const MAX_BODY_BYTES = 1024 * 1024;
 
-const BEARER = /^Bearer ([^\s]+)$/;
+const BEARER = /^Bearer ([^\s]+)$/i;
 
 export type HttpApi = {
 	readonly authenticate: (token: string) => Promise<Authentication>;

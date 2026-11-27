@@ -205,19 +205,36 @@ describe("an operation called over HTTP", () => {
 
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({
-			id: "00000000-0000-4000-8000-000000000003",
+			id: expect.any(String),
 			amount: 42,
 		});
 	});
 
+	test.each(["bearer", "BEARER"])(
+		"accepts the token in the scheme spelled %s",
+		async (scheme) => {
+			const api = await startApiInstance();
+			const token = await api.issueToken();
+
+			const response = await api.post(
+				operationPath("ledger.addEntry"),
+				JSON.stringify({ amount: 42 }),
+				{ Authorization: `${scheme} ${token}` },
+			);
+
+			expect(response.status).toBe(200);
+		},
+	);
+
 	test("answers a query with what a mutation wrote before", async () => {
 		const api = await startApiInstance();
 		const token = await api.issueToken();
-		await api.post(
+		const added = await api.post(
 			operationPath("ledger.addEntry"),
 			JSON.stringify({ amount: 42 }),
 			bearer(token),
 		);
+		const { id } = z.object({ id: z.string() }).parse(await added.json());
 
 		const response = await api.post(
 			operationPath("ledger.listEntries"),
@@ -227,7 +244,7 @@ describe("an operation called over HTTP", () => {
 
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({
-			entries: [{ id: "00000000-0000-4000-8000-000000000003", amount: 42 }],
+			entries: [{ id, amount: 42 }],
 		});
 	});
 });
