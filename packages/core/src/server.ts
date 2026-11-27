@@ -1,10 +1,5 @@
 import { describeThrown } from "./failure-reason.ts";
-import {
-	API_PATH_PREFIX,
-	type ApiRequest,
-	answerApiRequest,
-	type HttpApi,
-} from "./http-api.ts";
+import { API_PATH_PREFIX, answerApiRequest, type HttpApi } from "./http-api.ts";
 import type { Logger } from "./logger.ts";
 import type { DatabaseCheck } from "./postgres.ts";
 import {
@@ -15,7 +10,7 @@ import {
 
 export const CORRELATION_ID_HEADER = "X-Correlation-ID";
 
-const VALID_CORRELATION_ID = /^[A-Za-z0-9._-]{1,128}$/;
+export const VALID_CORRELATION_ID = /^[A-Za-z0-9._-]{1,128}$/;
 const HEALTH_PATH_PREFIX = "/health/";
 const LIVENESS_PATH = "/health/live";
 const READINESS_PATH = "/health/ready";
@@ -33,14 +28,29 @@ const INTERNAL_ERROR: Problem = {
 	issues: [],
 };
 
-const INSTANCE_NOT_READY: Problem = {
-	code: "instance_not_ready",
-	kind: "not_ready",
-	detail: "the instance is still starting",
-	issues: [],
+export type StartupStatus = "starting" | "started" | "failed";
+
+const INSTANCE_NOT_READY: Record<Exclude<StartupStatus, "started">, Problem> = {
+	starting: {
+		code: "instance_not_ready",
+		kind: "not_ready",
+		detail: "the instance is still starting",
+		issues: [],
+	},
+	failed: {
+		code: "instance_not_ready",
+		kind: "not_ready",
+		detail: "the instance failed to start",
+		issues: [],
+	},
 };
 
-export type StartupStatus = "starting" | "started" | "failed";
+type IncomingRequest = {
+	readonly request: Request;
+	readonly path: string;
+	readonly correlationId: string;
+	readonly logger: Logger;
+};
 
 export type ServerOptions = {
 	readonly port: number;
@@ -97,18 +107,19 @@ function acceptCorrelationId(request: Request): string | undefined {
 }
 
 async function route(
-	apiRequest: ApiRequest,
+	incoming: IncomingRequest,
 	options: ServerOptions,
 ): Promise<Response> {
-	const { request, path, correlationId, logger } = apiRequest;
+	const { request, path, correlationId, logger } = incoming;
 	if (request.method === "GET" && path === LIVENESS_PATH)
 		return Response.json({ status: HEALTH_STATUS.alive });
 	if (request.method === "GET" && path === READINESS_PATH)
 		return readiness(options, logger);
 	if (path.startsWith(API_PATH_PREFIX)) {
-		if (options.startupStatus() === "starting")
-			return problemResponse(INSTANCE_NOT_READY, correlationId);
-		return answerApiRequest(options.api, apiRequest);
+		const startup = options.startupStatus();
+		if (startup !== "started")
+			return problemResponse(INSTANCE_NOT_READY[startup], correlationId);
+		return answerApiRequest(options.api, incoming);
 	}
 	return problemResponse(ROUTE_NOT_FOUND, correlationId);
 }

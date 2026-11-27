@@ -40,7 +40,7 @@ DATABASE_URL=postgres://workbench:workbench@127.0.0.1:54329/workbench_test bun r
 - `GET /health/live` meldet, dass der Prozess läuft, unabhängig von der Datenbank.
 - `GET /health/ready` antwortet mit 200, wenn der Start der Instanz abgeschlossen ist und Postgres erreichbar ist, sonst mit 503. Der Server startet auch ohne Datenbank.
 
-Beim Start wartet die Instanz ohne Obergrenze, bis Postgres erreichbar ist (Log-Eintrag `database unreachable, retrying` mit `reason` und `retryInMs`; die Wartezeit wächst exponentiell mit Zufallsanteil bis höchstens 10 s; Begründung in ADR-0008). Danach migriert sie das Schema `core` und die Schemas der Plugins (siehe [Migrationen](#migrationen)), aktiviert die Plugins und meldet `instance started`; erst dann ist sie bereit. Schlägt eine Migration fehl, meldet das Log `instance failed to start` mit `reason` (`core_schema_not_migrated` oder `plugin_schema_not_migrated`), und die Instanz bleibt bis zum nächsten Start „nicht bereit“.
+Beim Start wartet die Instanz ohne Obergrenze, bis Postgres erreichbar ist (Log-Eintrag `database unreachable, retrying` mit `reason` und `retryInMs`; die Wartezeit wächst exponentiell mit Zufallsanteil bis höchstens 10 s; Begründung in ADR-0008). Danach migriert sie das Schema `core` und die Schemas der Plugins (siehe [Migrationen](#migrationen)), aktiviert die Plugins und meldet `instance started`; erst dann ist sie bereit. Schlägt eine Migration fehl, meldet das Log `instance failed to start` mit `reason` (`core_schema_not_migrated` oder `plugin_schema_not_migrated`), und die Instanz bleibt bis zum nächsten Start „nicht bereit“; die HTTP-API antwortet dann mit 503 (`instance_not_ready`).
 
 Kann der Server nicht starten, etwa weil der Port belegt ist, endet der Prozess mit Exit-Code 1 und einem Log-Eintrag `server failed to start`, der Port und Fehlercode (z. B. `EADDRINUSE`) nennt.
 
@@ -232,18 +232,18 @@ curl -X POST "http://127.0.0.1:3000/api/workspaces/$WORKSPACE/operations/referen
 - Jeder Aufruf braucht ein API-Token als `Authorization: Bearer <token>`; das Schema `Bearer` gilt in beliebiger Groß- und Kleinschreibung (RFC 9110). Fehlt es, steht es in einem anderen Schema, ist es unbekannt oder abgelaufen, antwortet die API mit 401 und `WWW-Authenticate: Bearer`, als Problem Details mit `code` `unauthenticated`. Die Antwort sagt nicht, welcher Fall vorlag; das Log nennt ihn im Eintrag `request not authenticated` mit `reason` (`missing_token`, `unknown_token`, `expired_token`). Der Akteur des Aufrufs ist der Service-Account des Tokens.
 - Jedes Scheitern kommt als Problem Details mit `Content-Type: application/problem+json` und der Korrelations-ID in `correlationId`, mit dem Status nach der Art (siehe [Aufruf einer Operation](#aufruf-einer-operation)). Ein interner Fehler nennt nur `internal_error` und eine neutrale Meldung, nie Stacktrace, Pfad oder Query; die Details stehen unter derselben Korrelations-ID im Log.
 
-| Code                   | Status | Bedeutung                                                                     |
-| ---------------------- | ------ | ----------------------------------------------------------------------------- |
-| `unauthenticated`      | 401    | Kein gültiges API-Token.                                                      |
-| `invalid_input`        | 400    | Der Body ist kein JSON, oder die Eingabe passt nicht zum Eingabe-Schema.      |
-| `route_not_found`      | 404    | Weder Methode noch Pfad passen zu einer Route.                                |
-| `malformed_path`       | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                            |
-| `invalid_workspace_id` | 400    | Der Workspace im Pfad ist keine UUID.                                         |
-| `workspace_not_found`  | 404    | Kein Workspace hat diese UUID.                                                |
-| `unknown_operation`    | 404    | Kein aktives Plugin hat eine Operation dieses Namens registriert.             |
-| `body_too_large`       | 413    | Der Body ist größer als 1 MiB.                                                |
-| `instance_not_ready`   | 503    | Die Instanz startet noch; die Operationen der Plugins stehen noch nicht fest. |
-| `internal_error`       | 500    | Die Anfrage scheiterte aus einem internen Grund.                              |
+| Code                   | Status | Bedeutung                                                                |
+| ---------------------- | ------ | ------------------------------------------------------------------------ |
+| `unauthenticated`      | 401    | Kein gültiges API-Token.                                                 |
+| `invalid_input`        | 400    | Der Body ist kein JSON, oder die Eingabe passt nicht zum Eingabe-Schema. |
+| `route_not_found`      | 404    | Weder Methode noch Pfad passen zu einer Route.                           |
+| `malformed_path`       | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                       |
+| `invalid_workspace_id` | 400    | Der Workspace im Pfad ist keine UUID.                                    |
+| `workspace_not_found`  | 404    | Kein Workspace hat diese UUID.                                           |
+| `unknown_operation`    | 404    | Kein aktives Plugin hat eine Operation dieses Namens registriert.        |
+| `body_too_large`       | 413    | Der Body ist größer als 1 MiB.                                           |
+| `instance_not_ready`   | 503    | Die Instanz startet noch oder ihr Start ist gescheitert.                 |
+| `internal_error`       | 500    | Die Anfrage scheiterte aus einem internen Grund.                         |
 
 #### Service-Account und API-Token anlegen
 

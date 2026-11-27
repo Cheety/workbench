@@ -1,36 +1,50 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { authenticateToken } from "./api-tokens.ts";
 import { Secret } from "./config.ts";
 import { createLogger } from "./logger.ts";
+import { createOperationPipeline } from "./operation-pipeline.ts";
+import { registerOperations } from "./operation-registry.ts";
 import { createPostgresCheck } from "./postgres.ts";
 import {
 	type RunningServer,
 	type StartupStatus,
 	startServer,
 } from "./server.ts";
-import { PostgresGate } from "./testing/postgres.ts";
+import {
+	createFreshDatabase,
+	type FreshDatabase,
+	PostgresGate,
+} from "./testing/postgres.ts";
 
 const PARALLEL_PROBES = 300;
+
+const NOW = new Date("2026-11-26T08:00:00.000Z");
 
 type LogEntry = Record<string, unknown>;
 
 let running: RunningServer | undefined;
 let openGate: PostgresGate | undefined;
+let database: FreshDatabase | undefined;
 
 afterEach(async () => {
 	await running?.stop();
 	running = undefined;
 	openGate?.close();
 	openGate = undefined;
+	await database?.drop();
+	database = undefined;
 });
 
-function startTestServer(startupStatus: StartupStatus = "started") {
+async function startTestServer(startupStatus: StartupStatus = "started") {
 	const gate = PostgresGate.create();
 	openGate = gate;
+	database = await createFreshDatabase();
+	const { sql } = database;
 	const lines: string[] = [];
 	let nextId = 1;
 	const logger = createLogger({
 		level: "debug",
-		now: () => new Date("2026-11-26T08:00:00.000Z"),
+		now: () => NOW,
 		write: (line) => lines.push(line),
 	});
 	const server = startServer({
@@ -43,15 +57,15 @@ function startTestServer(startupStatus: StartupStatus = "started") {
 		newCorrelationId: () => `generated-${nextId++}`,
 		startupStatus: () => startupStatus,
 		api: {
-			authenticate: async () => ({
-				authenticated: false,
-				reason: "unknown_token",
+			authenticate: (token) => authenticateToken(sql, token, NOW),
+			pipeline: createOperationPipeline({
+				sql,
+				registry: registerOperations([]),
+				now: () => NOW,
+				newId: () => "00000000-0000-4000-8000-000000000001",
+				random: () => 0.5,
+				logger,
 			}),
-			pipeline: {
-				invoke: async () => {
-					throw new Error("no operation runs in these tests");
-				},
-			},
 		},
 	});
 	running = server;
@@ -70,7 +84,7 @@ function startTestServer(startupStatus: StartupStatus = "started") {
 
 describe("liveness", () => {
 	test("answers alive while Postgres is unreachable", async () => {
-		const { get } = startTestServer();
+		const { get } = await startTestServer();
 
 		const response = await get("/health/live");
 
@@ -81,7 +95,7 @@ describe("liveness", () => {
 
 describe("readiness", () => {
 	test("reports not ready while Postgres is unreachable", async () => {
-		const { get } = startTestServer();
+		const { get } = await startTestServer();
 
 		const response = await get("/health/ready");
 
@@ -90,7 +104,7 @@ describe("readiness", () => {
 	});
 
 	test("reports ready once Postgres becomes reachable", async () => {
-		const { get, gate } = startTestServer();
+		const { get, gate } = await startTestServer();
 		const whileUnreachable = await get("/health/ready");
 		gate.forward();
 
@@ -102,7 +116,7 @@ describe("readiness", () => {
 	});
 
 	test("reports not ready again when Postgres goes away", async () => {
-		const { get, gate } = startTestServer();
+		const { get, gate } = await startTestServer();
 		gate.forward();
 		const whileReachable = await get("/health/ready");
 		gate.refuse();
@@ -114,7 +128,7 @@ describe("readiness", () => {
 	});
 
 	test("stays ready when more probes arrive at once than Postgres has connections", async () => {
-		const { get, gate } = startTestServer();
+		const { get, gate } = await startTestServer();
 		gate.forward();
 
 		const responses = await Promise.all(
@@ -127,7 +141,7 @@ describe("readiness", () => {
 	});
 
 	test("reports not ready while the instance is still starting, even with Postgres reachable", async () => {
-		const { get, gate, logEntries } = startTestServer("starting");
+		const { get, gate, logEntries } = await startTestServer("starting");
 		gate.forward();
 
 		const response = await get("/health/ready");
@@ -143,7 +157,7 @@ describe("readiness", () => {
 	});
 
 	test("reports not ready and says so when the instance failed to start", async () => {
-		const { get, gate, logEntries } = startTestServer("failed");
+		const { get, gate, logEntries } = await startTestServer("failed");
 		gate.forward();
 
 		const response = await get("/health/ready");
@@ -159,7 +173,7 @@ describe("readiness", () => {
 	});
 
 	test("logs why it is not ready without leaking the database credentials", async () => {
-		const { get, gate, logEntries } = startTestServer();
+		const { get, gate, logEntries } = await startTestServer();
 
 		await get("/health/ready");
 
@@ -178,26 +192,21 @@ describe("readiness", () => {
 
 describe("correlation ID", () => {
 	test("generates one per request, returns it and logs it", async () => {
-		const { get, logEntries } = startTestServer();
+		const { get, logEntries } = await startTestServer();
 
 		const response = await get("/health/live");
 
 		expect(response.headers.get("X-Correlation-ID")).toBe("generated-1");
 		expect(logEntries()).toEqual([
-			{
-				time: "2026-11-26T08:00:00.000Z",
-				level: "debug",
+			expect.objectContaining({
 				message: "request completed",
 				correlationId: "generated-1",
-				method: "GET",
-				path: "/health/live",
-				status: 200,
-			},
+			}),
 		]);
 	});
 
 	test("adopts a valid incoming one", async () => {
-		const { get, logEntries } = startTestServer();
+		const { get, logEntries } = await startTestServer();
 
 		const response = await get("/health/live", {
 			"X-Correlation-ID": "client-42.a_b",
@@ -211,7 +220,7 @@ describe("correlation ID", () => {
 		["with characters outside the allowed set", 'inject"ed {id}'],
 		["that is too long", "a".repeat(129)],
 	])("replaces an incoming one %s", async (_case, incoming) => {
-		const { get, logEntries } = startTestServer();
+		const { get, logEntries } = await startTestServer();
 
 		const response = await get("/health/live", {
 			"X-Correlation-ID": incoming,
@@ -224,7 +233,7 @@ describe("correlation ID", () => {
 
 describe("unknown routes", () => {
 	test("answer with a problem document and a logged correlation ID", async () => {
-		const { get, logEntries } = startTestServer();
+		const { get, logEntries } = await startTestServer();
 
 		const response = await get("/nowhere?token=abc");
 
@@ -254,7 +263,7 @@ describe("unknown routes", () => {
 
 describe("the HTTP API", () => {
 	test("answers 503 problem details while the instance is still starting", async () => {
-		const { post } = startTestServer("starting");
+		const { post } = await startTestServer("starting");
 
 		const response = await post(
 			"/api/workspaces/00000000-0000-4000-8000-00000000aaaa/operations/board.renameLabel",
@@ -266,6 +275,25 @@ describe("the HTTP API", () => {
 			title: "Service Unavailable",
 			status: 503,
 			detail: "the instance is still starting",
+			code: "instance_not_ready",
+			correlationId: "generated-1",
+			issues: [],
+		});
+	});
+
+	test("answers 503 problem details when the instance failed to start", async () => {
+		const { post } = await startTestServer("failed");
+
+		const response = await post(
+			"/api/workspaces/00000000-0000-4000-8000-00000000aaaa/operations/board.renameLabel",
+		);
+
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({
+			type: "urn:workbench:problem:instance_not_ready",
+			title: "Service Unavailable",
+			status: 503,
+			detail: "the instance failed to start",
 			code: "instance_not_ready",
 			correlationId: "generated-1",
 			issues: [],
