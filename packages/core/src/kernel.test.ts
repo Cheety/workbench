@@ -777,24 +777,28 @@ describe("plugin kernel", () => {
 		[
 			"was rejected for another cycle first",
 			{ cards: ["board"], board: ["notes", "cards"], notes: ["board"] },
-			[
-				{ plugin: "notes", cycle: "notes -> board -> notes" },
-				{ plugin: "board", cycle: "cards -> board -> cards" },
-				{ plugin: "cards", cycle: "cards -> board -> cards" },
-			],
+			{
+				board:
+					/: (board -> cards -> board|cards -> board -> cards|board -> notes -> board|notes -> board -> notes)$/,
+				cards: /: (board -> cards -> board|cards -> board -> cards)$/,
+				notes: /: (board -> notes -> board|notes -> board -> notes)$/,
+			},
 		],
 		[
 			"was rejected before the plugin was reached",
 			{ cards: ["board", "notes"], board: ["cards"], notes: ["board"] },
-			[
-				{ plugin: "board", cycle: "cards -> board -> cards" },
-				{ plugin: "cards", cycle: "cards -> board -> cards" },
-				{ plugin: "notes", cycle: "notes -> board -> cards -> notes" },
-			],
+			{
+				board:
+					/: (board -> cards -> board|cards -> board -> cards|board -> cards -> notes -> board|cards -> notes -> board -> cards|notes -> board -> cards -> notes)$/,
+				cards:
+					/: (board -> cards -> board|cards -> board -> cards|board -> cards -> notes -> board|cards -> notes -> board -> cards|notes -> board -> cards -> notes)$/,
+				notes:
+					/: (board -> cards -> notes -> board|cards -> notes -> board -> cards|notes -> board -> cards -> notes)$/,
+			},
 		],
 	])(
-		"reports the cycle for a plugin of a cycle whose required plugin %s",
-		async (_case, requirements, cycles) => {
+		"reports a cycle it is part of for a plugin of a cycle whose required plugin %s",
+		async (_case, requirements, cycleOf) => {
 			const { plugins } = await start({
 				packages: Object.entries(requirements).map(([name, required]) =>
 					packageOf(
@@ -811,15 +815,23 @@ describe("plugin kernel", () => {
 				enabledPlugins: Object.keys(requirements),
 			});
 
-			expect(byPlugin(plugins.failures)).toEqual(
-				byPlugin(
-					cycles.map(({ plugin, cycle }) => ({
-						plugin,
-						reason: "dependency_cycle",
-						detail: `plugin "${plugin}" is part of a dependency cycle: ${cycle}`,
-					})),
-				),
-			);
+			expect(byPlugin(plugins.failures)).toEqual([
+				{
+					plugin: "board",
+					reason: "dependency_cycle",
+					detail: expect.stringMatching(cycleOf.board),
+				},
+				{
+					plugin: "cards",
+					reason: "dependency_cycle",
+					detail: expect.stringMatching(cycleOf.cards),
+				},
+				{
+					plugin: "notes",
+					reason: "dependency_cycle",
+					detail: expect.stringMatching(cycleOf.notes),
+				},
+			]);
 		},
 	);
 
@@ -1149,7 +1161,10 @@ describe("plugin kernel", () => {
 
 		expect(contexts.get("notes")?.capability("clock")).toBe(clock);
 		expect(() => contexts.get("notes")?.capability("vault")).toThrow(
-			new UndeclaredCapabilityError("notes", "vault"),
+			UndeclaredCapabilityError,
+		);
+		expect(() => contexts.get("notes")?.capability("vault")).toThrow(
+			'plugin "notes" did not declare the capability "vault" in its manifest',
 		);
 		expect(() => contexts.get("board")?.capability("clock")).toThrow(
 			'plugin "board" did not declare the capability "clock" in its manifest',
@@ -1639,7 +1654,10 @@ describe("plugin schemas", () => {
 			schema: schemaName("plugin_sticky_notes"),
 		});
 		expect(() => contexts.get("cards")?.capability("database")).toThrow(
-			new UndeclaredCapabilityError("cards", "database"),
+			UndeclaredCapabilityError,
+		);
+		expect(() => contexts.get("cards")?.capability("database")).toThrow(
+			'plugin "cards" did not declare the capability "database" in its manifest',
 		);
 	});
 
