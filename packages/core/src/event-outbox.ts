@@ -87,7 +87,7 @@ export type EventDelivery = {
 
 const RETRY = { baseMs: 1_000, capMs: 300_000 } as const;
 
-const claimedDelivery = z.object({
+const dueDelivery = z.object({
 	id: z.string(),
 	sequence: z.string(),
 	name: z.string(),
@@ -95,7 +95,7 @@ const claimedDelivery = z.object({
 	attempts: z.number(),
 });
 
-type ClaimedDelivery = z.infer<typeof claimedDelivery>;
+type DueDelivery = z.infer<typeof dueDelivery>;
 
 const eventDetails = z.object({
 	version: z.number(),
@@ -104,9 +104,9 @@ const eventDetails = z.object({
 	payload: z.unknown(),
 });
 
-type DueDelivery = ClaimedDelivery & z.infer<typeof eventDetails>;
+type EventDetails = z.infer<typeof eventDetails>;
 
-type Position = Pick<ClaimedDelivery, "sequence" | "subscriber">;
+type Position = Pick<DueDelivery, "sequence" | "subscriber">;
 
 const BEFORE_ALL: Position = { sequence: "0", subscriber: "" };
 
@@ -129,15 +129,6 @@ class HandlerFailedError extends Error {
 	}
 }
 
-class UnknownSubscriptionError extends Error {
-	constructor(delivery: ClaimedDelivery) {
-		super(
-			`no active plugin named ${quote(delivery.subscriber)} subscribes to the event ${quote(delivery.name)}`,
-		);
-		this.name = "UnknownSubscriptionError";
-	}
-}
-
 export function createEventDelivery(
 	options: EventDeliveryOptions,
 ): EventDelivery {
@@ -147,11 +138,10 @@ export function createEventDelivery(
 	};
 	return {
 		deliverDue: async (stopSignal) => {
-			const subscriptions = options.events.subscriptions();
-			if (subscriptions.length === 0) return;
+			if (options.events.subscriptions().length === 0) return;
 			let position: Position | undefined = BEFORE_ALL;
 			while (position !== undefined && !stopSignal.aborted)
-				position = await attemptNext(subscriptions, position, attemptOptions);
+				position = await attemptNext(position, attemptOptions);
 		},
 	};
 }
@@ -165,83 +155,50 @@ type Retry = {
 	readonly inMs: number;
 };
 
+type Attempt =
+	| { readonly outcome: "delivered" }
+	| {
+			readonly outcome: "postponed";
+			readonly failure: DeliveryFailure;
+			readonly retry: Retry;
+	  }
+	| { readonly outcome: "settled_elsewhere" };
+
 async function attemptNext(
-	subscriptions: readonly RegisteredSubscription[],
 	after: Position,
 	options: AttemptOptions,
 ): Promise<Position | undefined> {
 	const now = options.now();
-	const claim: { delivery: ClaimedDelivery | undefined } = {
-		delivery: undefined,
-	};
-	const retryOf = (delivery: ClaimedDelivery): Retry => {
-		const inMs = options.retryDelayMs(delivery.attempts);
-		return { at: new Date(now.getTime() + inMs), inMs };
-	};
-	try {
-		const settled = await options.sql.begin(async (transaction) => {
-			const row = await claimNext(transaction, subscriptions, after, now);
-			if (row === undefined) return undefined;
-			const claimed = claimedDelivery.parse(row);
-			claim.delivery = claimed;
-			const failure = await handle(
-				transaction,
-				{ ...claimed, ...eventDetails.parse(row) },
-				options,
-			);
-			if (failure === undefined) {
-				await markDelivered(transaction, claimed, now);
-				return { claimed, failed: undefined };
-			}
-			const retry = retryOf(claimed);
-			await postpone(transaction, claimed, retry);
-			return { claimed, failed: { failure, retry } };
-		});
-		if (settled === undefined) return undefined;
-		if (settled.failed === undefined)
-			loggerOf(settled.claimed, options).debug("event delivered");
-		else
-			reportFailure(
-				settled.claimed,
-				settled.failed.failure,
-				settled.failed.retry,
-				options,
-			);
-		return settled.claimed;
-	} catch (error) {
-		const claimed = claim.delivery;
-		if (claimed === undefined) throw error;
-		const retry = retryOf(claimed);
-		await postpone(options.sql, claimed, retry);
-		reportFailure(
-			claimed,
-			{ reason: "delivery_failed", error: describeThrown(error) },
-			retry,
-			options,
-		);
-		return claimed;
-	}
+	const due = await findNextDue(options, after, now);
+	if (due === undefined) return undefined;
+	const subscription = options.events.findSubscription(
+		due.subscriber,
+		due.name,
+	);
+	if (subscription === undefined) return due;
+	report(due, await attempt(due, subscription, now, options), options);
+	return due;
 }
 
-async function claimNext(
-	transaction: TransactionSQL,
-	subscriptions: readonly RegisteredSubscription[],
+async function findNextDue(
+	{ sql, events }: Pick<EventDeliveryOptions, "sql" | "events">,
 	after: Position,
 	now: Date,
-): Promise<unknown> {
-	const [row]: unknown[] = await transaction`
-		SELECT e.id, e.sequence, e.name, e.version, e.occurred_at, e.workspace_id, e.payload, d.subscriber, d.attempts
+): Promise<DueDelivery | undefined> {
+	const subscriptions = events.subscriptions();
+	const [row]: unknown[] = await sql`
+		SELECT e.id, e.sequence, e.name, d.subscriber, d.attempts
 		FROM core.event_deliveries d
 		JOIN core.events e ON e.id = d.event_id
 		WHERE d.delivered_at IS NULL
 			AND d.next_attempt_at <= ${now}
 			AND (d.subscriber, e.name) IN (
 				SELECT * FROM unnest(
-					${transaction.array(
+					${sql.array(
 						subscriptions.map(({ subscriber }) => subscriber),
 						"TEXT",
 					)}::text[],
-					${transaction.array(
+					${sql.array(
 						subscriptions.map(({ event }) => event),
 						"TEXT",
 					)}::text[]
@@ -249,14 +206,68 @@ async function claimNext(
 			)
 			AND (e.sequence, d.subscriber) > (${after.sequence}::bigint, ${after.subscriber})
 		ORDER BY e.sequence, d.subscriber
-		LIMIT 1
+		LIMIT 1`;
+	return row === undefined ? undefined : dueDelivery.parse(row);
+}
+
+async function attempt(
+	due: DueDelivery,
+	subscription: RegisteredSubscription,
+	now: Date,
+	options: AttemptOptions,
+): Promise<Attempt> {
+	const retryOf = (): Retry => {
+		const inMs = options.retryDelayMs(due.attempts);
+		return { at: new Date(now.getTime() + inMs), inMs };
+	};
+	try {
+		return await options.sql.begin(async (transaction): Promise<Attempt> => {
+			const details = await claim(transaction, due);
+			if (details === undefined) return { outcome: "settled_elsewhere" };
+			const failure = await handle(
+				transaction,
+				subscription,
+				publishedEventOf(due, details),
+				options,
+			);
+			if (failure === undefined) {
+				await markDelivered(transaction, due, now);
+				return { outcome: "delivered" };
+			}
+			const retry = retryOf();
+			await postpone(transaction, due, retry);
+			return { outcome: "postponed", failure, retry };
+		});
+	} catch (error) {
+		const retry = retryOf();
+		await postpone(options.sql, due, retry);
+		return {
+			outcome: "postponed",
+			failure: { reason: "delivery_failed", error: describeThrown(error) },
+			retry,
+		};
+	}
+}
+
+async function claim(
+	transaction: TransactionSQL,
+	due: DueDelivery,
+): Promise<EventDetails | undefined> {
+	const [row]: unknown[] = await transaction`
+		SELECT e.version, e.occurred_at, e.workspace_id, e.payload
+		FROM core.event_deliveries d
+		JOIN core.events e ON e.id = d.event_id
+		WHERE d.event_id = ${due.id}
+			AND d.subscriber = ${due.subscriber}
+			AND d.delivered_at IS NULL
+			AND d.attempts = ${due.attempts}
 		FOR UPDATE OF d SKIP LOCKED`;
-	return row;
+	return row === undefined ? undefined : eventDetails.parse(row);
 }
 
 async function markDelivered(
 	transaction: SQL,
-	delivery: ClaimedDelivery,
+	delivery: DueDelivery,
 	now: Date,
 ): Promise<void> {
 	await transaction`
@@ -266,7 +277,7 @@ async function markDelivered(
 
 async function postpone(
 	sql: SQL,
-	delivery: ClaimedDelivery,
+	delivery: DueDelivery,
 	retry: Retry,
 ): Promise<void> {
 	await sql`
@@ -278,41 +289,39 @@ async function postpone(
 			AND attempts = ${delivery.attempts}`;
 }
 
-function loggerOf(
-	delivery: ClaimedDelivery,
+function report(
+	delivery: DueDelivery,
+	attempt: Attempt,
 	{ logger }: Pick<EventDeliveryOptions, "logger">,
-): Logger {
-	return logger.with({
+): void {
+	const deliveryLogger = logger.with({
 		eventId: delivery.id,
 		event: delivery.name,
 		subscriber: delivery.subscriber,
 	});
-}
-
-function reportFailure(
-	delivery: ClaimedDelivery,
-	failure: DeliveryFailure,
-	retry: Retry,
-	options: Pick<EventDeliveryOptions, "logger">,
-): void {
-	loggerOf(delivery, options).error("event not delivered", {
-		...failure,
-		attempt: delivery.attempts + 1,
-		retryInMs: retry.inMs,
-	});
+	switch (attempt.outcome) {
+		case "delivered":
+			deliveryLogger.debug("event delivered");
+			return;
+		case "postponed":
+			deliveryLogger.error("event not delivered", {
+				...attempt.failure,
+				attempt: delivery.attempts + 1,
+				retryInMs: attempt.retry.inMs,
+			});
+			return;
+		case "settled_elsewhere":
+			return;
+	}
 }
 
 async function handle(
 	transaction: TransactionSQL,
-	due: DueDelivery,
+	subscription: RegisteredSubscription,
+	event: PublishedEvent<unknown>,
 	options: AttemptOptions,
 ): Promise<DeliveryFailure | undefined> {
-	const subscription = options.events.findSubscription(
-		due.subscriber,
-		due.name,
-	);
-	if (subscription === undefined) throw new UnknownSubscriptionError(due);
-	const payload = await subscription.validatePayload(due.payload);
+	const payload = await subscription.validatePayload(event.payload);
 	if (!payload.valid)
 		return { reason: "invalid_payload", issues: payload.issues };
 	const schema = pluginSchemaName(subscription.subscriber);
@@ -323,7 +332,7 @@ async function handle(
 				() =>
 					callHandler(
 						subscription,
-						publishedEventOf(due, payload.value),
+						{ ...event, payload: payload.value },
 						contextOf(savepoint, options),
 					),
 				options.handlerTimeout,
@@ -358,15 +367,15 @@ async function callHandler(
 
 function publishedEventOf(
 	due: DueDelivery,
-	payload: unknown,
+	details: EventDetails,
 ): PublishedEvent<unknown> {
 	return {
 		id: due.id,
 		name: due.name,
-		version: due.version,
-		occurredAt: due.occurred_at,
-		workspace: due.workspace_id,
-		payload,
+		version: details.version,
+		occurredAt: details.occurred_at,
+		workspace: details.workspace_id,
+		payload: details.payload,
 	};
 }
 
