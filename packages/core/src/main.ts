@@ -169,6 +169,7 @@ const jobQueue = startJobLoop({
 		jobs: instance.jobs,
 		now,
 		newId: () => crypto.randomUUID(),
+		newJobId: () => crypto.randomUUID(),
 		random: Math.random,
 		runTimeout: {
 			ms: config.pluginHookTimeoutMs,

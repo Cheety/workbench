@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { defineJob, type JobDefinition } from "@workbench/sdk";
+import { defineCronJob, defineJob, type JobDefinition } from "@workbench/sdk";
 import { SQL } from "bun";
 import { z } from "zod";
 import { Secret } from "./config.ts";
@@ -44,7 +44,9 @@ function sendingReminders(run: SendReminder["run"]): SendReminder {
 function registryOf(
 	...definitions: readonly JobDefinition<{ cardId: string }>[]
 ): JobRegistry {
-	return registerJobs(readJobs("mailer", definitions).value);
+	return registerJobs(
+		readJobs("mailer", { jobs: definitions, cronJobs: undefined }).value,
+	);
 }
 
 const cleanups: (() => Promise<void>)[] = [];
@@ -101,6 +103,7 @@ type QueueScenario = {
 	readonly now?: () => Date;
 	readonly random?: () => number;
 	readonly runTimeout?: HookTimeout;
+	readonly newJobId?: () => string;
 };
 
 function queueOf(scenario: QueueScenario) {
@@ -111,6 +114,7 @@ function queueOf(scenario: QueueScenario) {
 		now: scenario.now ?? (() => NOW),
 		newId: () => "00000000-0000-4000-8000-000000000001",
 		random: scenario.random ?? (() => 0.5),
+		newJobId: scenario.newJobId ?? (() => crypto.randomUUID()),
 		runTimeout: scenario.runTimeout ?? NEVER_EXPIRING,
 		logger,
 	});
@@ -437,6 +441,91 @@ describe("a job that fails", () => {
 				settled_at: new Date("2026-11-27T11:00:00.000Z"),
 			},
 		]);
+	});
+});
+
+describe("a cron job of an instance with two processes", () => {
+	test("is scheduled and run once for each time it falls due", async () => {
+		const database = await migratedDatabase();
+		const second = new SQL(database.url, { max: 1 });
+		cleanups.push(() => second.close());
+		const run: Date[] = [];
+		const jobs = registerJobs(
+			readJobs("mailer", {
+				jobs: undefined,
+				cronJobs: [
+					defineCronJob({
+						name: "sendDigest",
+						schedule: "*/5 * * * *",
+						maxAttempts: 3,
+						run: async (job) => {
+							run.push(job.dueAt);
+						},
+					}),
+				],
+			}).value,
+		);
+		let now = new Date("2026-11-27T09:00:30.000Z");
+		const first = queueOf({ sql: database.sql, jobs, now: () => now });
+		const other = queueOf({ sql: second, jobs, now: () => now });
+		const runDueInBoth = () =>
+			Promise.all([
+				first.queue.runDue(NOT_STOPPED),
+				other.queue.runDue(NOT_STOPPED),
+			]);
+
+		await runDueInBoth();
+		now = new Date("2026-11-27T09:05:00.000Z");
+		await runDueInBoth();
+		now = new Date("2026-11-27T09:10:00.000Z");
+		await runDueInBoth();
+
+		const rows: unknown[] = await database.sql`
+			SELECT name, due_at, state FROM core.jobs ORDER BY due_at`;
+		expect(run).toEqual([
+			new Date("2026-11-27T09:05:00.000Z"),
+			new Date("2026-11-27T09:10:00.000Z"),
+		]);
+		expect([...rows]).toEqual([
+			{
+				name: "mailer.sendDigest",
+				due_at: new Date("2026-11-27T09:05:00.000Z"),
+				state: "completed",
+			},
+			{
+				name: "mailer.sendDigest",
+				due_at: new Date("2026-11-27T09:10:00.000Z"),
+				state: "completed",
+			},
+			{
+				name: "mailer.sendDigest",
+				due_at: new Date("2026-11-27T09:15:00.000Z"),
+				state: "pending",
+			},
+		]);
+	});
+
+	test("is not enqueued by a mutation under the name of a job", async () => {
+		const database = await migratedDatabase();
+		const jobs = registerJobs(
+			readJobs("mailer", {
+				jobs: undefined,
+				cronJobs: [
+					defineCronJob({
+						name: "sendReminder",
+						schedule: "*/5 * * * *",
+						maxAttempts: 3,
+						run: async () => {},
+					}),
+				],
+			}).value,
+		);
+
+		const enqueued = enqueueReminder(database.sql, jobs, JOB);
+
+		await expect(enqueued).rejects.toThrow(
+			'"mailer" enqueued the job "mailer.sendReminder", which it does not declare among its jobs',
+		);
 	});
 });
 

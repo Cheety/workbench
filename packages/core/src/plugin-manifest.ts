@@ -80,7 +80,10 @@ export function validatePlugin(
 		definition.subscriptions,
 		capabilities.value,
 	);
-	const jobs = readJobs(declaredName, definition.jobs);
+	const jobs = readJobs(declaredName, {
+		jobs: definition.jobs,
+		cronJobs: definition.cronJobs,
+	});
 	const problems = [
 		...nameProblems(definition.manifest, declaredName),
 		...requires.problems,

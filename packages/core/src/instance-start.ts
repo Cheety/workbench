@@ -105,6 +105,7 @@ export function createInstanceStart(
 		jobs: {
 			find: (name) => jobs.find(name),
 			names: () => jobs.names(),
+			cronJobs: () => jobs.cronJobs(),
 		},
 		run: () => {
 			running ??= start().catch((error: unknown) => {

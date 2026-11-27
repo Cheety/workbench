@@ -29,6 +29,26 @@ export function defineJob<Payload>(
 	return definition;
 }
 
+export type DueCronJob = {
+	readonly id: string;
+	readonly name: string;
+	readonly attempt: number;
+	readonly dueAt: Date;
+};
+
+export type CronJobDefinition = {
+	readonly name: string;
+	readonly schedule: string;
+	readonly maxAttempts: number;
+	run(job: DueCronJob, ctx: JobContext): Promise<void>;
+};
+
+export function defineCronJob(
+	definition: CronJobDefinition,
+): CronJobDefinition {
+	return definition;
+}
+
 const JOB_NAME_SEPARATOR = ".";
 
 export function jobName(

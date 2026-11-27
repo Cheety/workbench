@@ -1,15 +1,14 @@
-import {
-	type EnqueuedJob,
-	type JobContext,
-	type JobDefinition,
-	jobName,
-} from "@workbench/sdk";
+import { type JobContext, type JobDefinition, jobName } from "@workbench/sdk";
 import type { SQL } from "bun";
 import { z } from "zod";
 import { fullJitterBackoff } from "./database-wait.ts";
 import { describeThrown, type ThrownError } from "./failure-reason.ts";
 import { type HookTimeout, runWithin } from "./hook-timeout.ts";
-import type { JobRegistry, RegisteredJob } from "./job-registry.ts";
+import type {
+	JobRegistry,
+	RegisteredCronJob,
+	RegisteredJob,
+} from "./job-registry.ts";
 import type { Logger } from "./logger.ts";
 import { quote } from "./quote.ts";
 import { pluginSchemaName } from "./schema-name.ts";
@@ -52,7 +51,8 @@ export async function enqueueJob(
 ): Promise<void> {
 	const name = jobName(enqueueing.plugin, enqueueing.definition);
 	const job = jobs.find(name);
-	if (job === undefined) throw new UndeclaredJobError(enqueueing.plugin, name);
+	if (job === undefined || job.kind !== "enqueued")
+		throw new UndeclaredJobError(enqueueing.plugin, name);
 	const payload = await job.validatePayload(enqueueing.payload);
 	if (!payload.valid) throw new InvalidJobPayloadError(name, payload.issues);
 	await transaction`
@@ -65,6 +65,7 @@ export type JobQueueOptions = {
 	readonly jobs: JobRegistry;
 	readonly now: () => Date;
 	readonly newId: () => string;
+	readonly newJobId: () => string;
 	readonly random: () => number;
 	readonly runTimeout: HookTimeout;
 	readonly logger: Logger;
@@ -84,12 +85,17 @@ const claimedJob = z.object({
 	id: z.string(),
 	name: z.string(),
 	payload: z.unknown(),
-	workspace_id: z.string(),
+	workspace_id: z.string().nullable(),
+	due_at: z.date().nullable(),
 	enqueued_at: z.date(),
 	attempts: z.number(),
 });
 
 type ClaimedJob = z.infer<typeof claimedJob>;
+
+const enqueuedDetails = z.object({ workspace_id: z.string() });
+
+const cronDetails = z.object({ due_at: z.date() });
 
 type JobFailure =
 	| { readonly reason: "run_threw"; readonly error: ThrownError }
@@ -145,10 +151,12 @@ export function createJobQueue(options: JobQueueOptions): JobQueue {
 		...options,
 		retryDelayMs: fullJitterBackoff({ ...RETRY, random: options.random }),
 	};
+	const scheduleCronJobs = cronSchedulerOf(options);
 	return {
 		runDue: async (stopSignal) => {
 			if (options.jobs.names().length === 0) return;
 			const dueBy = options.now();
+			await scheduleCronJobs(dueBy);
 			while (!stopSignal.aborted) {
 				const claimed = await claimNext(options, dueBy);
 				if (claimed === undefined) return;
@@ -157,6 +165,31 @@ export function createJobQueue(options: JobQueueOptions): JobQueue {
 				report(claimed, await attempt(claimed, job, attemptOptions), options);
 			}
 		},
+	};
+}
+
+function cronSchedulerOf({
+	sql,
+	jobs,
+	newJobId,
+}: Pick<JobQueueOptions, "sql" | "jobs" | "newJobId">): (
+	now: Date,
+) => Promise<void> {
+	const scheduledDue = new Map<string, number>();
+	const isScheduledBeyond = (job: RegisteredCronJob, now: Date): boolean => {
+		const due = scheduledDue.get(job.name);
+		return due !== undefined && due > now.getTime();
+	};
+	return async (now) => {
+		for (const job of jobs.cronJobs()) {
+			if (isScheduledBeyond(job, now)) continue;
+			const dueAt = job.schedule.nextAfter(now);
+			await sql`
+				INSERT INTO core.jobs (id, name, due_at, enqueued_at, next_attempt_at)
+				VALUES (${newJobId()}, ${job.name}, ${dueAt}, ${now}, ${dueAt})
+				ON CONFLICT (name, due_at) DO NOTHING`;
+			scheduledDue.set(job.name, dueAt.getTime());
+		}
 	};
 }
 
@@ -184,7 +217,7 @@ async function claimNext(
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, name, payload, workspace_id, enqueued_at, attempts`;
+		RETURNING id, name, payload, workspace_id, due_at, enqueued_at, attempts`;
 	return row === undefined ? undefined : claimedJob.parse(row);
 }
 
@@ -218,22 +251,12 @@ async function run(
 	job: RegisteredJob,
 	options: Pick<JobQueueOptions, "now" | "newId" | "random" | "runTimeout">,
 ): Promise<void> {
-	const payload = await job.validatePayload(claimed.payload);
-	if (!payload.valid)
-		throw new JobFailedError({
-			reason: "invalid_payload",
-			issues: payload.issues,
-		});
+	const call = await callOf(job, claimed);
 	await transaction.unsafe(
 		`SET LOCAL search_path TO "${pluginSchemaName(job.plugin)}"`,
 	);
 	const outcome = await runWithin(
-		() =>
-			callRun(
-				job,
-				{ ...enqueuedJobOf(claimed), payload: payload.value },
-				contextOf(transaction, options),
-			),
+		() => callRun(call, contextOf(transaction, options)),
 		options.runTimeout,
 	);
 	if (outcome === "timed_out")
@@ -243,13 +266,47 @@ async function run(
 		});
 }
 
-async function callRun(
+type RunCall = (ctx: JobContext) => Promise<void>;
+
+async function callOf(
 	job: RegisteredJob,
-	enqueued: EnqueuedJob<unknown>,
-	ctx: JobContext,
-): Promise<void> {
+	claimed: ClaimedJob,
+): Promise<RunCall> {
+	const identity = {
+		id: claimed.id,
+		name: claimed.name,
+		attempt: claimed.attempts,
+	};
+	switch (job.kind) {
+		case "enqueued": {
+			const payload = await job.validatePayload(claimed.payload);
+			if (!payload.valid)
+				throw new JobFailedError({
+					reason: "invalid_payload",
+					issues: payload.issues,
+				});
+			const { workspace_id } = enqueuedDetails.parse(claimed);
+			return (ctx) =>
+				job.run(
+					{
+						...identity,
+						enqueuedAt: claimed.enqueued_at,
+						workspace: workspace_id,
+						payload: payload.value,
+					},
+					ctx,
+				);
+		}
+		case "cron": {
+			const { due_at } = cronDetails.parse(claimed);
+			return (ctx) => job.run({ ...identity, dueAt: due_at }, ctx);
+		}
+	}
+}
+
+async function callRun(call: RunCall, ctx: JobContext): Promise<void> {
 	try {
-		await job.run(enqueued, ctx);
+		await call(ctx);
 	} catch (error) {
 		throw new JobFailedError({
 			reason: "run_threw",
@@ -356,17 +413,6 @@ function report(
 		case "settled_elsewhere":
 			return;
 	}
-}
-
-function enqueuedJobOf(claimed: ClaimedJob): EnqueuedJob<unknown> {
-	return {
-		id: claimed.id,
-		name: claimed.name,
-		attempt: claimed.attempts,
-		enqueuedAt: claimed.enqueued_at,
-		workspace: claimed.workspace_id,
-		payload: claimed.payload,
-	};
 }
 
 function contextOf(

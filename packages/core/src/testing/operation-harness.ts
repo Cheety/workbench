@@ -148,6 +148,7 @@ function harnessOf(
 	const now = options.now ?? (() => FIXED_NOW);
 	const newId = options.newId ?? sequentialIds(OPERATION_ID_GROUP);
 	const random = options.random ?? (() => FIXED_RANDOM);
+	const newJobId = sequentialIds(JOB_ID_GROUP);
 	const pipeline: OperationPipeline = createOperationPipeline({
 		sql: database.sql,
 		registry: plugins.operations,
@@ -158,7 +159,7 @@ function harnessOf(
 		newEventId: sequentialIds(EVENT_ID_GROUP),
 		eventsCommitted: () => {},
 		jobs: plugins.jobs,
-		newJobId: sequentialIds(JOB_ID_GROUP),
+		newJobId,
 		jobsCommitted: () => {},
 		random,
 		logger,
@@ -177,6 +178,7 @@ function harnessOf(
 		jobs: plugins.jobs,
 		now,
 		newId,
+		newJobId,
 		random,
 		runTimeout: { ms: HOOK_TIMEOUT_MS, setTimer: setSystemTimer },
 		logger,

@@ -75,11 +75,19 @@ Der Aufruf des Event-Handlers genau eines abonnierenden Plugins mit genau einem 
 _Avoid_: Dispatch, Auslieferung, Benachrichtigung
 
 **Job**:
-Hintergrundarbeit eines Plugins, die eine Mutation einreiht und die der Core nach dem Festschreiben außerhalb der Anfrage ausführt, mindestens einmal.
+Hintergrundarbeit eines Plugins, die eine Mutation oder ein Zeitplan einreiht und die der Core nach dem Festschreiben außerhalb der Anfrage ausführt, mindestens einmal.
 _Avoid_: Task, Hintergrundaufgabe, Worker
 
+**Cron-Job**:
+Ein Job, den keine Mutation einreiht, sondern ein Zeitplan, den das Plugin deklariert; er läuft zu jeder Fälligkeit genau einmal.
+_Avoid_: Scheduled Task, Timer, Geplanter Job
+
+**Fälligkeit**:
+Ein Zeitpunkt, den der Zeitplan eines Cron-Jobs trifft.
+_Avoid_: Tick, Trigger, Ausführungszeitpunkt
+
 **Job-Queue**:
-Die Tabelle des Cores, in die eine Mutation ihre Jobs in ihrer eigenen Transaktion schreibt und aus der der Core sie ausführt, wiederholt und in den Dead-Letter legt.
+Die Tabelle des Cores, in die eine Mutation ihre Jobs in ihrer eigenen Transaktion schreibt, in die der Core die Fälligkeiten der Cron-Jobs einreiht und aus der er Jobs ausführt, wiederholt und in den Dead-Letter legt.
 _Avoid_: Outbox (das ist die der Events), Warteschlange, Scheduler
 
 **Versuch**:

@@ -1,4 +1,4 @@
-# Jobs laufen über eine Queue in Postgres, mit gezähltem Versuch, Wiederzustellungsfrist und Dead-Letter
+# Jobs und Cron-Jobs laufen über eine Queue in Postgres, mit gezähltem Versuch, Wiederzustellungsfrist und Dead-Letter
 
 Plugins brauchen Hintergrundarbeit, die eine Anfrage nicht aufhält: eine Mail, einen Abgleich, einen Export. Ein Job darf nie von einer Mutation erzählen, die es nicht gibt, nie verloren gehen, wenn es sie gibt, und nie endlos scheitern, ohne dass ein Betreiber es sieht.
 
@@ -14,7 +14,15 @@ Nach dem letzten gescheiterten Versuch bleibt der Job mit `state = 'dead'` und d
 
 Die Instanz arbeitet die Queue in einer Schleife ab, derselben wie die der Zustellung: Die Pipeline weckt sie nach dem Festschreiben einer Mutation, die Jobs eingereiht hat, und ein Timer weckt sie jede Sekunde. Es läuft ein Job nach dem anderen. Erwogen wurde, Jobs und Zustellungen in einer gemeinsamen Schleife abzuarbeiten; ein langer Job hielte dann jedes Event auf.
 
+Ein Cron-Job ist ein Job, den ein Zeitplan einreiht. Jeder Durchgang schreibt für jeden Cron-Job die nächste Fälligkeit nach dem Jetzt als Zeile mit `due_at` in die Queue, sofern er sie nicht schon geschrieben hat, und `UNIQUE (name, due_at)` lässt je Fälligkeit nur eine Zeile zu. Damit läuft ein Cron-Job je Fälligkeit genau einmal, auch wenn zwei Prozesse gegen dieselbe Datenbank laufen, und erbt Versuche, Wartezeit, Frist und Dead-Letter, ohne eigenen Code dafür. Erwogen wurde, bei Fälligkeit im Prozess auszuführen und zwei Prozesse über einen Advisory Lock zu trennen; dann ginge eine Fälligkeit verloren, wenn der Prozess mit dem Lock gerade stirbt, und ein Cron-Job hätte weder Wiederholung noch Dead-Letter. Erwogen wurde auch, erst bei Fälligkeit einzureihen, also die letzte Fälligkeit vor dem Jetzt; dann liefe ein neuer Cron-Job sofort rückwirkend für eine Fälligkeit vor seiner Einführung, ein monatlicher womöglich Wochen zu spät. Im Voraus eingereiht, wird genau die eine Fälligkeit nachgeholt, die schon in der Queue stand, als keine Instanz lief. Jeder Prozess merkt sich je Cron-Job, welche Fälligkeit er zuletzt geschrieben hat, und schreibt erst wieder, wenn sie erreicht ist; erwogen wurde, in jedem Durchgang zu schreiben und den Konflikt entscheiden zu lassen, was jede Sekunde eine Anweisung je Cron-Job kostete.
+
+Den Zeitplan liest der Core selbst: fünf Felder in UTC mit `*`, Zahlen, Bereichen, Listen und Schrittweiten, und der Regel von `cron`, dass Tag des Monats und Wochentag einander ergänzen, wenn beide eingeschränkt sind. Erwogen wurde eine Bibliothek für Cron-Ausdrücke; sie wäre eine neue Abhängigkeit ohne Freigabe für rund 150 Zeilen. Namen (`MON`), Kürzel (`@daily`), Sekunden und Zeitzonen fehlen deshalb. UTC statt einer Zeitzone je Zeitplan, weil eine Fälligkeit dann eindeutig ist: In einer Zone mit Sommerzeit gäbe es eine Uhrzeit im Jahr zweimal und eine gar nicht.
+
 ## Consequences
+
+- Ein Cron-Job, der zu einer Ortszeit laufen soll, verschiebt sich mit der Sommerzeit um eine Stunde. Eine Zeitzone je Zeitplan ist ein Zusatz, sobald ein Plugin sie braucht.
+- Fälligkeiten, die verstreichen, während keine Instanz läuft, entfallen bis auf die eine, die schon eingereiht war. Ein Cron-Job, der nichts auslassen darf, rechnet selbst von `dueAt` aus nach, was fehlt.
+- Ändert ein Plugin seinen Zeitplan, läuft die schon eingereihte Fälligkeit noch einmal nach dem alten. Entfällt ein Cron-Job ganz, bleibt seine eingereihte Fälligkeit als offene Zeile liegen.
 
 - Ein Job, der seine Frist überschreitet, läuft im Prozess weiter; der Core kann ihn nicht abbrechen. Seine Schreibzugriffe über `ctx.sql` scheitern, sobald die Transaktion zurückgerollt ist; eine Wirkung außerhalb kann sich mit der Wiederholung überschneiden.
 - Stirbt ein Prozess mitten im Versuch, wartet der Job die ganze Wiederzustellungsfrist, bei der Standardfrist 70 s, bevor er wieder läuft.

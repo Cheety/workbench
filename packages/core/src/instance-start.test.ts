@@ -308,6 +308,7 @@ describe("events of an instance", () => {
 
 describe("jobs of an instance", () => {
 	const archiveLabels: RegisteredJob = {
+		kind: "enqueued",
 		plugin: "board",
 		name: "board.archiveLabels",
 		maxAttempts: 3,

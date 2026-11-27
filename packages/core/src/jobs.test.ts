@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
 	type Actor,
+	type CronJobDefinition,
 	DATABASE_CAPABILITY,
+	type DueCronJob,
+	defineCronJob,
 	defineJob,
 	defineOperation,
 	definePlugin,
@@ -162,6 +165,36 @@ function billing(deliverInvoice: DeliverInvoice): PluginPackage {
 		],
 	};
 }
+
+function reports(run: CronJobDefinition["run"]): PluginPackage {
+	return {
+		packageName: "@workbench/plugin-reports",
+		pluginName: "reports",
+		version: "1.0.0",
+		loadDefinition: async () =>
+			definePlugin({
+				manifest: { name: "reports" },
+				cronJobs: [
+					defineCronJob({
+						name: "sendDigest",
+						schedule: "*/5 * * * *",
+						maxAttempts: 3,
+						run,
+					}),
+				],
+			}),
+	};
+}
+
+function recordingDigests() {
+	const run: DueCronJob[] = [];
+	const plugin = reports(async (job) => {
+		run.push(job);
+	});
+	return { plugin, run };
+}
+
+const ONE_MINUTE_MS = 60_000;
 
 function recordingDeliveries() {
 	const run: DeliverInvoiceJob[] = [];
@@ -504,6 +537,99 @@ describe("a job that fails", () => {
 				],
 			},
 		});
+	});
+});
+
+describe("a cron job", () => {
+	test("runs when its schedule falls due and not before, with the time it was due", async () => {
+		const clock = adjustableClock("2026-11-27T09:00:30.000Z");
+		const digests = recordingDigests();
+		const harness = await start([digests.plugin], { now: clock.now });
+
+		await harness.runJobs();
+		clock.advanceBy(4 * ONE_MINUTE_MS + 29_999);
+		await harness.runJobs();
+		const runBeforeItWasDue = [...digests.run];
+		clock.advanceBy(1);
+		await harness.runJobs();
+
+		expect(runBeforeItWasDue).toEqual([]);
+		expect(digests.run).toEqual([
+			{
+				id: "00000000-0000-4000-b000-000000000001",
+				name: "reports.sendDigest",
+				attempt: 1,
+				dueAt: new Date("2026-11-27T09:05:00.000Z"),
+			},
+		]);
+	});
+
+	test("runs once for each time it falls due, however often the due jobs are run", async () => {
+		const clock = adjustableClock("2026-11-27T09:00:30.000Z");
+		const digests = recordingDigests();
+		const harness = await start([digests.plugin], { now: clock.now });
+
+		await harness.runJobs();
+		clock.advanceBy(5 * ONE_MINUTE_MS);
+		await harness.runJobs();
+		await harness.runJobs();
+		clock.advanceBy(5 * ONE_MINUTE_MS);
+		await harness.runJobs();
+		await harness.runJobs();
+
+		expect(digests.run.map((job) => job.dueAt)).toEqual([
+			new Date("2026-11-27T09:05:00.000Z"),
+			new Date("2026-11-27T09:10:00.000Z"),
+		]);
+	});
+
+	test("runs once for the time it fell due while no instance ran, not for each time it missed", async () => {
+		const clock = adjustableClock("2026-11-27T09:00:30.000Z");
+		const digests = recordingDigests();
+		const harness = await start([digests.plugin], { now: clock.now });
+
+		await harness.runJobs();
+		clock.advanceBy(ONE_HOUR_MS);
+		await harness.runJobs();
+		await harness.runJobs();
+
+		expect(digests.run.map((job) => job.dueAt)).toEqual([
+			new Date("2026-11-27T09:05:00.000Z"),
+		]);
+	});
+
+	test("is run again like any job when it fails, for the same due time", async () => {
+		const clock = adjustableClock("2026-11-27T09:00:30.000Z");
+		const attempts: DueCronJob[] = [];
+		const harness = await start(
+			[
+				reports(async (job) => {
+					attempts.push(job);
+					if (job.attempt === 1) throw new Error("the mail server is down");
+				}),
+			],
+			{ now: clock.now },
+		);
+
+		await harness.runJobs();
+		clock.advanceBy(4 * ONE_MINUTE_MS + 30_000);
+		await harness.runJobs();
+		clock.advanceBy(2_500);
+		await harness.runJobs();
+
+		const dueAt = new Date("2026-11-27T09:05:00.000Z");
+		expect(attempts).toEqual([
+			expect.objectContaining({ attempt: 1, dueAt }),
+			expect.objectContaining({ attempt: 2, dueAt }),
+		]);
+		expect(jobFailures(harness)).toEqual([
+			expect.objectContaining({
+				job: "reports.sendDigest",
+				attempt: 1,
+				reason: "run_threw",
+				retryInMs: 2500,
+			}),
+		]);
 	});
 });
 

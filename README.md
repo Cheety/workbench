@@ -324,7 +324,7 @@ export const sendReminder = defineJob({
 - `payload` ist ein Schema wie bei einer Operation.
 - `maxAttempts` ist die Zahl der Versuche, nach der der Job im Dead-Letter landet, 1 bis 25.
 
-Ein Plugin ist ungültig (`invalid_manifest`), wenn ein Job keinen Namen in camelCase, kein Payload-Schema, kein `maxAttempts` von 1 bis 25 oder keine Funktion `run` hat oder mehrfach deklariert ist.
+Ein Plugin ist ungültig (`invalid_manifest`), wenn ein Job keinen Namen in camelCase, kein Payload-Schema, kein `maxAttempts` von 1 bis 25 oder keine Funktion `run` hat oder mehrfach deklariert ist; für einen [Cron-Job](#cron-jobs) gilt dasselbe, mit dem Zeitplan an der Stelle des Payload-Schemas.
 
 #### Einreihen
 
@@ -371,9 +371,35 @@ UPDATE core.jobs SET state = 'pending', settled_at = NULL, attempts = 0, next_at
 - Beginnt ein Versuch, zählt der Core ihn sofort und stellt den Job für die Wiederzustellungsfrist zurück: die Frist eines Versuchs (`PLUGIN_HOOK_TIMEOUT_MS`) plus 60 s. Endet der Prozess mitten im Versuch, läuft der Job nach dieser Frist erneut, auch in einem anderen Prozess; der abgebrochene Versuch zählt mit. Weil die Frist länger ist als die eines Versuchs, laufen nie zwei Versuche desselben Jobs zugleich, solange `run` seine Frist einhält.
 - Die Reihenfolge ist nicht zugesichert: Ein Job, der scheitert, hält die übrigen nicht auf.
 - Ein Job eines Plugins, das gerade nicht aktiv ist, bleibt liegen, bis es wieder aktiv ist, ohne Frist.
-- Ein Job hat bisher keinen Akteur, publiziert keine Events und reiht selbst keine Jobs ein.
+- Ein Job hat bisher keinen Akteur, publiziert keine Events und reiht selbst keine Jobs ein; das gilt auch für einen Cron-Job.
 
 Die Instanz führt Jobs aus, sobald eine Mutation mit Jobs festgeschrieben ist, und sieht zusätzlich jede Sekunde nach fälligen Jobs: nach Wiederholungen und nach Jobs, die ein Absturz oder ein anderer Prozess liegen ließ. Sie führt einen Job nach dem anderen aus. Scheitert ein solcher Durchgang als Ganzes, etwa weil Postgres nicht antwortet, nennt das Log den Fehler im Eintrag `job queue failed`, und der nächste Durchgang folgt nach einer Sekunde.
+
+#### Cron-Jobs
+
+Ein Cron-Job ist ein Job, den keine Mutation einreiht, sondern ein Zeitplan. Ein Plugin definiert ihn mit `defineCronJob()` und nennt ihn in `definePlugin({ manifest, cronJobs })`:
+
+```ts
+export const sendDigest = defineCronJob({
+	name: "sendDigest",
+	schedule: "0 7 * * 1-5",
+	maxAttempts: 3,
+	run: async (job, ctx) => {},
+});
+```
+
+- `schedule` ist ein Cron-Ausdruck aus fünf Feldern, in UTC: Minute (0 bis 59), Stunde (0 bis 23), Tag des Monats (1 bis 31), Monat (1 bis 12) und Wochentag (0 bis 7, 0 und 7 sind Sonntag). Ein Feld ist `*`, eine Zahl, ein Bereich (`1-5`) oder eine Liste davon (`0,30`), je mit optionaler Schrittweite (`*/15`, `10-50/20`). Namen wie `MON` oder `JAN` und Kürzel wie `@daily` gibt es nicht. Schränkt der Ausdruck sowohl den Tag des Monats als auch den Wochentag ein, ist der Job fällig, wenn einer von beiden passt, wie bei `cron`.
+- Der Cron-Job teilt sich den Namensraum mit den Jobs des Plugins und heißt `<plugin>.<name>`.
+- `job` nennt `id`, `name`, `attempt` und `dueAt`, die Fälligkeit, für die er läuft; `ctx` ist derselbe wie bei einem Job.
+
+Ein Zeitplan, der nicht diese Form hat oder nie fällig wird (`0 0 30 2 *`), macht das Plugin ungültig (`invalid_manifest`).
+
+Der Core reiht jede Fälligkeit im Voraus ein: Sieht ein Durchgang, dass für einen Cron-Job die nächste Fälligkeit noch nicht in `core.jobs` steht, schreibt er sie mit `due_at` dorthin, und der Job läuft, sobald sie erreicht ist. Je Cron-Job und Fälligkeit gibt es höchstens eine Zeile (`UNIQUE (name, due_at)`); laufen zwei Prozesse gegen dieselbe Datenbank, legt nur einer sie an und nur einer führt sie aus. Von da an ist sie ein Job wie jeder andere, mit Versuchen, Wartezeit, Frist und Dead-Letter.
+
+- Läuft zu einer Fälligkeit keine Instanz, wird sie nachgeholt, sobald wieder eine läuft, aber nur diese eine: Die Fälligkeiten, die währenddessen verstrichen sind, entfallen. `dueAt` nennt die nachgeholte.
+- Ein neuer Cron-Job läuft zum ersten Mal zur ersten Fälligkeit nach dem Start, an dem er aktiv wurde, nicht rückwirkend.
+- Eine bereits eingereihte Fälligkeit bleibt bestehen, wenn sich der Zeitplan ändert, und läuft noch einmal nach dem alten.
+- Eine Wiederholung kann sich mit der nächsten Fälligkeit überschneiden; `dueAt` und `id` unterscheiden die beiden.
 
 ### Test-Harness
 
@@ -402,7 +428,7 @@ await harness.stop();
 
 Events stellt das Harness nicht von selbst zu: `await harness.deliverEvents()` ruft die Handler aller fälligen Zustellungen auf und kehrt zurück, wenn jede einmal versucht ist. Eine gescheiterte Zustellung wird erst wieder fällig, wenn die Uhr des Harness (`now`) weiter ist als ihre Wartezeit.
 
-Auch Jobs führt das Harness nicht von selbst aus: `await harness.runJobs()` versucht jeden fälligen Job einmal und kehrt dann zurück. Ein gescheiterter Job wird erst wieder fällig, wenn die Uhr des Harness (`now`) weiter ist als seine Wartezeit; ein Test stellt die Uhr vor, statt zu warten.
+Auch Jobs führt das Harness nicht von selbst aus: `await harness.runJobs()` versucht jeden fälligen Job einmal und kehrt dann zurück. Ein gescheiterter Job wird erst wieder fällig, wenn die Uhr des Harness (`now`) weiter ist als seine Wartezeit; ein Test stellt die Uhr vor, statt zu warten. Für einen Cron-Job reiht der erste Aufruf die nächste Fälligkeit nach der Uhr des Harness ein; ist die Uhr danach bei ihr angekommen, führt der nächste Aufruf ihn aus.
 
 Das Referenz-Plugin bietet so die Mutation `reference.createNote` (Eingabe `title`, 1 bis 200 Zeichen nach Entfernen von Leerraum am Rand) und die Query `reference.listNotes` (Eingabe `limit`, 1 bis 100; die neuesten zuerst), beide auf den Notizen eines Workspaces in `plugin_reference.notes`. `reference.createNote` publiziert das Event `reference.NoteCreated` (Version 1, Payload `noteId`), dessen Definition `noteCreated` im Contract des Plugins liegt (siehe [Events](#events)). Seine Tests in `packages/plugin-reference/src/operations.test.ts` zeigen das Harness im Einsatz.
 
