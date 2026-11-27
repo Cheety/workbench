@@ -162,8 +162,9 @@ describe("instance start", () => {
 	});
 
 	test("serves health checks and shuts down cleanly on SIGTERM", async () => {
+		const database = await freshDatabase();
 		const instance = spawnInstance({
-			DATABASE_URL: TEST_DATABASE_URL,
+			DATABASE_URL: database.url,
 			PORT: "0",
 		});
 		const log = readLog(instance.stdout);
@@ -184,8 +185,9 @@ describe("instance start", () => {
 
 describe("plugins of an instance", () => {
 	test("activates the reference plugin the instance config enables and deactivates it on shutdown", async () => {
+		const database = await freshDatabase();
 		const instance = spawnInstance({
-			DATABASE_URL: TEST_DATABASE_URL,
+			DATABASE_URL: database.url,
 			PORT: "0",
 			PLUGINS: "reference",
 		});
@@ -217,8 +219,9 @@ describe("plugins of an instance", () => {
 	});
 
 	test("discovers the reference plugin but leaves it inactive when the instance config does not enable it", async () => {
+		const database = await freshDatabase();
 		const instance = spawnInstance({
-			DATABASE_URL: TEST_DATABASE_URL,
+			DATABASE_URL: database.url,
 			PORT: "0",
 		});
 
@@ -237,8 +240,9 @@ describe("plugins of an instance", () => {
 	});
 
 	test("keeps running and tells the operator why an enabled plugin was not loaded", async () => {
+		const database = await freshDatabase();
 		const instance = spawnInstance({
-			DATABASE_URL: TEST_DATABASE_URL,
+			DATABASE_URL: database.url,
 			PORT: "0",
 			PLUGINS: "ghost,reference",
 		});
