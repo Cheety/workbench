@@ -14,6 +14,8 @@ Fachsprache ist eine feste Liste von Begriffen der geplanten fachlichen Plugins 
 
 Core und SDK importieren außerhalb ihrer Tests kein Plugin-Paket, auch nicht dessen Contract; nach ADR-0007 findet der Kernel die Plugin-Pakete erst zur Laufzeit über ihre `package.json`. Die Prüfung nutzt dieselbe Erkennung von Plugin-Paketen und Importen wie die Plugin-Grenzen und erfasst damit Paketname, jeden Subpath, relative Pfade in ein Plugin-Paket und Pfade durch `node_modules`. Tests sind ausgenommen, weil sie ein Plugin-Paket laden dürfen, um den Kernel damit zu prüfen.
 
+Dass eine Event-Definition im Contract liegt (ADR-0015), sichert eine Prüfung am Namen: `defineEvent` steht in einem Plugin-Paket nur in Dateien seines Contracts, wobei die Prüfung das Wort im Quelltext sucht, Kommentare und Strings eingeschlossen, und Tests ausnimmt, weil ihre Fixture-Plugins eigene Events definieren.
+
 ## Consequences
 
 - Die Liste der Fachbegriffe ist nie vollständig. Wer ein fachliches Plugin anlegt, trägt dessen Kernbegriffe in `packages/architecture/src/domain-language.ts` ein.

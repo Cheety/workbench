@@ -17,6 +17,7 @@ Die Ermessensfragen, die keine Prüfung entscheidet. Alles Mechanische prüft `b
 
 - Core und SDK kennen keine Fachsprache der Plugins und importieren kein Plugin-Paket (ADR-0004, ADR-0007). Fachliche Funktion kommt als Plugin; der Workspace ist die einzige Ausnahme (ADR-0002).
 - Ein Plugin importiert aus einem anderen nur `<Paket>/contract`. Der Contract enthält Typen, Schemas, Event-Definitionen und Werte-Typen, kein Verhalten.
+- Ein Plugin nennt `defineEvent` nur in Dateien seines Contracts, Tests ausgenommen; der Architekturtest sucht den Namen im Quelltext, auch in Kommentaren und Strings (ADR-0009).
 - Ein Plugin liest und schreibt nur sein eigenes Schema `plugin_<name>` (ADR-0003). Fremde Daten kommen über den Contract oder ein eigenes, per Event gepflegtes Read Model.
 - Modulpfade stehen als einfaches String-Literal da; einen berechneten Import sieht kein Architekturtest.
 
