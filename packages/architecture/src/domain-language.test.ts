@@ -31,8 +31,6 @@ describe("domain language in the core", () => {
 		["export type KanbanColumn = { id: string };", "kanban"],
 		["const whiteboard_shapes = [];", "whiteboard"],
 		['log.info("chat-room opened");', "chat"],
-		["CREATE TABLE core.sprint (id uuid PRIMARY KEY);", "sprint"],
-		["CREATE TABLE core.notes (id uuid PRIMARY KEY);", "note"],
 		["export function closeTickets(): void {}", "ticket"],
 		["export type IssueTrackerSettings = {};", "issue tracker"],
 		["const AGENT_FACTORY_QUEUE = 'jobs';", "agent factory"],
@@ -46,6 +44,24 @@ describe("domain language in the core", () => {
 			{ file: "src/columns.ts", term },
 		]);
 	});
+
+	test.each([
+		[
+			"migrations/0001_init.sql",
+			"CREATE TABLE core.sprint (id uuid);",
+			"sprint",
+		],
+		["migrations/0002_notes.sql", "CREATE TABLE core.notes (id uuid);", "note"],
+		["package.json", '{ "description": "Kanban for teams" }', "kanban"],
+		["README.md", "# Workbench\n\nPlan your backlog here.", "backlog"],
+	])(
+		"is found in files that are no TypeScript: %s",
+		async (file, content, term) => {
+			const core = await coreWith({ [file]: content });
+
+			expect(await findDomainLanguage(core)).toEqual([{ file, term }]);
+		},
+	);
 
 	test.each([
 		["export class ConfigIssue {}"],
