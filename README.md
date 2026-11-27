@@ -233,7 +233,7 @@ export const labelRenamed = defineEvent({
 });
 ```
 
-- `plugin` ist der Name des publizierenden Plugins, `name` der Fakt in PascalCase. Das Event heißt `<plugin>.<name>`, hier `board.LabelRenamed`.
+- `plugin` ist der Name des publizierenden Plugins, `name` der Fakt in PascalCase. Geprüft wird beim Laden nur PascalCase; die Vergangenheitsform ist Konvention. Das Event heißt `<plugin>.<name>`, hier `board.LabelRenamed`.
 - `version` ist eine ganze Zahl ab 1, `payload` ein Schema nach Standard Schema (ADR-0010). Die Payload nennt IDs, keine Objekte: Wer mehr braucht, fragt das publizierende Plugin.
 
 Das publizierende Plugin nennt seine Events in `definePlugin({ manifest, events })`. Ein abonnierendes Plugin importiert die Definition aus dem Contract, deklariert für jedes Event die Capability `event:<plugin>.<name>` (`eventSubscriptionCapability(labelRenamed)`) und registriert seinen Event-Handler ausdrücklich in `subscriptions`:
@@ -261,7 +261,7 @@ Ein Plugin wird nicht geladen (`invalid_manifest`, `detail` nennt jeden Mangel),
 
 - es ein Event abonniert, ohne die Capability dieses Events zu deklarieren,
 - es ein Event unter dem Namen eines anderen Plugins deklariert, mit einem Namen, der nicht PascalCase ist, ohne Version ab 1, ohne Payload-Schema oder mehrfach,
-- ein Abo keine Event-Definition oder keinen Handler nennt oder dasselbe Event mehrfach abonniert.
+- ein Abo keine Event-Definition, eine mit ungültigem Plugin-Namen oder Event-Namen oder keinen Handler nennt oder dasselbe Event mehrfach abonniert.
 
 #### Publizieren
 

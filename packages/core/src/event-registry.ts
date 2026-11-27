@@ -97,13 +97,8 @@ function readEvent(
 		return invalid(
 			`events[${position}] must name ${quote(plugin)} as its plugin, the plugin that publishes it`,
 		);
-	const read = readDefinition(candidate);
-	return read.valid
-		? { valid: true, event: read.event }
-		: invalid(
-				read.problem ??
-					`events[${position}].name must be a fact in the past tense in PascalCase, such as "WorkspaceRenamed"`,
-			);
+	const read = readDefinition(candidate, `events[${position}]`);
+	return read.valid ? { valid: true, event: read.event } : read;
 }
 
 type DefinitionRead =
@@ -112,28 +107,31 @@ type DefinitionRead =
 			readonly event: RegisteredEvent;
 			readonly subscriptionCapability: string;
 	  }
-	| { readonly valid: false; readonly problem: string | undefined };
+	| { readonly valid: false; readonly problem: string };
 
-function readDefinition(candidate: Record<string, unknown>): DefinitionRead {
+function readDefinition(
+	candidate: Record<string, unknown>,
+	subject: string,
+): DefinitionRead {
 	const { plugin, name, version, payload } = candidate;
-	if (
-		!isPluginName(plugin) ||
-		typeof name !== "string" ||
-		!EVENT_NAME.test(name)
-	)
-		return { valid: false, problem: undefined };
+	if (!isPluginName(plugin))
+		return invalid(
+			`${subject}.plugin must be the name of the publishing plugin`,
+		);
+	if (typeof name !== "string" || !EVENT_NAME.test(name))
+		return invalid(
+			`${subject}.name must be in PascalCase, such as "WorkspaceRenamed"`,
+		);
 	const fullName = eventName({ plugin, name });
 	if (typeof version !== "number" || !Number.isInteger(version) || version < 1)
-		return {
-			valid: false,
-			problem: `event ${quote(fullName)} must have a version that is a positive integer`,
-		};
+		return invalid(
+			`event ${quote(fullName)} must have a version that is a positive integer`,
+		);
 	const validatePayload = validatorOf(payload);
 	if (validatePayload === undefined)
-		return {
-			valid: false,
-			problem: `event ${quote(fullName)} must declare its payload as a schema`,
-		};
+		return invalid(
+			`event ${quote(fullName)} must declare its payload as a schema`,
+		);
 	return {
 		valid: true,
 		event: { name: fullName, version, validatePayload },
@@ -197,14 +195,15 @@ function readSubscription(
 ): SubscriptionRead {
 	if (!isRecord(candidate))
 		return invalid(`subscriptions[${position}] must be an event subscription`);
-	const definition = isRecord(candidate.event)
-		? readDefinition(candidate.event)
-		: undefined;
-	if (definition === undefined || !definition.valid)
+	if (!isRecord(candidate.event))
 		return invalid(
-			definition?.problem ??
-				`subscriptions[${position}].event must be an event definition from the contract of the publishing plugin`,
+			`subscriptions[${position}].event must be an event definition from the contract of the publishing plugin`,
 		);
+	const definition = readDefinition(
+		candidate.event,
+		`subscriptions[${position}].event`,
+	);
+	if (!definition.valid) return definition;
 	const { event } = definition;
 	const { handle } = candidate;
 	if (typeof handle !== "function")

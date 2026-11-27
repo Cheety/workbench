@@ -2270,7 +2270,7 @@ describe("events of plugins", () => {
 		[
 			"an event name that is not in PascalCase",
 			{ events: [{ ...cardCreated, name: "card-created" }] },
-			'events[0].name must be a fact in the past tense in PascalCase, such as "WorkspaceRenamed"',
+			'events[0].name must be in PascalCase, such as "WorkspaceRenamed"',
 		],
 		[
 			"an event without a version",
@@ -2306,6 +2306,24 @@ describe("events of plugins", () => {
 			"a subscription to something that is not an event definition",
 			{ subscriptions: [{ event: "board.CardCreated", handle: () => {} }] },
 			"subscriptions[0].event must be an event definition from the contract of the publishing plugin",
+		],
+		[
+			"a subscription to an event whose plugin is not a plugin name",
+			{
+				subscriptions: [
+					{ ...countCard, event: { ...cardCreated, plugin: "The Board" } },
+				],
+			},
+			"subscriptions[0].event.plugin must be the name of the publishing plugin",
+		],
+		[
+			"a subscription to an event whose name is not in PascalCase",
+			{
+				subscriptions: [
+					{ ...countCard, event: { ...cardCreated, name: "card-created" } },
+				],
+			},
+			'subscriptions[0].event.name must be in PascalCase, such as "WorkspaceRenamed"',
 		],
 		[
 			"a subscription without a handler",
