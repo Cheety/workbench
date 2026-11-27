@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { authenticateToken } from "./api-tokens.ts";
+import { authenticateToken, newApiToken } from "./api-tokens.ts";
 import { Secret } from "./config.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import {
@@ -44,7 +44,7 @@ async function migratedDatabase(): Promise<FreshDatabase> {
 const sources = {
 	now: () => NOW,
 	newId: () => crypto.randomUUID(),
-	newToken: () => new Secret("wbt_test-token"),
+	newToken: () => newApiToken((length) => new Uint8Array(length).fill(7)),
 };
 
 describe("creating a service account", () => {
@@ -65,7 +65,7 @@ describe("creating a service account", () => {
 		expect(
 			await authenticateToken(
 				database.sql,
-				"wbt_test-token",
+				issued.token.reveal(),
 				new Date(THIRTY_DAYS_LATER.getTime() - 1),
 			),
 		).toEqual({
@@ -76,7 +76,7 @@ describe("creating a service account", () => {
 		expect(
 			await authenticateToken(
 				database.sql,
-				"wbt_test-token",
+				issued.token.reveal(),
 				THIRTY_DAYS_LATER,
 			),
 		).toEqual({ authenticated: false, reason: "expired_token" });
