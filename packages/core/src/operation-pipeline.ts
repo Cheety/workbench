@@ -152,7 +152,12 @@ async function invoke(
 				const executed = await execute(
 					operation,
 					input.value,
-					contextOf(call, transaction, options, publisher.into(transaction)),
+					contextOf(
+						call,
+						transaction,
+						options,
+						publisher.publishIn(transaction),
+					),
 				);
 				if (IS_AUDITED[operation.kind])
 					await recordAuditEntry(
@@ -235,7 +240,7 @@ function contextOf(
 }
 
 type Publisher = {
-	into(transaction: SQL): OperationContext["publish"];
+	publishIn(transaction: SQL): OperationContext["publish"];
 	hasPublished(): boolean;
 };
 
@@ -246,7 +251,7 @@ function publisherOf(
 ): Publisher {
 	let hasPublished = false;
 	return {
-		into: (transaction) => async (definition, payload) => {
+		publishIn: (transaction) => async (definition, payload) => {
 			if (!CAN_PUBLISH[operation.kind])
 				throw new EventPublishedByQueryError(operation.name);
 			await recordEvent(transaction, sources.events, {
