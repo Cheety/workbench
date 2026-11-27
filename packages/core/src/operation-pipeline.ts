@@ -82,6 +82,13 @@ class InvalidOutputError extends Error {
 	}
 }
 
+class UseCaseFailedError extends Error {
+	constructor(cause: unknown) {
+		super("the use case of the operation failed", { cause });
+		this.name = "UseCaseFailedError";
+	}
+}
+
 export function createOperationPipeline(
 	options: OperationPipelineOptions,
 ): OperationPipeline {
@@ -160,10 +167,23 @@ async function execute(
 		random: options.random,
 	};
 	const output = await operation.validateOutput(
-		await operation.execute(input, ctx),
+		await executeUseCase(operation, input, ctx),
 	);
 	if (!output.valid) throw new InvalidOutputError(output.issues);
 	return output.value;
+}
+
+async function executeUseCase(
+	operation: RegisteredOperation,
+	input: unknown,
+	ctx: OperationContext,
+): Promise<unknown> {
+	try {
+		return await operation.execute(input, ctx);
+	} catch (error) {
+		if (error instanceof OperationError) throw error;
+		throw new UseCaseFailedError(error);
+	}
 }
 
 function failureOf(
@@ -184,9 +204,14 @@ function failureOf(
 			reason: "invalid_output",
 			issues: error.issues,
 		});
-	else
+	else if (error instanceof UseCaseFailedError)
 		logger.error("operation failed", {
 			reason: "use_case_failed",
+			error: describeThrown(error.cause),
+		});
+	else
+		logger.error("operation failed", {
+			reason: "pipeline_failed",
 			error: describeThrown(error),
 		});
 	return INTERNAL_ERROR;

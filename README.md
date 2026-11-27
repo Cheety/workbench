@@ -163,15 +163,15 @@ Ein Akteur ruft eine Operation mit ihrem Namen, einem Workspace und einer Eingab
 
 Wirft `execute` oder passt die Ausgabe nicht zum Schema, wird die Transaktion zurückgerollt. Ein fachlicher Fehler ist ein `OperationError` aus `@workbench/sdk` mit Art (`not_found`, `conflict`, `rejected`), Code (Kleinbuchstaben, Ziffern, Unterstriche) und einer Meldung für den Aufrufer; der Aufrufer erhält den Code als `<plugin>.<code>`. Jeder andere Fehler erreicht den Aufrufer nur als `internal_error`.
 
-| Code                  | Art             | Bedeutung                                                                                          |
-| --------------------- | --------------- | -------------------------------------------------------------------------------------------------- |
-| `invalid_input`       | `invalid_input` | Die Eingabe passt nicht zum Eingabe-Schema; `issues` nennt je Befund Pfad und Meldung.             |
-| `unknown_operation`   | `not_found`     | Kein aktives Plugin hat eine Operation dieses Namens registriert.                                  |
-| `workspace_not_found` | `not_found`     | Der Workspace existiert nicht.                                                                     |
-| `internal_error`      | `internal`      | `execute` warf einen anderen Fehler als `OperationError`, oder die Ausgabe passt nicht zum Schema. |
-| `<plugin>.<code>`     | aus dem Fehler  | `execute` warf einen `OperationError`.                                                             |
+| Code                  | Art             | Bedeutung                                                                                                                                           |
+| --------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `invalid_input`       | `invalid_input` | Die Eingabe passt nicht zum Eingabe-Schema; `issues` nennt je Befund Pfad und Meldung.                                                              |
+| `unknown_operation`   | `not_found`     | Kein aktives Plugin hat eine Operation dieses Namens registriert.                                                                                   |
+| `workspace_not_found` | `not_found`     | Der Workspace existiert nicht.                                                                                                                      |
+| `internal_error`      | `internal`      | `execute` warf einen anderen Fehler als `OperationError`, die Ausgabe passt nicht zum Schema, oder die Pipeline scheiterte außerhalb von `execute`. |
+| `<plugin>.<code>`     | aus dem Fehler  | `execute` warf einen `OperationError`.                                                                                                              |
 
-Ein `internal_error` steht mit `correlationId`, `operation` und `reason` im Log als Eintrag `operation failed`: `use_case_failed` mit dem Fehler in `error`, oder `invalid_output` mit den Befunden des Ausgabe-Schemas in `issues`.
+Ein `internal_error` steht mit `correlationId`, `operation` und `reason` im Log als Eintrag `operation failed`: `use_case_failed`, wenn `execute` warf, mit dem Fehler in `error`; `invalid_output` mit den Befunden des Ausgabe-Schemas in `issues`; oder `pipeline_failed`, wenn die Pipeline außerhalb von `execute` scheiterte (etwa ein Schema, das wirft, ein unerreichbares Postgres beim Öffnen der Transaktion oder beim Prüfen des Workspace, ein gescheitertes Festschreiben), mit dem Fehler in `error`.
 
 Jedes Scheitern lässt sich als Problem Details nach RFC 9457 abbilden (`toProblemDetails` in `packages/core/src/problem-details.ts`), mit `type` `urn:workbench:problem:<code>`, `title` und `status` nach der Art (`invalid_input` 400, `not_found` 404, `conflict` 409, `rejected` 422, `internal` 500), `detail`, `code`, `correlationId` und `issues`:
 

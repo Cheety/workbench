@@ -95,6 +95,20 @@ const describeCall = defineOperation({
 	}),
 });
 
+const auditEntries = defineOperation({
+	...listEntries,
+	name: "auditEntries",
+	input: {
+		"~standard": {
+			version: 1,
+			vendor: "ledger",
+			validate: () => {
+				throw new Error("the audit schema is broken");
+			},
+		},
+	},
+});
+
 const ledger: PluginPackage = {
 	packageName: "@workbench/plugin-ledger",
 	pluginName: "ledger",
@@ -109,6 +123,7 @@ const ledger: PluginPackage = {
 			listEntries,
 			addEntryWhileReading,
 			describeCall,
+			auditEntries,
 		],
 	}),
 	loadMigrations: async () => [
@@ -272,6 +287,34 @@ describe("an actor calling an operation", () => {
 				error: expect.objectContaining({
 					name: "Error",
 					message: "negative amount at /srv/ledger/entries",
+				}),
+			}),
+		);
+	});
+
+	test("is told internal_error when the pipeline fails outside the use case, and the log tells it apart from a failed use case", async () => {
+		const harness = await startLedger();
+		const workspace = await harness.createWorkspace("Accounts");
+
+		const audited = await harness.call({
+			actor: ALICE,
+			workspace,
+			operation: "ledger.auditEntries",
+			input: {},
+		});
+
+		expect(audited).toEqual({
+			ok: false,
+			failure: expect.objectContaining({ code: "internal_error" }),
+		});
+		expect(harness.logEntries).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				message: "operation failed",
+				operation: "ledger.auditEntries",
+				reason: "pipeline_failed",
+				error: expect.objectContaining({
+					message: "the audit schema is broken",
 				}),
 			}),
 		);
