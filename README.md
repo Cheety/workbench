@@ -160,7 +160,7 @@ Ein Akteur ruft eine Operation mit ihrem Namen, einem Workspace und einer Eingab
 2. prüft die Eingabe gegen das Eingabe-Schema,
 3. öffnet eine Transaktion, für eine `query` nur lesend, mit dem Schema des Plugins als `search_path` (für eine Operation des Cores `core`),
 4. prüft, dass der Workspace in `core.workspaces` existiert,
-5. führt `execute(input, ctx)` aus; `ctx` nennt `actor`, `workspace`, `sql` (die Transaktion als Tagged Template), `now()`, `newId()`, `random()`, `publish()` (siehe [Events](#events)) und `enqueue()` (siehe [Jobs](#jobs)),
+5. führt `execute(input, ctx)` aus; `ctx` nennt `actor`, `workspace`, `sql` (eine Funktion des Cores, die eine Anweisung als Tagged Template sofort in der Transaktion ausführt; weitere Methoden des Datenbank-Clients hat sie nicht, wie in Event-Handlern und Jobs), `now()`, `newId()`, `random()`, `publish()` (siehe [Events](#events)) und `enqueue()` (siehe [Jobs](#jobs)),
 6. bildet den Rückgabewert über das Ausgabe-Schema ab,
 7. schreibt für eine `mutation` einen Audit-Eintrag in dieselbe Transaktion (siehe [Audit](#audit)) und schreibt die Transaktion fest.
 

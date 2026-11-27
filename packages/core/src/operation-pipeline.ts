@@ -26,6 +26,7 @@ import {
 	type SchemaName,
 } from "./schema-name.ts";
 import type { ValidationIssue } from "./schema-validation.ts";
+import { statementsIn } from "./transaction-statements.ts";
 import { workspaceExists } from "./workspaces.ts";
 
 export type OperationCall = {
@@ -250,7 +251,7 @@ function contextOf(
 	return {
 		actor: call.actor,
 		workspace: call.workspace,
-		sql: transaction,
+		sql: statementsIn(transaction),
 		now: sources.now,
 		newId: sources.newId,
 		random: sources.random,

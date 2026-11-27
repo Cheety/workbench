@@ -88,6 +88,40 @@ const auditEntries = defineOperation({
 	},
 });
 
+const CLIENT_METHODS = [
+	"unsafe",
+	"begin",
+	"savepoint",
+	"commit",
+	"rollback",
+	"reserve",
+	"file",
+	"close",
+] as const;
+
+const STATEMENT_METHODS = ["cancel", "simple", "raw", "values"] as const;
+
+const probeClient = defineOperation({
+	...listEntries,
+	name: "probeClient",
+	output: z.object({
+		clientMethods: z.array(z.string()),
+		statementMethods: z.array(z.string()),
+	}),
+	execute: async (_input, ctx) => {
+		const statement = ctx.sql`SELECT 1`;
+		await statement;
+		return {
+			clientMethods: CLIENT_METHODS.filter(
+				(method) => typeof Reflect.get(ctx.sql, method) === "function",
+			),
+			statementMethods: STATEMENT_METHODS.filter(
+				(method) => typeof Reflect.get(statement, method) === "function",
+			),
+		};
+	},
+});
+
 const ledger: PluginPackage = {
 	packageName: "@workbench/plugin-ledger",
 	pluginName: "ledger",
@@ -102,6 +136,7 @@ const ledger: PluginPackage = {
 			listEntries,
 			addEntryWhileReading,
 			auditEntries,
+			probeClient,
 		],
 	}),
 	loadMigrations: async () => [
@@ -358,6 +393,23 @@ describe("an actor calling an operation", () => {
 				reason: "execute_threw",
 			}),
 		);
+	});
+
+	test("hands execute no method of the database client beyond a statement as tagged template", async () => {
+		const harness = await startLedger();
+		const workspace = await harness.createWorkspace("Accounts");
+
+		const probed = await harness.call({
+			actor: ALICE,
+			workspace,
+			operation: "ledger.probeClient",
+			input: {},
+		});
+
+		expect(probed).toEqual({
+			ok: true,
+			output: { clientMethods: [], statementMethods: [] },
+		});
 	});
 
 	test("is told unknown_operation for a name no active plugin registered", async () => {
