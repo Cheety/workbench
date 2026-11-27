@@ -245,7 +245,10 @@ function countComputedImports(source: string): number {
 	).length;
 }
 
-function isContractFile(file: string, contract: ContractExport): boolean {
+export function isContractFile(
+	file: string,
+	contract: ContractExport,
+): boolean {
 	return (
 		contract.kind === "published" &&
 		isWithin(file, dirname(contract.file)) &&

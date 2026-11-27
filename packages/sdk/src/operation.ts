@@ -1,3 +1,5 @@
+import type { EventDefinition } from "./event.ts";
+
 export const OPERATION_KINDS = ["query", "mutation"] as const;
 export type OperationKind = (typeof OPERATION_KINDS)[number];
 
@@ -44,6 +46,10 @@ export type OperationContext = {
 	now(): Date;
 	newId(): string;
 	random(): number;
+	publish<Payload>(
+		event: EventDefinition<Payload>,
+		payload: Payload,
+	): Promise<void>;
 };
 
 export type OperationDefinition<Input, Output> = {

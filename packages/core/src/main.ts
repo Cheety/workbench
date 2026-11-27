@@ -7,6 +7,8 @@ import {
 	loadConfigFromEnvironment,
 } from "./config.ts";
 import { fullJitterBackoff, untilDatabaseReachable } from "./database-wait.ts";
+import { startEventDeliveryLoop } from "./event-delivery-loop.ts";
+import { createEventDelivery } from "./event-outbox.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import { createInstanceStart } from "./instance-start.ts";
 import { startPlugins } from "./kernel.ts";
@@ -45,6 +47,8 @@ const OPERATION_STATEMENT_TIMEOUT_MS = 60_000;
 const DATABASE_CLOSE_TIMEOUT_S = 5;
 
 const MIGRATION_LOCK_RETRY = { baseMs: 250, capMs: 2_000 } as const;
+
+const EVENT_DELIVERY_POLL_INTERVAL_MS = 1_000;
 
 const now = (): Date => new Date();
 
@@ -138,6 +142,23 @@ const sql = new SQL(config.databaseUrl.reveal(), {
 	connectionTimeout: OPERATION_CONNECTION_TIMEOUT_S,
 	connection: { statement_timeout: OPERATION_STATEMENT_TIMEOUT_MS },
 });
+const eventDelivery = startEventDeliveryLoop({
+	delivery: createEventDelivery({
+		sql,
+		events: instance.events,
+		now,
+		newId: () => crypto.randomUUID(),
+		random: Math.random,
+		handlerTimeout: {
+			ms: config.pluginHookTimeoutMs,
+			setTimer: setSystemTimer,
+		},
+		logger,
+	}),
+	pollIntervalMs: EVENT_DELIVERY_POLL_INTERVAL_MS,
+	setTimer: setSystemTimer,
+	logger,
+});
 const server = startServerOrExit({
 	port: config.port,
 	logger,
@@ -149,9 +170,12 @@ const server = startServerOrExit({
 		pipeline: createOperationPipeline({
 			sql,
 			registry: instance.operations,
+			events: instance.events,
 			now,
 			newId: () => crypto.randomUUID(),
 			newAuditEntryId: () => crypto.randomUUID(),
+			newEventId: () => crypto.randomUUID(),
+			eventsCommitted: eventDelivery.wake,
 			random: Math.random,
 			logger,
 		}),
@@ -168,6 +192,7 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 			{
 				stopStartingPlugins: instance.stop,
 				server,
+				eventDelivery,
 				plugins,
 				database: {
 					close: () => sql.close({ timeout: DATABASE_CLOSE_TIMEOUT_S }),

@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+	defineEvent,
+	defineEventSubscription,
 	defineOperation,
 	definePlugin,
+	eventSubscriptionCapability,
 	type PluginContext,
 	type PluginDefinition,
 } from "@workbench/sdk";
@@ -22,10 +25,13 @@ import {
 	type Migration,
 	type MigrationRunner,
 	migrateSchemas,
-	type SchemaMigrations,
 } from "./schema-migrations.ts";
 import { schemaName } from "./schema-name.ts";
-import { createFreshDatabase, type FreshDatabase } from "./testing/postgres.ts";
+import {
+	createFreshDatabase,
+	type FreshDatabase,
+	PostgresGate,
+} from "./testing/postgres.ts";
 import { recordingLogger } from "./testing/recording-logger.ts";
 
 function packageOf(
@@ -46,17 +52,37 @@ afterEach(async () => {
 	for (const database of databases.splice(0)) await database.drop();
 });
 
-function migratingInto(database: FreshDatabase): MigrateSchemas {
+function migratingInto(
+	postgres: { readonly url: string },
+	stopSignal: AbortSignal = new AbortController().signal,
+): MigrateSchemas {
 	const runner: MigrationRunner = {
-		databaseUrl: new Secret(database.url),
+		databaseUrl: new Secret(postgres.url),
 		connectionTimeoutMs: 2_000,
 		statementTimeoutMs: 5_000,
 		lockRetryDelayMs: () => 10,
 		setTimer: setSystemTimer,
 		logger: recordingLogger().logger,
 	};
-	return (schemas) =>
-		migrateSchemas(runner, schemas, new AbortController().signal);
+	return (schemas) => migrateSchemas(runner, schemas, stopSignal);
+}
+
+async function pluginSchemasIn(database: FreshDatabase): Promise<string[]> {
+	const rows = await database.sql<{ schema_name: string }[]>`
+		SELECT schema_name FROM information_schema.schemata
+		WHERE starts_with(schema_name, 'plugin_') ORDER BY schema_name`;
+	return rows.map((row) => row.schema_name);
+}
+
+type AppliedMigration = { readonly schema: string; readonly migration: string };
+
+async function appliedMigrationsIn(
+	database: FreshDatabase,
+): Promise<AppliedMigration[]> {
+	const rows = await database.sql<AppliedMigration[]>`
+		SELECT schema_name AS schema, migration FROM core.migrations
+		ORDER BY schema_name, migration`;
+	return [...rows];
 }
 
 async function freshDatabase(): Promise<FreshDatabase> {
@@ -1554,66 +1580,46 @@ describe("plugin schemas", () => {
 	}
 
 	test("migrates the schema of each plugin with the database capability before activating any plugin", async () => {
-		const journal: string[] = [];
-		const migrated: SchemaMigrations[][] = [];
+		const database = await freshDatabase();
+		const seenAtActivation: unknown[] = [];
+		const observing = (manifest: PluginDefinition["manifest"]) =>
+			definePlugin({
+				manifest,
+				activate: async () => {
+					seenAtActivation.push({
+						plugin: manifest.name,
+						schemas: await pluginSchemasIn(database),
+						applied: await appliedMigrationsIn(database),
+					});
+				},
+			});
 
 		await start({
 			packages: [
 				withMigrations(
 					packageOf(
-						recordingPlugin(journal, {
-							name: "sticky-notes",
-							capabilities: ["database"],
-						}),
+						observing({ name: "sticky-notes", capabilities: ["database"] }),
 					),
 					[CREATE_NOTES],
 				),
-				packageOf(
-					recordingPlugin(journal, {
-						name: "board",
-						capabilities: ["database"],
-					}),
-				),
-				packageOf(recordingPlugin(journal, { name: "cards" })),
+				packageOf(observing({ name: "board", capabilities: ["database"] })),
+				packageOf(observing({ name: "cards" })),
 			],
 			enabledPlugins: ["cards", "sticky-notes", "board"],
-			migrateSchemas: async (schemas) => {
-				migrated.push([...schemas]);
-				journal.push("migrate");
-				return migratingIntoFreshDatabase()(schemas);
-			},
+			migrateSchemas: migratingInto(database),
 		});
 
-		expect(migrated).toEqual([
-			[
-				{
-					schema: schemaName("plugin_sticky_notes"),
-					migrations: [CREATE_NOTES],
-				},
-				{ schema: schemaName("plugin_board"), migrations: [] },
+		const migrated = {
+			schemas: ["plugin_board", "plugin_sticky_notes"],
+			applied: [
+				{ schema: "plugin_sticky_notes", migration: "0001_create_notes.sql" },
 			],
+		};
+		expect(seenAtActivation).toEqual([
+			{ plugin: "cards", ...migrated },
+			{ plugin: "sticky-notes", ...migrated },
+			{ plugin: "board", ...migrated },
 		]);
-		expect(journal).toEqual([
-			"migrate",
-			"activate cards",
-			"activate sticky-notes",
-			"activate board",
-		]);
-	});
-
-	test("migrates nothing when no enabled plugin declares the database capability", async () => {
-		let called = false;
-
-		await start({
-			packages: [packageOf(definePlugin({ manifest: { name: "cards" } }))],
-			enabledPlugins: ["cards"],
-			migrateSchemas: async (schemas) => {
-				called = true;
-				return migratingIntoFreshDatabase()(schemas);
-			},
-		});
-
-		expect(called).toBe(false);
 	});
 
 	test("tells a plugin with the database capability the name of its schema", async () => {
@@ -1708,8 +1714,7 @@ describe("plugin schemas", () => {
 				packageOf(recordingPlugin(journal, { name: "cards" })),
 			],
 			enabledPlugins: ["notes", "cards"],
-			migrateSchemas: () =>
-				Promise.reject(new Error("connect ECONNREFUSED 127.0.0.1:5432")),
+			migrateSchemas: migratingInto(PostgresGate.create()),
 		});
 
 		expect(plugins.failures).toEqual([
@@ -1717,10 +1722,10 @@ describe("plugin schemas", () => {
 				plugin: "notes",
 				reason: "migration_failed",
 				detail:
-					'plugin "notes" was not activated because its schema could not be migrated: Error: connect ECONNREFUSED 127.0.0.1:5432',
+					'plugin "notes" was not activated because its schema could not be migrated: PostgresError: Failed to connect',
 				error: expect.objectContaining({
-					name: "Error",
-					message: "connect ECONNREFUSED 127.0.0.1:5432",
+					name: "PostgresError",
+					message: "Failed to connect",
 				}),
 			},
 		]);
@@ -1761,46 +1766,47 @@ describe("plugin schemas", () => {
 		expect(journal).toEqual(["activate cards"]);
 	});
 
-	test("does not load a plugin whose schema has no migration outcome", async () => {
+	test("neither activates the plugins nor reports them as not loaded when the migration run is stopped", async () => {
+		const database = await freshDatabase();
+		const stop = new AbortController();
 		const journal: string[] = [];
 
-		const { plugins } = await start({
+		const { plugins, entries } = await start({
 			packages: [
-				packageOf(
-					recordingPlugin(journal, {
-						name: "notes",
-						capabilities: ["database"],
-					}),
-				),
-				packageOf(
-					recordingPlugin(journal, {
-						name: "cards",
-						capabilities: ["database"],
-					}),
-				),
+				{
+					...packageOf(
+						recordingPlugin(journal, {
+							name: "notes",
+							capabilities: ["database"],
+						}),
+					),
+					loadMigrations: async () => {
+						stop.abort();
+						return [CREATE_NOTES];
+					},
+				},
+				packageOf(recordingPlugin(journal, { name: "cards" })),
 			],
 			enabledPlugins: ["notes", "cards"],
-			migrateSchemas: async () => ({
-				stopped: false,
-				outcomes: [
-					{ schema: schemaName("plugin_cards"), migrated: true, applied: [] },
-				],
-			}),
+			migrateSchemas: migratingInto(database, stop.signal),
+			stopSignal: stop.signal,
 		});
 
-		expect(plugins.failures).toEqual([
-			{
-				plugin: "notes",
-				reason: "migration_failed",
-				detail:
-					'plugin "notes" was not activated because its schema could not be migrated: the migration run reported no outcome for schema "plugin_notes"',
-			},
-		]);
-		expect(journal).toEqual(["activate cards"]);
+		expect(plugins.failures).toEqual([]);
+		expect(plugins.active).toEqual([]);
+		expect(journal).toEqual([]);
+		expect(await pluginSchemasIn(database)).toEqual([]);
+		expect(entries).toContainEqual(
+			expect.objectContaining({
+				level: "info",
+				message: "plugin start stopped",
+				notActivated: ["notes", "cards"],
+			}),
+		);
 	});
 
 	test("does not load a plugin whose migrations cannot be read and migrates the others", async () => {
-		const migrated: string[] = [];
+		const database = await freshDatabase();
 
 		const { plugins } = await start({
 			packages: [
@@ -1815,17 +1821,17 @@ describe("plugin schemas", () => {
 							new Error('"create_notes.sql" does not start with a number'),
 						),
 				},
-				packageOf(
-					definePlugin({
-						manifest: { name: "cards", capabilities: ["database"] },
-					}),
+				withMigrations(
+					packageOf(
+						definePlugin({
+							manifest: { name: "cards", capabilities: ["database"] },
+						}),
+					),
+					[CREATE_NOTES],
 				),
 			],
 			enabledPlugins: ["notes", "cards"],
-			migrateSchemas: async (schemas) => {
-				migrated.push(...schemas.map(({ schema }) => schema));
-				return migratingIntoFreshDatabase()(schemas);
-			},
+			migrateSchemas: migratingInto(database),
 		});
 
 		expect(plugins.failures).toEqual([
@@ -1837,12 +1843,15 @@ describe("plugin schemas", () => {
 			}),
 		]);
 		expect(plugins.active).toEqual(["cards"]);
-		expect(migrated).toEqual(["plugin_cards"]);
+		expect(await pluginSchemasIn(database)).toEqual(["plugin_cards"]);
+		expect(await appliedMigrationsIn(database)).toEqual([
+			{ schema: "plugin_cards", migration: "0001_create_notes.sql" },
+		]);
 	});
 
 	test("migrates no schema once it is told to stop while loading the plugins", async () => {
+		const database = await freshDatabase();
 		const stop = new AbortController();
-		let called = false;
 
 		const { plugins } = await start({
 			packages: [
@@ -1861,15 +1870,12 @@ describe("plugin schemas", () => {
 				},
 			],
 			enabledPlugins: ["notes"],
-			migrateSchemas: async (schemas) => {
-				called = true;
-				return migratingIntoFreshDatabase()(schemas);
-			},
+			migrateSchemas: migratingInto(database),
 			stopSignal: stop.signal,
 		});
 
-		expect(called).toBe(false);
 		expect(plugins.active).toEqual([]);
+		expect(await pluginSchemasIn(database)).toEqual([]);
 	});
 
 	test("does not load a plugin that ships migrations without declaring the database capability", async () => {
@@ -1894,8 +1900,8 @@ describe("plugin schemas", () => {
 	});
 
 	test("does not load a plugin whose name is too long for the name of its schema, and migrates nothing for it", async () => {
+		const database = await freshDatabase();
 		const name = `notes-${"a".repeat(51)}`;
-		let called = false;
 
 		const { plugins } = await start({
 			packages: [
@@ -1904,10 +1910,7 @@ describe("plugin schemas", () => {
 				),
 			],
 			enabledPlugins: [name],
-			migrateSchemas: async (schemas) => {
-				called = true;
-				return migratingIntoFreshDatabase()(schemas);
-			},
+			migrateSchemas: migratingInto(database),
 		});
 
 		expect(plugins.failures).toEqual([
@@ -1917,7 +1920,7 @@ describe("plugin schemas", () => {
 				detail: `plugin package "@workbench/plugin-${name}" has an invalid manifest: manifest.name must have at most 56 characters`,
 			},
 		]);
-		expect(called).toBe(false);
+		expect(await pluginSchemasIn(database)).toEqual([]);
 	});
 });
 
@@ -1941,15 +1944,10 @@ describe("plugin schemas in Postgres", () => {
 			migrateSchemas: migratingInto(database),
 		});
 
-		const schemas = await database.sql<{ schema_name: string }[]>`
-			SELECT schema_name FROM information_schema.schemata
-			WHERE starts_with(schema_name, 'plugin_') ORDER BY schema_name`;
 		const tables = await database.sql<{ table_name: string }[]>`
 			SELECT table_name FROM information_schema.tables
 			WHERE table_schema = 'plugin_sticky_notes'`;
-		expect(schemas.map((row) => row.schema_name)).toEqual([
-			"plugin_sticky_notes",
-		]);
+		expect(await pluginSchemasIn(database)).toEqual(["plugin_sticky_notes"]);
 		expect(tables.map((row) => row.table_name)).toEqual(["notes"]);
 	});
 });
@@ -2015,97 +2013,398 @@ describe("operations of plugins", () => {
 		[
 			"an operation name declared twice",
 			[createCard, listCards, { ...listCards, right: "board.card.list" }],
-			"board.listCards",
-			"more than once",
+			'operation "board.listCards" is declared more than once',
 		],
 		[
 			"an operation without a right",
 			[{ ...createCard, right: undefined }],
-			"board.createCard",
-			"right",
+			'operation "board.createCard" must name exactly one right of plugin "board", such as "board.workspace.edit"',
 		],
 		[
 			"an operation with several rights",
 			[{ ...createCard, right: ["board.card.create", "board.card.edit"] }],
-			"board.createCard",
-			"right",
+			'operation "board.createCard" must name exactly one right of plugin "board", such as "board.workspace.edit"',
 		],
 		[
 			"an operation with a right of another plugin",
 			[{ ...createCard, right: "chat.message.send" }],
-			"board.createCard",
-			"right",
+			'operation "board.createCard" must name exactly one right of plugin "board", such as "board.workspace.edit"',
 		],
 		[
 			"an operation name that is not a verb and an object in camelCase",
 			[{ ...createCard, name: "create-card" }],
-			"operations[0].name",
-			"camelCase",
+			'operations[0].name must be a verb and an object in camelCase, such as "renameWorkspace"',
 		],
 		[
 			"an operation of unknown kind",
 			[{ ...createCard, kind: "command" }],
-			"board.createCard",
-			"kind",
+			'operation "board.createCard" must be of kind "query" or "mutation"',
 		],
 		[
 			"an operation with an unknown target",
 			[{ ...createCard, target: "instance" }],
-			"board.createCard",
-			"target",
+			'operation "board.createCard" must target "object" or "workspace"',
 		],
 		[
 			"an operation without an input schema",
 			[{ ...createCard, input: { title: "string" } }],
-			"board.createCard",
-			"input",
+			'operation "board.createCard" must declare its input as a schema',
 		],
 		[
 			"an operation without an output schema",
 			[{ ...createCard, output: undefined }],
-			"board.createCard",
-			"output",
+			'operation "board.createCard" must declare its output as a schema',
 		],
 		[
 			"an operation that cannot be executed",
 			[{ ...createCard, execute: "INSERT" }],
-			"board.createCard",
-			"execute",
+			'operation "board.createCard" must have an execute function',
 		],
-		["operations that are not a list", { createCard }, "operations", "list"],
+		[
+			"operations that are not a list",
+			{ createCard },
+			"operations must be a list of operations",
+		],
 		[
 			"an operation that is not an object",
 			["createCard"],
-			"operations[0]",
-			"an operation",
+			"operations[0] must be an operation",
 		],
-	])(
-		"rejects a plugin with %s",
-		async (_case, operations, subject, keyword) => {
-			const { plugins } = await start({
-				packages: [
-					{
-						packageName: "@workbench/plugin-board",
-						pluginName: "board",
-						version: "1.0.0",
-						loadDefinition: async () => ({
-							manifest: { name: "board" },
-							operations,
-						}),
-					},
-				],
-				enabledPlugins: ["board"],
-			});
-
-			expect(plugins.failures).toEqual([
+	])("rejects a plugin with %s", async (_case, operations, problem) => {
+		const { plugins } = await start({
+			packages: [
 				{
-					plugin: "board",
-					reason: "invalid_manifest",
-					detail: expect.stringContaining(subject),
+					packageName: "@workbench/plugin-board",
+					pluginName: "board",
+					version: "1.0.0",
+					loadDefinition: async () => ({
+						manifest: { name: "board" },
+						operations,
+					}),
 				},
-			]);
-			expect(plugins.failures[0]?.detail).toContain(keyword);
-			expect(plugins.operations.find("board.createCard")).toBeUndefined();
+			],
+			enabledPlugins: ["board"],
+		});
+
+		expect(plugins.failures).toEqual([
+			{
+				plugin: "board",
+				reason: "invalid_manifest",
+				detail: `plugin package "@workbench/plugin-board" has an invalid manifest: ${problem}`,
+			},
+		]);
+		expect(plugins.operations.find("board.createCard")).toBeUndefined();
+	});
+});
+
+const cardCreated = defineEvent({
+	plugin: "board",
+	name: "CardCreated",
+	version: 1,
+	payload: z.object({ cardId: z.string() }),
+});
+
+const countCard = defineEventSubscription({
+	event: cardCreated,
+	handle: async () => {},
+});
+
+const CARD_CREATED_CAPABILITY = "event:board.CardCreated";
+
+const statisticsCountingCards = packageOf(
+	definePlugin({
+		manifest: {
+			name: "statistics",
+			capabilities: [eventSubscriptionCapability(cardCreated)],
 		},
-	);
+		subscriptions: [countCard],
+	}),
+);
+
+describe("events of plugins", () => {
+	test("are registered under the name of the publishing plugin, with the subscriptions of the plugins that declare the capability", async () => {
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					definePlugin({ manifest: { name: "board" }, events: [cardCreated] }),
+				),
+				packageOf(
+					definePlugin({
+						manifest: {
+							name: "statistics",
+							capabilities: [eventSubscriptionCapability(cardCreated)],
+						},
+						subscriptions: [countCard],
+					}),
+				),
+			],
+			enabledPlugins: ["board", "statistics"],
+		});
+
+		expect(plugins.failures).toEqual([]);
+		expect(plugins.events.findEvent("board.CardCreated")).toEqual(
+			expect.objectContaining({ name: "board.CardCreated", version: 1 }),
+		);
+		expect(plugins.events.findEvent("CardCreated")).toBeUndefined();
+		expect(
+			plugins.events
+				.subscriptions()
+				.map(({ subscriber, event }) => ({ subscriber, event })),
+		).toEqual([{ subscriber: "statistics", event: "board.CardCreated" }]);
+	});
+
+	test("warns the operator of a subscription to an event that no active plugin declares, and loads the subscribing plugin all the same", async () => {
+		const { plugins, entries } = await start({
+			packages: [
+				packageOf(
+					definePlugin({ manifest: { name: "board" }, events: [cardCreated] }),
+				),
+				statisticsCountingCards,
+			],
+			enabledPlugins: ["statistics"],
+		});
+
+		expect(plugins.active).toEqual(["statistics"]);
+		expect(plugins.failures).toEqual([]);
+		expect(entries.filter((entry) => entry.level === "warn")).toEqual([
+			expect.objectContaining({
+				message: "subscribed event not declared",
+				subscriber: "statistics",
+				event: "board.CardCreated",
+			}),
+		]);
+	});
+
+	test("does not warn of a subscription to an event that an active plugin declares", async () => {
+		const { entries } = await start({
+			packages: [
+				packageOf(
+					definePlugin({ manifest: { name: "board" }, events: [cardCreated] }),
+				),
+				statisticsCountingCards,
+			],
+			enabledPlugins: ["board", "statistics"],
+		});
+
+		expect(entries.filter((entry) => entry.level === "warn")).toEqual([]);
+	});
+
+	test("does not load a plugin that subscribes to an event without declaring the capability for it", async () => {
+		const { plugins, entries } = await start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: { name: "statistics" },
+						subscriptions: [countCard],
+					}),
+				),
+			],
+			enabledPlugins: ["statistics"],
+		});
+
+		const failure: LoadFailure = {
+			plugin: "statistics",
+			reason: "invalid_manifest",
+			detail:
+				'plugin package "@workbench/plugin-statistics" has an invalid manifest: the subscription to event "board.CardCreated" requires the capability "event:board.CardCreated" in manifest.capabilities',
+		};
+		expect(plugins.active).toEqual([]);
+		expect(plugins.failures).toEqual([failure]);
+		expect(plugins.events.subscriptions()).toEqual([]);
+		expect(entries).toContainEqual(
+			expect.objectContaining({ message: "plugin not loaded", ...failure }),
+		);
+	});
+
+	test("does not let the capability for one event cover the subscription to another", async () => {
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: {
+							name: "statistics",
+							capabilities: ["event:board.CardArchived"],
+						},
+						subscriptions: [countCard],
+					}),
+				),
+			],
+			enabledPlugins: ["statistics"],
+		});
+
+		expect(plugins.failures).toEqual([
+			expect.objectContaining({
+				plugin: "statistics",
+				reason: "invalid_manifest",
+				detail: expect.stringContaining(
+					'requires the capability "event:board.CardCreated"',
+				),
+			}),
+		]);
+	});
+
+	test("hands a subscribing plugin the event its capability names", async () => {
+		const contexts: PluginContext[] = [];
+
+		await start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: {
+							name: "statistics",
+							capabilities: [CARD_CREATED_CAPABILITY],
+						},
+						subscriptions: [countCard],
+						activate: (ctx) => {
+							contexts.push(ctx);
+						},
+					}),
+				),
+			],
+			enabledPlugins: ["statistics"],
+		});
+
+		expect(contexts[0]?.capability(CARD_CREATED_CAPABILITY)).toEqual({
+			event: "board.CardCreated",
+		});
+	});
+
+	test("registers neither events nor subscriptions of a plugin that is not loaded", async () => {
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: {
+							name: "board",
+							requires: { missing: "^1.0.0" },
+							capabilities: [CARD_CREATED_CAPABILITY],
+						},
+						events: [cardCreated],
+						subscriptions: [countCard],
+					}),
+				),
+			],
+			enabledPlugins: ["board"],
+		});
+
+		expect(plugins.events.findEvent("board.CardCreated")).toBeUndefined();
+		expect(plugins.events.subscriptions()).toEqual([]);
+	});
+
+	test.each([
+		[
+			"an event under the name of another plugin",
+			{ events: [{ ...cardCreated, plugin: "chat" }] },
+			'events[0] must name "board" as its plugin, the plugin that publishes it',
+		],
+		[
+			"an event name that is not in PascalCase",
+			{ events: [{ ...cardCreated, name: "card-created" }] },
+			'events[0].name must be in PascalCase, such as "WorkspaceRenamed"',
+		],
+		[
+			"an event without a version",
+			{ events: [{ ...cardCreated, version: undefined }] },
+			'event "board.CardCreated" must have a version that is a positive integer',
+		],
+		[
+			"an event with a version below 1",
+			{ events: [{ ...cardCreated, version: 0 }] },
+			'event "board.CardCreated" must have a version that is a positive integer',
+		],
+		[
+			"an event without a payload schema",
+			{ events: [{ ...cardCreated, payload: { cardId: "string" } }] },
+			'event "board.CardCreated" must declare its payload as a schema',
+		],
+		[
+			"an event declared twice",
+			{ events: [cardCreated, { ...cardCreated, version: 2 }] },
+			'event "board.CardCreated" is declared more than once',
+		],
+		[
+			"events that are not a list",
+			{ events: { cardCreated } },
+			"events must be a list of event definitions",
+		],
+		[
+			"an event that is not an object",
+			{ events: ["CardCreated"] },
+			"events[0] must be an event definition",
+		],
+		[
+			"a subscription to something that is not an event definition",
+			{ subscriptions: [{ event: "board.CardCreated", handle: () => {} }] },
+			"subscriptions[0].event must be an event definition from the contract of the publishing plugin",
+		],
+		[
+			"a subscription to an event whose plugin is not a plugin name",
+			{
+				subscriptions: [
+					{ ...countCard, event: { ...cardCreated, plugin: "The Board" } },
+				],
+			},
+			"subscriptions[0].event.plugin must be the name of the publishing plugin",
+		],
+		[
+			"a subscription to an event whose name is not in PascalCase",
+			{
+				subscriptions: [
+					{ ...countCard, event: { ...cardCreated, name: "card-created" } },
+				],
+			},
+			'subscriptions[0].event.name must be in PascalCase, such as "WorkspaceRenamed"',
+		],
+		[
+			"a subscription without a handler",
+			{ subscriptions: [{ event: cardCreated }] },
+			'the subscription to event "board.CardCreated" must have a handle function',
+		],
+		[
+			"two subscriptions to the same event",
+			{ subscriptions: [countCard, countCard] },
+			'event "board.CardCreated" is subscribed to more than once',
+		],
+		[
+			"subscriptions that are not a list",
+			{ subscriptions: { countCard } },
+			"subscriptions must be a list of event subscriptions",
+		],
+		[
+			"a subscription that is not an object",
+			{ subscriptions: ["board.CardCreated"] },
+			"subscriptions[0] must be an event subscription",
+		],
+		[
+			"an event capability that names no event",
+			{ manifest: { name: "board", capabilities: ["event:board"] } },
+			'manifest.capabilities names "event:board", which this instance does not offer',
+		],
+	])("rejects a plugin with %s", async (_case, declared, problem) => {
+		const { plugins } = await start({
+			packages: [
+				{
+					packageName: "@workbench/plugin-board",
+					pluginName: "board",
+					version: "1.0.0",
+					loadDefinition: async () => ({
+						manifest: {
+							name: "board",
+							capabilities: [CARD_CREATED_CAPABILITY],
+						},
+						...declared,
+					}),
+				},
+			],
+			enabledPlugins: ["board"],
+		});
+
+		expect(plugins.failures).toEqual([
+			{
+				plugin: "board",
+				reason: "invalid_manifest",
+				detail: `plugin package "@workbench/plugin-board" has an invalid manifest: ${problem}`,
+			},
+		]);
+	});
 });

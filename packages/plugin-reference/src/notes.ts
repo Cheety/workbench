@@ -1,6 +1,6 @@
 import { defineOperation } from "@workbench/sdk";
 import { z } from "zod";
-import type { Note } from "./contract/index.ts";
+import { type Note, noteCreated } from "./contract/index.ts";
 
 const MAX_TITLE_LENGTH = 200;
 
@@ -38,7 +38,9 @@ export const createNote = defineOperation({
 			INSERT INTO notes (id, workspace_id, title, created_at)
 			VALUES (${ctx.newId()}, ${ctx.workspace}, ${title}, ${ctx.now()})
 			RETURNING id, title, created_at`;
-		return noteOf(noteRow.parse(row));
+		const created = noteOf(noteRow.parse(row));
+		await ctx.publish(noteCreated, { noteId: created.id });
+		return created;
 	},
 });
 

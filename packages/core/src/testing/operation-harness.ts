@@ -1,5 +1,6 @@
 import type { Actor } from "@workbench/sdk";
 import { Secret } from "../config.ts";
+import { createEventDelivery } from "../event-outbox.ts";
 import { setSystemTimer } from "../hook-timeout.ts";
 import {
 	type PluginPackage,
@@ -50,6 +51,7 @@ export type OperationHarness = {
 	readonly logEntries: readonly LogEntry[];
 	createWorkspace(name: string): Promise<string>;
 	call(call: HarnessCall): Promise<OperationResult>;
+	deliverEvents(): Promise<void>;
 	stop(): Promise<void>;
 };
 
@@ -67,6 +69,8 @@ const FIXED_RANDOM = 0.5;
 const OPERATION_ID_GROUP = "8000";
 
 const AUDIT_ENTRY_ID_GROUP = "a000";
+
+const EVENT_ID_GROUP = "e000";
 
 const NOT_STOPPED = new AbortController().signal;
 
@@ -139,13 +143,26 @@ function harnessOf(
 ): OperationHarness {
 	const now = options.now ?? (() => FIXED_NOW);
 	const newId = options.newId ?? sequentialIds(OPERATION_ID_GROUP);
+	const random = options.random ?? (() => FIXED_RANDOM);
 	const pipeline: OperationPipeline = createOperationPipeline({
 		sql: database.sql,
 		registry: plugins.operations,
+		events: plugins.events,
 		now,
 		newId,
 		newAuditEntryId: sequentialIds(AUDIT_ENTRY_ID_GROUP),
-		random: options.random ?? (() => FIXED_RANDOM),
+		newEventId: sequentialIds(EVENT_ID_GROUP),
+		eventsCommitted: () => {},
+		random,
+		logger,
+	});
+	const delivery = createEventDelivery({
+		sql: database.sql,
+		events: plugins.events,
+		now,
+		newId,
+		random,
+		handlerTimeout: { ms: HOOK_TIMEOUT_MS, setTimer: setSystemTimer },
 		logger,
 	});
 	const newCorrelationId =
@@ -163,6 +180,7 @@ function harnessOf(
 				apiTokenId: null,
 				correlationId: newCorrelationId(),
 			}),
+		deliverEvents: () => delivery.deliverDue(NOT_STOPPED),
 		stop: async () => {
 			try {
 				await plugins.deactivate();

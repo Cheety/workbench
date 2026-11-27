@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { authenticateToken } from "./api-tokens.ts";
 import { Secret } from "./config.ts";
-import { createLogger } from "./logger.ts";
+import { registerEvents } from "./event-registry.ts";
 import { createOperationPipeline } from "./operation-pipeline.ts";
 import { registerOperations } from "./operation-registry.ts";
 import { createPostgresCheck } from "./postgres.ts";
@@ -15,12 +15,11 @@ import {
 	type FreshDatabase,
 	PostgresGate,
 } from "./testing/postgres.ts";
+import { recordingLogger } from "./testing/recording-logger.ts";
 
 const PARALLEL_PROBES = 300;
 
 const NOW = new Date("2026-11-26T08:00:00.000Z");
-
-type LogEntry = Record<string, unknown>;
 
 let running: RunningServer | undefined;
 let openGate: PostgresGate | undefined;
@@ -40,13 +39,8 @@ async function startTestServer(startupStatus: StartupStatus = "started") {
 	openGate = gate;
 	database = await createFreshDatabase();
 	const { sql } = database;
-	const lines: string[] = [];
+	const { logger, entries } = recordingLogger();
 	let nextId = 1;
-	const logger = createLogger({
-		level: "debug",
-		now: () => NOW,
-		write: (line) => lines.push(line),
-	});
 	const server = startServer({
 		port: 0,
 		logger,
@@ -61,9 +55,12 @@ async function startTestServer(startupStatus: StartupStatus = "started") {
 			pipeline: createOperationPipeline({
 				sql,
 				registry: registerOperations([]),
+				events: registerEvents({ active: [], notActive: [] }),
 				now: () => NOW,
 				newId: () => "00000000-0000-4000-8000-000000000001",
 				newAuditEntryId: () => "00000000-0000-4000-a000-000000000001",
+				newEventId: () => "00000000-0000-4000-e000-000000000001",
+				eventsCommitted: () => {},
 				random: () => 0.5,
 				logger,
 			}),
@@ -79,7 +76,7 @@ async function startTestServer(startupStatus: StartupStatus = "started") {
 				method: "POST",
 				body: "{}",
 			}),
-		logEntries: (): LogEntry[] => lines.map((line) => JSON.parse(line)),
+		entries,
 	};
 }
 
@@ -142,14 +139,14 @@ describe("readiness", () => {
 	});
 
 	test("reports not ready while the instance is still starting, even with Postgres reachable", async () => {
-		const { get, gate, logEntries } = await startTestServer("starting");
+		const { get, gate, entries } = await startTestServer("starting");
 		gate.forward();
 
 		const response = await get("/health/ready");
 
 		expect(response.status).toBe(503);
 		expect(await response.json()).toEqual({ status: "not_ready" });
-		expect(logEntries()).toContainEqual(
+		expect(entries).toContainEqual(
 			expect.objectContaining({
 				level: "debug",
 				message: "not ready: instance starting",
@@ -158,14 +155,14 @@ describe("readiness", () => {
 	});
 
 	test("reports not ready and says so when the instance failed to start", async () => {
-		const { get, gate, logEntries } = await startTestServer("failed");
+		const { get, gate, entries } = await startTestServer("failed");
 		gate.forward();
 
 		const response = await get("/health/ready");
 
 		expect(response.status).toBe(503);
 		expect(await response.json()).toEqual({ status: "not_ready" });
-		expect(logEntries()).toContainEqual(
+		expect(entries).toContainEqual(
 			expect.objectContaining({
 				level: "warn",
 				message: "not ready: instance failed to start",
@@ -174,31 +171,29 @@ describe("readiness", () => {
 	});
 
 	test("logs why it is not ready without leaking the database credentials", async () => {
-		const { get, gate, logEntries } = await startTestServer();
+		const { get, gate, entries } = await startTestServer();
 
 		await get("/health/ready");
 
-		expect(logEntries()).toContainEqual(
+		expect(entries).toContainEqual(
 			expect.objectContaining({
 				level: "warn",
 				message: "not ready: database unreachable",
 				reason: "ERR_POSTGRES_CONNECTION_REFUSED",
 			}),
 		);
-		expect(JSON.stringify(logEntries())).not.toContain(
-			new URL(gate.url).password,
-		);
+		expect(JSON.stringify(entries)).not.toContain(new URL(gate.url).password);
 	});
 });
 
 describe("correlation ID", () => {
 	test("generates one per request, returns it and logs it", async () => {
-		const { get, logEntries } = await startTestServer();
+		const { get, entries } = await startTestServer();
 
 		const response = await get("/health/live");
 
 		expect(response.headers.get("X-Correlation-ID")).toBe("generated-1");
-		expect(logEntries()).toEqual([
+		expect(entries).toEqual([
 			expect.objectContaining({
 				message: "request completed",
 				correlationId: "generated-1",
@@ -207,34 +202,34 @@ describe("correlation ID", () => {
 	});
 
 	test("adopts a valid incoming one", async () => {
-		const { get, logEntries } = await startTestServer();
+		const { get, entries } = await startTestServer();
 
 		const response = await get("/health/live", {
 			"X-Correlation-ID": "client-42.a_b",
 		});
 
 		expect(response.headers.get("X-Correlation-ID")).toBe("client-42.a_b");
-		expect(logEntries()[0]).toMatchObject({ correlationId: "client-42.a_b" });
+		expect(entries[0]).toMatchObject({ correlationId: "client-42.a_b" });
 	});
 
 	test.each([
 		["with characters outside the allowed set", 'inject"ed {id}'],
 		["that is too long", "a".repeat(129)],
 	])("replaces an incoming one %s", async (_case, incoming) => {
-		const { get, logEntries } = await startTestServer();
+		const { get, entries } = await startTestServer();
 
 		const response = await get("/health/live", {
 			"X-Correlation-ID": incoming,
 		});
 
 		expect(response.headers.get("X-Correlation-ID")).toBe("generated-1");
-		expect(logEntries()[0]).toMatchObject({ correlationId: "generated-1" });
+		expect(entries[0]).toMatchObject({ correlationId: "generated-1" });
 	});
 });
 
 describe("unknown routes", () => {
 	test("answer with a problem document and a logged correlation ID", async () => {
-		const { get, logEntries } = await startTestServer();
+		const { get, entries } = await startTestServer();
 
 		const response = await get("/nowhere?token=abc");
 
@@ -251,7 +246,7 @@ describe("unknown routes", () => {
 			correlationId: "generated-1",
 			issues: [],
 		});
-		expect(logEntries()).toEqual([
+		expect(entries).toEqual([
 			expect.objectContaining({
 				level: "info",
 				correlationId: "generated-1",

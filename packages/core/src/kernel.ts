@@ -1,9 +1,12 @@
 import {
 	DATABASE_CAPABILITY,
 	type DatabaseCapability,
+	type EventSubscriptionCapability,
 	type PluginContext,
+	subscribedEventOf,
 } from "@workbench/sdk";
 import { CORE_OPERATIONS } from "./core-operations.ts";
+import { type EventRegistry, registerEvents } from "./event-registry.ts";
 import {
 	describeThrown,
 	summarize,
@@ -63,6 +66,7 @@ export type RunningPlugins = {
 	readonly active: readonly string[];
 	readonly failures: readonly LoadFailure[];
 	readonly operations: OperationRegistry;
+	readonly events: EventRegistry;
 	deactivate(): Promise<DeactivationOutcome>;
 };
 
@@ -82,7 +86,13 @@ export async function startPlugins(
 	const failures = new LoadFailures(logger);
 
 	const packages = await discoverPackages(options);
-	const active = await activateEnabledPlugins(packages, options, failures);
+	const { active, notActive } = await activateEnabledPlugins(
+		packages,
+		options,
+		failures,
+	);
+	const events = registerEvents({ active, notActive });
+	warnOfUndeclaredEvents(active, events, logger);
 	const activeNames = active.map((plugin) => plugin.name);
 	logger.info("plugins started", {
 		active: activeNames,
@@ -97,6 +107,7 @@ export async function startPlugins(
 			...CORE_OPERATIONS,
 			...active.flatMap((plugin) => plugin.operations),
 		]),
+		events,
 		deactivate: () => {
 			deactivation ??= deactivate(active, options);
 			return deactivation;
@@ -104,20 +115,36 @@ export async function startPlugins(
 	};
 }
 
+function warnOfUndeclaredEvents(
+	active: readonly ValidPlugin[],
+	events: EventRegistry,
+	logger: Logger,
+): void {
+	for (const { subscriptions } of active)
+		for (const { subscriber, event } of subscriptions)
+			if (events.findEvent(event) === undefined)
+				logger.warn("subscribed event not declared", { subscriber, event });
+}
+
+type EnabledPlugins = {
+	readonly active: readonly ValidPlugin[];
+	readonly notActive: readonly ValidPlugin[];
+};
+
 async function activateEnabledPlugins(
 	packages: readonly PluginPackage[],
 	options: KernelOptions,
 	failures: LoadFailures,
-): Promise<readonly ValidPlugin[]> {
+): Promise<EnabledPlugins> {
 	const { logger, stopSignal } = options;
 	const active: ValidPlugin[] = [];
 	if (stopSignal?.aborted) {
 		logger.info("plugin start stopped", {
 			notActivated: options.enabledPlugins,
 		});
-		return active;
+		return { active, notActive: [] };
 	}
-	const activationOrder = await resolvePlugins(
+	const { valid, activationOrder } = await resolvePlugins(
 		catalogPlugins(
 			packages,
 			[DATABASE_CAPABILITY, ...Object.keys(options.capabilityProviders)],
@@ -152,7 +179,10 @@ async function activateEnabledPlugins(
 			version: plugin.version,
 		});
 	}
-	return active;
+	return {
+		active,
+		notActive: valid.filter((plugin) => !active.includes(plugin)),
+	};
 }
 
 async function migratePluginSchemas(
@@ -191,22 +221,15 @@ function rejectUnmigrated(
 	outcomes: readonly SchemaMigrationOutcome[],
 	failures: LoadFailures,
 ): void {
-	const outcomeOf = new Map(
-		outcomes.map((outcome) => [outcome.schema, outcome]),
+	const failed = new Map(
+		outcomes.flatMap((outcome) =>
+			outcome.migrated ? [] : [[outcome.schema, outcome] as const],
+		),
 	);
 	for (const [schema, owner] of owners) {
-		const outcome = outcomeOf.get(schema);
-		if (outcome === undefined) {
-			failures.reject(
-				migrationFailed(
-					owner,
-					`the migration run reported no outcome for schema ${quote(schema)}`,
-					undefined,
-				),
-			);
-		} else if (!outcome.migrated) {
-			failures.reject(migrationFailed(owner, outcome.detail, outcome.error));
-		}
+		const failure = failed.get(schema);
+		if (failure !== undefined)
+			failures.reject(migrationFailed(owner, failure.detail, failure.error));
 	}
 }
 
@@ -325,6 +348,11 @@ function provide(
 	if (capability === DATABASE_CAPABILITY) {
 		const database: DatabaseCapability = { schema: pluginSchemaName(plugin) };
 		return database;
+	}
+	const event = subscribedEventOf(capability);
+	if (event !== undefined) {
+		const subscription: EventSubscriptionCapability = { event };
+		return subscription;
 	}
 	return providers[capability]?.();
 }

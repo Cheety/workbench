@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { LOG_LEVELS, type LogLevel } from "./logger.ts";
-import { isPluginName } from "./plugin-manifest.ts";
+import { isPluginName } from "./plugin-name.ts";
 
 const REDACTED = "[redacted]";
 

@@ -1,7 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { Secret } from "./config.ts";
 import { fullJitterBackoff, untilDatabaseReachable } from "./database-wait.ts";
 import type { SetTimer } from "./hook-timeout.ts";
-import type { DatabaseStatus } from "./postgres.ts";
+import { createPostgresCheck, type DatabaseStatus } from "./postgres.ts";
+import { PostgresGate } from "./testing/postgres.ts";
 import { recordingLogger } from "./testing/recording-logger.ts";
 
 function answering(...statuses: DatabaseStatus[]) {
@@ -19,7 +21,7 @@ function answering(...statuses: DatabaseStatus[]) {
 
 const UNREACHABLE: DatabaseStatus = {
 	reachable: false,
-	reason: "ECONNREFUSED",
+	reason: "ERR_POSTGRES_CONNECTION_REFUSED",
 };
 const REACHABLE: DatabaseStatus = { reachable: true };
 
@@ -34,6 +36,13 @@ function immediateTimers() {
 }
 
 describe("waiting for the database", () => {
+	let gate: PostgresGate | undefined;
+
+	afterEach(() => {
+		gate?.close();
+		gate = undefined;
+	});
+
 	test("goes on at once when the database is reachable", async () => {
 		const database = answering(REACHABLE);
 		const timers = immediateTimers();
@@ -51,32 +60,42 @@ describe("waiting for the database", () => {
 	});
 
 	test("checks again after each retry delay until the database is reachable and says why it waits", async () => {
-		const database = answering(UNREACHABLE, UNREACHABLE, REACHABLE);
-		const timers = immediateTimers();
+		const refusing = PostgresGate.create();
+		gate = refusing;
+		const delaysMs: number[] = [];
+		const setTimer: SetTimer = (expire, delayMs) => {
+			delaysMs.push(delayMs);
+			if (delaysMs.length === 2) refusing.forward();
+			queueMicrotask(expire);
+			return () => {};
+		};
 		const { logger, entries } = recordingLogger();
 
 		const outcome = await untilDatabaseReachable({
-			check: database.check,
+			check: createPostgresCheck({
+				url: new Secret(refusing.url),
+				timeoutMs: 5000,
+			}),
 			retryDelayMs: (attempt) => 100 * (attempt + 1),
-			setTimer: timers.setTimer,
+			setTimer,
 			stopSignal: new AbortController().signal,
 			logger,
 		});
 
 		expect(outcome).toBe("reachable");
-		expect(database.checks()).toBe(3);
-		expect(timers.delaysMs).toEqual([100, 200]);
+		expect(delaysMs).toEqual([100, 200]);
+		expect(refusing.acceptedConnections).toBe(1);
 		expect(entries).toEqual([
 			expect.objectContaining({
 				level: "warn",
 				message: "database unreachable, retrying",
-				reason: "ECONNREFUSED",
+				reason: "ERR_POSTGRES_CONNECTION_REFUSED",
 				retryInMs: 100,
 			}),
 			expect.objectContaining({
 				level: "warn",
 				message: "database unreachable, retrying",
-				reason: "ECONNREFUSED",
+				reason: "ERR_POSTGRES_CONNECTION_REFUSED",
 				retryInMs: 200,
 			}),
 		]);
