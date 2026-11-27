@@ -60,6 +60,59 @@ describe("the stored form of a payload", () => {
 		});
 	});
 
+	test("is rejected when the schema changes its own output on reading it again", async () => {
+		const validate = validating(
+			z.object({ amount: z.number().transform((amount) => amount * 2) }),
+		);
+
+		const stored = await storedPayloadOf({ amount: 1 }, validate);
+
+		expect(stored).toEqual({
+			valid: false,
+			issues: [
+				{
+					path: [],
+					message:
+						"the schema changes the stored form of the payload when it reads it again",
+				},
+			],
+		});
+	});
+
+	test.each([
+		[
+			"fills in a default",
+			z.object({ color: z.string().default("red") }),
+			{},
+			'{"color":"red"}',
+		],
+		[
+			"drops unknown keys",
+			z.object({ cardId: z.string() }),
+			{ cardId: "card-1", color: "red" },
+			'{"cardId":"card-1"}',
+		],
+		[
+			"trims text",
+			z.object({ title: z.string().trim() }),
+			{ title: " Card " },
+			'{"title":"Card"}',
+		],
+		[
+			"keeps the order of the keys it was given",
+			z.record(z.string(), z.number()),
+			{ b: 1, a: 2 },
+			'{"b":1,"a":2}',
+		],
+	])(
+		"is accepted when the schema %s, which reading again does not change",
+		async (_case, schema, payload, json) => {
+			const stored = await storedPayloadOf(payload, validating(schema));
+
+			expect(stored).toEqual({ valid: true, json });
+		},
+	);
+
 	test.each([
 		["nothing", undefined],
 		["a function", () => {}],

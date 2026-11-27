@@ -970,6 +970,23 @@ describe("the payload of an event", () => {
 		});
 	});
 
+	test("is rejected when it is published if its schema would change it again before the handler", async () => {
+		const database = await migratedDatabase();
+		const cardMoved = boardEvent(
+			z.object({ lane: z.number().transform((lane) => lane * 2) }),
+		);
+		const events = registryOfBoardPublishing(cardMoved);
+
+		const publishing = publish({ sql: database.sql, events }, cardMoved, {
+			lane: 1,
+		});
+
+		expect(await publishing.catch((error: unknown) => error)).toMatchObject({
+			name: "InvalidEventPayloadError",
+			issues: [{ path: [], message: expect.stringContaining("changes") }],
+		});
+	});
+
 	test("reaches the handler as its schema reads what the outbox stored of it", async () => {
 		const database = await migratedDatabase();
 

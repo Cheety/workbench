@@ -542,6 +542,23 @@ describe("the payload of a job", () => {
 		});
 	});
 
+	test("is rejected when it is enqueued if its schema would change it again before the run", async () => {
+		const database = await migratedDatabase();
+		const remindTwice = defineJob({
+			name: "sendReminder",
+			payload: z.object({ times: z.number().transform((times) => times * 2) }),
+			maxAttempts: 3,
+			run: async () => {},
+		});
+
+		const enqueueing = enqueue(database.sql, remindTwice, { times: 1 });
+
+		expect(await enqueueing.catch((error: unknown) => error)).toMatchObject({
+			name: "InvalidJobPayloadError",
+			issues: [{ path: [], message: expect.stringContaining("changes") }],
+		});
+	});
+
 	test("reaches the run as its schema reads what the queue stored of it", async () => {
 		const database = await migratedDatabase();
 

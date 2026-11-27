@@ -271,12 +271,12 @@ Eine Mutation publiziert ein Event in `execute`:
 await ctx.publish(labelRenamed, { labelId: input.labelId });
 ```
 
-Der Core prüft die Payload gegen das Schema der Definition und schreibt das Event in die Outbox `core.events`, in der Transaktion der Mutation (ADR-0015): ID, Name, Version, Zeitpunkt in UTC, Workspace und Payload, dazu in `core.event_deliveries` je eine Zustellung für jedes in `PLUGINS` aktivierte Plugin, dessen gültige Definition das Event abonniert, auch wenn es gerade einen Ladefehler hat. Die Payload ist, was das Schema aus dem übergebenen Wert macht; zod-Objekte lassen unbekannte Felder weg. Gespeichert wird ihre JSON-Form, und weil der Handler später genau diese zu lesen bekommt, prüft der Core sie beim Publizieren noch einmal gegen das Schema. Wird die Mutation zurückgerollt, gibt es das Event nicht, und kein Handler erfährt je davon.
+Der Core prüft die Payload gegen das Schema der Definition und schreibt das Event in die Outbox `core.events`, in der Transaktion der Mutation (ADR-0015): ID, Name, Version, Zeitpunkt in UTC, Workspace und Payload, dazu in `core.event_deliveries` je eine Zustellung für jedes in `PLUGINS` aktivierte Plugin, dessen gültige Definition das Event abonniert, auch wenn es gerade einen Ladefehler hat. Die Payload ist, was das Schema aus dem übergebenen Wert macht; zod-Objekte lassen unbekannte Felder weg. Gespeichert wird ihre JSON-Form, und weil der Handler später genau diese zu lesen bekommt, prüft der Core sie beim Publizieren noch einmal gegen das Schema. Was das Schema aus der gespeicherten Form macht, muss wieder dieselbe JSON-Form haben: `z.coerce.date()`, ein Standardwert oder weggelassene Felder erfüllen das, eine Umformung wie `.transform((n) => n * 2)`, die bei jedem Lesen weiterrechnet, nicht. Wird die Mutation zurückgerollt, gibt es das Event nicht, und kein Handler erfährt je davon.
 
 `publish` wirft, und die Mutation scheitert mit `internal_error` (`execute_threw` im Log, mit dem Fehler in `error`), wenn
 
 - das Plugin das Event nicht selbst in `events` deklariert, etwa das Event eines anderen Plugins (`UndeclaredEventError`),
-- die Payload nicht zum Schema passt (`InvalidEventPayloadError`, mit den Befunden in `issues`); ebenso, wenn das Schema ihre gespeicherte JSON-Form nicht wieder annimmt, etwa `z.date()`, dessen Datum in JSON ein String ist (`z.coerce.date()` nimmt ihn an), oder hat sie keine JSON-Form, die Postgres speichert (`undefined`, eine Funktion, ein BigInt, ein Wert, der sich selbst enthält, ein String mit NUL-Zeichen oder halbem Surrogatpaar),
+- die Payload nicht zum Schema passt (`InvalidEventPayloadError`, mit den Befunden in `issues`); ebenso, wenn das Schema ihre gespeicherte JSON-Form nicht wieder annimmt, etwa `z.date()`, dessen Datum in JSON ein String ist (`z.coerce.date()` nimmt ihn an), wenn es sie beim erneuten Lesen verändert, oder hat sie keine JSON-Form, die Postgres speichert (`undefined`, eine Funktion, ein BigInt, ein Wert, der sich selbst enthält, ein String mit NUL-Zeichen oder halbem Surrogatpaar),
 - eine Query publiziert (`EventPublishedByQueryError`).
 
 #### Zustellen
@@ -336,12 +336,12 @@ Eine Mutation reiht einen Job in `execute` ein:
 await ctx.enqueue(sendReminder, { cardId });
 ```
 
-Der Core prüft die Payload gegen das Schema der Definition und schreibt den Job in die Job-Queue `core.jobs`, in der Transaktion der Mutation: ID, Name, Payload, Workspace und Zeitpunkt in UTC. Die Payload ist, was das Schema aus dem übergebenen Wert macht. Gespeichert wird ihre JSON-Form, und weil `run` später genau diese zu lesen bekommt, prüft der Core sie beim Einreihen noch einmal gegen das Schema. Wird die Mutation zurückgerollt, gibt es den Job nicht, und er läuft nie.
+Der Core prüft die Payload gegen das Schema der Definition und schreibt den Job in die Job-Queue `core.jobs`, in der Transaktion der Mutation: ID, Name, Payload, Workspace und Zeitpunkt in UTC. Die Payload ist, was das Schema aus dem übergebenen Wert macht. Gespeichert wird ihre JSON-Form, und weil `run` später genau diese zu lesen bekommt, prüft der Core sie beim Einreihen noch einmal gegen das Schema. Was das Schema aus der gespeicherten Form macht, muss wieder dieselbe JSON-Form haben: `z.coerce.date()`, ein Standardwert oder weggelassene Felder erfüllen das, eine Umformung wie `.transform((n) => n * 2)`, die bei jedem Lesen weiterrechnet, nicht. Wird die Mutation zurückgerollt, gibt es den Job nicht, und er läuft nie.
 
 `enqueue` wirft, und die Operation scheitert mit `internal_error` (Log-Eintrag `operation failed`, `reason` `execute_threw`), wenn
 
 - das Plugin den Job nicht selbst in `jobs` deklariert (`UndeclaredJobError`),
-- die Payload nicht zum Schema passt (`InvalidJobPayloadError`, mit den Befunden in `issues`); ebenso, wenn das Schema ihre gespeicherte JSON-Form nicht wieder annimmt, etwa `z.date()`, dessen Datum in JSON ein String ist (`z.coerce.date()` nimmt ihn an), oder hat sie keine JSON-Form, die Postgres speichert (`undefined`, eine Funktion, ein BigInt, ein Wert, der sich selbst enthält, ein String mit NUL-Zeichen oder halbem Surrogatpaar),
+- die Payload nicht zum Schema passt (`InvalidJobPayloadError`, mit den Befunden in `issues`); ebenso, wenn das Schema ihre gespeicherte JSON-Form nicht wieder annimmt, etwa `z.date()`, dessen Datum in JSON ein String ist (`z.coerce.date()` nimmt ihn an), wenn es sie beim erneuten Lesen verändert, oder hat sie keine JSON-Form, die Postgres speichert (`undefined`, eine Funktion, ein BigInt, ein Wert, der sich selbst enthält, ein String mit NUL-Zeichen oder halbem Surrogatpaar),
 - eine Query einreiht (`JobEnqueuedByQueryError`).
 
 #### Ausführen

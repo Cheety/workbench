@@ -7,10 +7,10 @@ export type StoredPayload =
 
 type Path = ValidationIssue["path"];
 
-const NO_JSON_FORM: StoredPayload = {
-	valid: false,
-	issues: [{ path: [], message: "the payload has no JSON form" }],
-};
+const NO_JSON_FORM = "the payload has no JSON form";
+
+const CHANGED_ON_READING =
+	"the schema changes the stored form of the payload when it reads it again";
 
 const UNSTORABLE_TEXT =
 	"the payload contains text that Postgres cannot store as JSON: a NUL character or half a surrogate pair";
@@ -24,7 +24,7 @@ export async function storedPayloadOf(
 	const given = await validate(payload);
 	if (!given.valid) return given;
 	const json = jsonOf(given.value);
-	if (json === undefined) return NO_JSON_FORM;
+	if (json === undefined) return rejectedAsAWhole(NO_JSON_FORM);
 	const read: unknown = JSON.parse(json);
 	const unstorable = pathsOfUnstorableText(read, []);
 	if (unstorable.length > 0)
@@ -34,7 +34,13 @@ export async function storedPayloadOf(
 		};
 	const stored = await validate(read);
 	if (!stored.valid) return stored;
+	if (jsonOf(stored.value) !== json)
+		return rejectedAsAWhole(CHANGED_ON_READING);
 	return { valid: true, json };
+}
+
+function rejectedAsAWhole(message: string): StoredPayload {
+	return { valid: false, issues: [{ path: [], message }] };
 }
 
 function jsonOf(value: unknown): string | undefined {
