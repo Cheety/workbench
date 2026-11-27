@@ -22,11 +22,11 @@ describe("problem details of a failed operation", () => {
 		});
 	});
 
-	test("give an internal error only a neutral detail and the correlation id", () => {
+	test("map an internal failure to status 500 with its detail and the correlation id", () => {
 		const failure: OperationFailure = {
 			code: "internal_error",
 			kind: "internal",
-			detail: "the operation failed for an internal reason",
+			detail: "the detail of the failure",
 			issues: [],
 		};
 
@@ -34,7 +34,7 @@ describe("problem details of a failed operation", () => {
 			type: "urn:workbench:problem:internal_error",
 			title: "Internal Server Error",
 			status: 500,
-			detail: "the operation failed for an internal reason",
+			detail: "the detail of the failure",
 			code: "internal_error",
 			correlationId: "request-8",
 			issues: [],
