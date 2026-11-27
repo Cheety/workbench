@@ -3,6 +3,7 @@ import {
 	type EventHandlerContext,
 	eventName,
 	type PublishedEvent,
+	type Sql,
 } from "@workbench/sdk";
 import type { SQL, TransactionSQL } from "bun";
 import { z } from "zod";
@@ -18,10 +19,7 @@ import { quote } from "./quote.ts";
 import { pluginSchemaName } from "./schema-name.ts";
 import type { ValidationIssue } from "./schema-validation.ts";
 import { storedPayloadOf } from "./stored-payload.ts";
-import {
-	runInTransactionWithin,
-	type TransactionStatements,
-} from "./transaction-deadline.ts";
+import { runInTransactionWithin } from "./transaction-deadline.ts";
 
 export class UndeclaredEventError extends Error {
 	constructor(publisher: string, event: string) {
@@ -637,7 +635,7 @@ function publishedEventOf(
 }
 
 function contextOf(
-	sql: TransactionStatements,
+	sql: Sql,
 	sources: Pick<EventDeliveryOptions, "now" | "newId" | "random">,
 ): EventHandlerContext {
 	return {

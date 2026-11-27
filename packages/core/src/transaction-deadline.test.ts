@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import type { Sql } from "@workbench/sdk";
 import { SQL } from "bun";
 import { z } from "zod";
 import { manualTimer } from "./testing/manual-timer.ts";
@@ -13,7 +14,6 @@ import {
 	openStatementCancellation,
 	runInTransactionWithin,
 	type TransactionHook,
-	type TransactionStatements,
 } from "./transaction-deadline.ts";
 
 const connectionSettings = z.object({
@@ -232,7 +232,7 @@ const STATEMENT_TIMEOUT_MS = 60_000;
 
 const statementTimeout = z.tuple([z.object({ statement_timeout: z.string() })]);
 
-async function statementTimeoutIn(sql: TransactionStatements): Promise<string> {
+async function statementTimeoutIn(sql: Sql): Promise<string> {
 	const [row] = statementTimeout.parse(await sql`SHOW statement_timeout`);
 	return row.statement_timeout;
 }

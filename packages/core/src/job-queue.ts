@@ -1,4 +1,9 @@
-import { type JobContext, type JobDefinition, jobName } from "@workbench/sdk";
+import {
+	type JobContext,
+	type JobDefinition,
+	jobName,
+	type Sql,
+} from "@workbench/sdk";
 import type { SQL } from "bun";
 import { z } from "zod";
 import { fullJitterBackoff } from "./database-wait.ts";
@@ -15,10 +20,7 @@ import { quote } from "./quote.ts";
 import { pluginSchemaName } from "./schema-name.ts";
 import type { ValidationIssue } from "./schema-validation.ts";
 import { storedPayloadOf } from "./stored-payload.ts";
-import {
-	runInTransactionWithin,
-	type TransactionStatements,
-} from "./transaction-deadline.ts";
+import { runInTransactionWithin } from "./transaction-deadline.ts";
 
 export class UndeclaredJobError extends Error {
 	constructor(plugin: string, job: string) {
@@ -602,7 +604,7 @@ function report(
 }
 
 function contextOf(
-	sql: TransactionStatements,
+	sql: Sql,
 	sources: Pick<JobQueueOptions, "now" | "newId" | "random">,
 ): JobContext {
 	return {

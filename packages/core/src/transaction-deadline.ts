@@ -1,3 +1,4 @@
+import type { Sql } from "@workbench/sdk";
 import { SQL } from "bun";
 import { z } from "zod";
 import { describeThrown } from "./failure-reason.ts";
@@ -16,13 +17,8 @@ export type TransactionDeadline = {
 	readonly logger: Logger;
 };
 
-export type TransactionStatements = (
-	strings: TemplateStringsArray,
-	...values: readonly unknown[]
-) => Promise<readonly unknown[]>;
-
 export type TransactionHook = (within: {
-	readonly sql: TransactionStatements;
+	readonly sql: Sql;
 	readonly expired: AbortSignal;
 }) => Promise<void>;
 
@@ -106,7 +102,7 @@ function statementsUntil(
 	expired: AbortSignal,
 	transaction: SQL,
 	inFlight: Set<Promise<unknown>>,
-): TransactionStatements {
+): Sql {
 	const statements = statementsIn(transaction);
 	return async (strings, ...values) => {
 		if (expired.aborted) throw new StatementRefusedError();
