@@ -1,39 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { SetTimer } from "./hook-timeout.ts";
 import { startPollLoop } from "./poll-loop.ts";
+import { manualTimer } from "./testing/manual-timer.ts";
 import { recordingLogger } from "./testing/recording-logger.ts";
 
 const POLL_INTERVAL_MS = 1_000;
-
-function manualTimer() {
-	const delaysMs: number[] = [];
-	let pending: (() => void) | undefined;
-	let announce: (() => void) | undefined;
-	const setTimer: SetTimer = (expire, delayMs) => {
-		delaysMs.push(delayMs);
-		pending = expire;
-		announce?.();
-		announce = undefined;
-		return () => {
-			if (pending === expire) pending = undefined;
-		};
-	};
-	return {
-		setTimer,
-		delaysMs,
-		isPending: () => pending !== undefined,
-		nextSet: () =>
-			new Promise<void>((resolve) => {
-				announce = resolve;
-			}),
-		expire: () => {
-			if (pending === undefined) throw new Error("no timer is pending");
-			const expire = pending;
-			pending = undefined;
-			expire();
-		},
-	};
-}
 
 function controlledDelivery() {
 	const running: {
@@ -106,7 +76,7 @@ describe("the poll loop", () => {
 		const { timer, deliveries } = startLoop();
 
 		timer.expire();
-		const waitingForNextInterval = timer.nextSet();
+		const waitingForNextInterval = timer.set();
 		deliveries.current().finish();
 		await waitingForNextInterval;
 		timer.expire();
@@ -125,7 +95,7 @@ describe("the poll loop", () => {
 		const secondStart = deliveries.nextStart();
 		deliveries.current().finish();
 		await secondStart;
-		const waitingForNextInterval = timer.nextSet();
+		const waitingForNextInterval = timer.set();
 		deliveries.current().finish();
 		await waitingForNextInterval;
 
@@ -138,7 +108,7 @@ describe("the poll loop", () => {
 		const { loop, timer, deliveries, entries } = startLoop();
 
 		loop.wake();
-		const waitingForNextInterval = timer.nextSet();
+		const waitingForNextInterval = timer.set();
 		deliveries.current().fail(new Error("connection refused"));
 		await waitingForNextInterval;
 		timer.expire();

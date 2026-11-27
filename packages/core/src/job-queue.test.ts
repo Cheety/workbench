@@ -8,11 +8,7 @@ import {
 import { SQL } from "bun";
 import { z } from "zod";
 import { Secret } from "./config.ts";
-import {
-	type HookTimeout,
-	type SetTimer,
-	setSystemTimer,
-} from "./hook-timeout.ts";
+import { type HookTimeout, setSystemTimer } from "./hook-timeout.ts";
 import { createJobQueue, enqueueJob } from "./job-queue.ts";
 import { type JobRegistry, readJobs, registerJobs } from "./job-registry.ts";
 import { startPollLoop } from "./poll-loop.ts";
@@ -21,6 +17,7 @@ import {
 	type MigrationRunner,
 	migrateCoreSchema,
 } from "./schema-migrations.ts";
+import { manualTimer } from "./testing/manual-timer.ts";
 import {
 	createFreshDatabase,
 	type FreshDatabase,
@@ -146,29 +143,6 @@ function queueOf(scenario: QueueScenario) {
 		logger,
 	});
 	return { queue, entries };
-}
-
-function manualTimer() {
-	let expire: (() => void) | undefined;
-	let announce: (() => void) | undefined;
-	const setTimer: SetTimer = (onExpire) => {
-		expire = onExpire;
-		announce?.();
-		return () => {
-			expire = undefined;
-		};
-	};
-	return {
-		setTimer,
-		set: () =>
-			new Promise<void>((resolve) => {
-				announce = resolve;
-			}),
-		expire: () => {
-			if (expire === undefined) throw new Error("no timer is pending");
-			expire();
-		},
-	};
 }
 
 async function createMailerSchema(sql: SQL): Promise<void> {

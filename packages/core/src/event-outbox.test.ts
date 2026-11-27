@@ -18,11 +18,7 @@ import {
 	readSubscriptions,
 	registerEvents,
 } from "./event-registry.ts";
-import {
-	type HookTimeout,
-	type SetTimer,
-	setSystemTimer,
-} from "./hook-timeout.ts";
+import { type HookTimeout, setSystemTimer } from "./hook-timeout.ts";
 import { readMigrations } from "./migration-files.ts";
 import { startPollLoop } from "./poll-loop.ts";
 import {
@@ -32,6 +28,7 @@ import {
 	migrateSchemas,
 } from "./schema-migrations.ts";
 import { CORE_SCHEMA } from "./schema-name.ts";
+import { manualTimer } from "./testing/manual-timer.ts";
 import {
 	createFreshDatabase,
 	type FreshDatabase,
@@ -371,29 +368,6 @@ async function indexedLabels(sql: SQL): Promise<unknown[]> {
 
 function failuresIn(entries: readonly LogEntry[]): LogEntry[] {
 	return entries.filter((entry) => entry.message === "event not delivered");
-}
-
-function manualTimer() {
-	let expire: (() => void) | undefined;
-	let announce: (() => void) | undefined;
-	const setTimer: SetTimer = (onExpire) => {
-		expire = onExpire;
-		announce?.();
-		return () => {
-			expire = undefined;
-		};
-	};
-	return {
-		setTimer,
-		set: () =>
-			new Promise<void>((resolve) => {
-				announce = resolve;
-			}),
-		expire: () => {
-			if (expire === undefined) throw new Error("no timer is pending");
-			expire();
-		},
-	};
 }
 
 function adjustableClock(start: Date) {
