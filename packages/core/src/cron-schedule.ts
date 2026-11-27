@@ -50,12 +50,26 @@ type Fields = {
 	readonly isAnyDayOfWeek: boolean;
 };
 
+const FIVE_FIELDS =
+	"must be a cron expression of five fields: minute, hour, day of month, month and day of week";
+
+class UnreadableFieldError extends Error {
+	readonly problem: string;
+
+	constructor(text: string, { label, min, max }: FieldRange) {
+		const problem = `has the ${label} ${quote(text)}, which must be "*", a number, a range or a list of them within ${min} to ${max}, each with an optional step`;
+		super(problem);
+		this.name = "UnreadableFieldError";
+		this.problem = problem;
+	}
+}
+
 export function readCronSchedule(expression: unknown): CronScheduleRead {
-	const texts =
-		typeof expression === "string" ? expression.trim().split(WHITESPACE) : [];
-	const [minute, hour, dayOfMonth, month, dayOfWeek, ...rest] = texts;
+	if (typeof expression !== "string") return invalid(FIVE_FIELDS);
+	const [minute, hour, dayOfMonth, month, dayOfWeek, ...rest] = expression
+		.trim()
+		.split(WHITESPACE);
 	if (
-		typeof expression !== "string" ||
 		minute === undefined ||
 		hour === undefined ||
 		dayOfMonth === undefined ||
@@ -63,30 +77,28 @@ export function readCronSchedule(expression: unknown): CronScheduleRead {
 		dayOfWeek === undefined ||
 		rest.length > 0
 	)
-		return invalid(
-			"must be a cron expression of five fields: minute, hour, day of month, month and day of week",
-		);
-	const minutes = readField(minute, MINUTE);
-	if (minutes === undefined) return invalidField(minute, MINUTE);
-	const hours = readField(hour, HOUR);
-	if (hours === undefined) return invalidField(hour, HOUR);
-	const daysOfMonth = readField(dayOfMonth, DAY_OF_MONTH);
-	if (daysOfMonth === undefined) return invalidField(dayOfMonth, DAY_OF_MONTH);
-	const months = readField(month, MONTH);
-	if (months === undefined) return invalidField(month, MONTH);
-	const daysOfWeek = readField(dayOfWeek, DAY_OF_WEEK);
-	if (daysOfWeek === undefined) return invalidField(dayOfWeek, DAY_OF_WEEK);
-	const fields: Fields = {
-		minutes,
-		hours,
-		daysOfMonth,
-		months,
-		daysOfWeek: new Set(
-			[...daysOfWeek].map((day) => (day === SUNDAY_AS_SEVEN ? SUNDAY : day)),
-		),
-		isAnyDayOfMonth: dayOfMonth.startsWith(ANY),
-		isAnyDayOfWeek: dayOfWeek.startsWith(ANY),
-	};
+		return invalid(FIVE_FIELDS);
+	try {
+		return scheduleOf(expression, {
+			minutes: readField(minute, MINUTE),
+			hours: readField(hour, HOUR),
+			daysOfMonth: readField(dayOfMonth, DAY_OF_MONTH),
+			months: readField(month, MONTH),
+			daysOfWeek: new Set(
+				[...readField(dayOfWeek, DAY_OF_WEEK)].map((day) =>
+					day === SUNDAY_AS_SEVEN ? SUNDAY : day,
+				),
+			),
+			isAnyDayOfMonth: dayOfMonth.startsWith(ANY),
+			isAnyDayOfWeek: dayOfWeek.startsWith(ANY),
+		});
+	} catch (error) {
+		if (error instanceof UnreadableFieldError) return invalid(error.problem);
+		throw error;
+	}
+}
+
+function scheduleOf(expression: string, fields: Fields): CronScheduleRead {
 	if (findNextAfter(fields, new Date(0)) === undefined)
 		return invalid("never falls due");
 	return {
@@ -105,20 +117,11 @@ function invalid(problem: string): CronScheduleRead {
 	return { valid: false, problem };
 }
 
-function invalidField(text: string, { label, min, max }: FieldRange) {
-	return invalid(
-		`has the ${label} ${quote(text)}, which must be "*", a number, a range or a list of them within ${min} to ${max}, each with an optional step`,
-	);
-}
-
-function readField(
-	text: string,
-	range: FieldRange,
-): ReadonlySet<number> | undefined {
+function readField(text: string, range: FieldRange): ReadonlySet<number> {
 	const values = new Set<number>();
 	for (const item of text.split(",")) {
 		const itemValues = readItem(item, range);
-		if (itemValues === undefined) return undefined;
+		if (itemValues === undefined) throw new UnreadableFieldError(text, range);
 		for (const value of itemValues) values.add(value);
 	}
 	return values;
