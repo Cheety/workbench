@@ -1,29 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { createLogger } from "./logger.ts";
 import { reportFailedStart, shutDown, shutDownInstance } from "./shutdown.ts";
-
-function recordingLogger() {
-	const lines: string[] = [];
-	const logger = createLogger({
-		level: "debug",
-		now: () => new Date("2026-11-26T08:00:00.000Z"),
-		write: (line) => lines.push(line),
-	});
-	return { logger, lines };
-}
+import { recordingLogger } from "./testing/recording-logger.ts";
 
 describe("shutdown", () => {
 	test("exits with 0 and logs nothing when the server stops", async () => {
-		const { logger, lines } = recordingLogger();
+		const { logger, entries } = recordingLogger();
 
 		const exitCode = await shutDown({ stop: async () => {} }, logger);
 
 		expect(exitCode).toBe(0);
-		expect(lines).toEqual([]);
+		expect(entries).toEqual([]);
 	});
 
 	test("exits with 1 and one log entry without internals when the server fails to stop", async () => {
-		const { logger, lines } = recordingLogger();
+		const { logger, entries } = recordingLogger();
 		const failure = Object.assign(new Error("s3cr3t-detail"), {
 			code: "ECONNRESET",
 		});
@@ -34,7 +24,7 @@ describe("shutdown", () => {
 		);
 
 		expect(exitCode).toBe(1);
-		expect(lines.map((line) => JSON.parse(line))).toEqual([
+		expect(entries).toEqual([
 			{
 				time: "2026-11-26T08:00:00.000Z",
 				level: "error",
@@ -45,7 +35,7 @@ describe("shutdown", () => {
 	});
 
 	test("reports an unknown reason when the failure carries no system error code", async () => {
-		const { logger, lines } = recordingLogger();
+		const { logger, entries } = recordingLogger();
 
 		const exitCode = await shutDown(
 			{ stop: () => Promise.reject("s3cr3t-detail") },
@@ -53,7 +43,7 @@ describe("shutdown", () => {
 		);
 
 		expect(exitCode).toBe(1);
-		expect(lines.map((line) => JSON.parse(line))).toEqual([
+		expect(entries).toEqual([
 			expect.objectContaining({
 				message: "server failed to stop",
 				reason: "unknown",
@@ -105,7 +95,7 @@ describe("instance shutdown", () => {
 	});
 
 	test("reports it and exits with 1 when the database connections fail to close", async () => {
-		const { logger, lines } = recordingLogger();
+		const { logger, entries } = recordingLogger();
 
 		const exitCode = await shutDownInstance(
 			{
@@ -119,7 +109,7 @@ describe("instance shutdown", () => {
 		);
 
 		expect(exitCode).toBe(1);
-		expect(lines.map((line) => JSON.parse(line))).toEqual([
+		expect(entries).toEqual([
 			expect.objectContaining({
 				level: "error",
 				message: "database connections failed to close",
@@ -129,7 +119,7 @@ describe("instance shutdown", () => {
 	});
 
 	test("reports it, exits with 1 and still deactivates the plugins when the event delivery fails to stop", async () => {
-		const { logger, lines } = recordingLogger();
+		const { logger, entries } = recordingLogger();
 		const journal: string[] = [];
 
 		const exitCode = await shutDownInstance(
@@ -154,7 +144,7 @@ describe("instance shutdown", () => {
 
 		expect(exitCode).toBe(1);
 		expect(journal).toEqual(["plugins deactivated", "database closed"]);
-		expect(lines.map((line) => JSON.parse(line))).toEqual([
+		expect(entries).toEqual([
 			expect.objectContaining({
 				level: "error",
 				message: "event delivery failed to stop",
@@ -234,7 +224,7 @@ describe("instance shutdown", () => {
 	});
 
 	test("stops the server, reports it and exits with 1 when the plugins failed to start", async () => {
-		const { logger, lines } = recordingLogger();
+		const { logger, entries } = recordingLogger();
 		const journal: string[] = [];
 
 		const exitCode = await shutDownInstance(
@@ -254,7 +244,7 @@ describe("instance shutdown", () => {
 
 		expect(exitCode).toBe(1);
 		expect(journal).toEqual(["server stopped"]);
-		expect(lines.map((line) => JSON.parse(line))).toEqual([
+		expect(entries).toEqual([
 			expect.objectContaining({
 				level: "error",
 				message: "plugins failed to shut down",
@@ -267,7 +257,7 @@ describe("instance shutdown", () => {
 	});
 
 	test("reports it and exits with 1 when deactivating the plugins fails as a whole", async () => {
-		const { logger, lines } = recordingLogger();
+		const { logger, entries } = recordingLogger();
 
 		const exitCode = await shutDownInstance(
 			{
@@ -283,7 +273,7 @@ describe("instance shutdown", () => {
 		);
 
 		expect(exitCode).toBe(1);
-		expect(lines.map((line) => JSON.parse(line))).toEqual([
+		expect(entries).toEqual([
 			expect.objectContaining({
 				level: "error",
 				message: "plugins failed to shut down",
@@ -333,14 +323,14 @@ describe("instance shutdown", () => {
 
 describe("failed plugin start", () => {
 	test("is reported when it fails, without waiting for a shutdown", async () => {
-		const { logger, lines } = recordingLogger();
+		const { logger, entries } = recordingLogger();
 
 		await reportFailedStart(
 			Promise.reject(new TypeError("kernel defect")),
 			logger,
 		);
 
-		expect(lines.map((line) => JSON.parse(line))).toEqual([
+		expect(entries).toEqual([
 			expect.objectContaining({
 				level: "error",
 				message: "plugins failed to start",
@@ -354,7 +344,7 @@ describe("failed plugin start", () => {
 	});
 
 	test("is not reported a second time by the shutdown, which exits with 1", async () => {
-		const { logger, lines } = recordingLogger();
+		const { logger, entries } = recordingLogger();
 		const journal: string[] = [];
 		const plugins = reportFailedStart(
 			Promise.reject(new TypeError("kernel defect")),
@@ -378,18 +368,28 @@ describe("failed plugin start", () => {
 
 		expect(exitCode).toBe(1);
 		expect(journal).toEqual(["server stopped"]);
-		expect(lines.map((line) => JSON.parse(line).message as unknown)).toEqual([
+		expect(entries.map((entry) => entry.message)).toEqual([
 			"plugins failed to start",
 		]);
 	});
 
-	test("leaves plugins that started as they are", async () => {
-		const { logger, lines } = recordingLogger();
-		const started = { deactivate: async () => "clean" as const };
+	test("reports nothing for plugins that started and leaves their deactivation to them", async () => {
+		const { logger, entries } = recordingLogger();
+		const journal: string[] = [];
 
-		const plugins = await reportFailedStart(Promise.resolve(started), logger);
+		const plugins = await reportFailedStart(
+			Promise.resolve({
+				deactivate: async () => {
+					journal.push("plugins deactivated");
+					return "clean" as const;
+				},
+			}),
+			logger,
+		);
+		const outcome = await plugins.deactivate();
 
-		expect(plugins).toBe(started);
-		expect(lines).toEqual([]);
+		expect(outcome).toBe("clean");
+		expect(journal).toEqual(["plugins deactivated"]);
+		expect(entries).toEqual([]);
 	});
 });
