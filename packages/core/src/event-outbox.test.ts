@@ -1190,6 +1190,39 @@ describe("settled events past their retention", () => {
 		expect(await countRows(database.sql)).toEqual({ events: 0, deliveries: 0 });
 	});
 
+	test("include, once a process looks again, an older event that was still open while it removed the others", async () => {
+		const database = await migratedDatabase();
+		const search = searchSubscribing();
+		await publishLabelRenamed(database.sql, search, EVENT);
+		await insertLabelRenamedDeliveredAt(
+			database.sql,
+			new Date(NOW.getTime() + DAY_MS),
+			1_001,
+		);
+		let now = new Date(NOW.getTime() + 9 * DAY_MS);
+		const whileSearchIsNotActive = deliveryOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			events: registryOf(subscription("archive", async () => {})),
+			now: () => now,
+		}).delivery;
+		await whileSearchIsNotActive.deliverDue(NOT_STOPPED);
+		await whileSearchIsNotActive.deliverDue(NOT_STOPPED);
+		const leftWhileOpen = await countRows(database.sql);
+		await deliveryOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			events: search,
+			now: () => now,
+		}).delivery.deliverDue(NOT_STOPPED);
+
+		now = new Date(now.getTime() + 7 * DAY_MS);
+		await whileSearchIsNotActive.deliverDue(NOT_STOPPED);
+
+		expect(leftWhileOpen).toEqual({ events: 1, deliveries: 1 });
+		expect(await countRows(database.sql)).toEqual({ events: 0, deliveries: 0 });
+	});
+
 	test("are left to the process that is already removing them, without waiting for it", async () => {
 		const database = await migratedDatabase();
 		await insertLabelRenamedDeliveredAt(

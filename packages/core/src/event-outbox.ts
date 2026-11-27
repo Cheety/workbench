@@ -167,23 +167,41 @@ function expiredEventRemoverOf({
 	logger,
 }: Pick<EventDeliveryOptions, "sql" | "logger">): (now: Date) => Promise<void> {
 	let restsUntil = Number.NEGATIVE_INFINITY;
+	let resumesFrom: Date | null = null;
 	return async (now) => {
 		if (now.getTime() < restsUntil) return;
-		const removed = await removeSettled(
-			sql,
-			new Date(now.getTime() - RETENTION_MS),
-		);
-		if (removed < MOST_REMOVED_PER_RUN)
-			restsUntil = now.getTime() + REMOVAL_INTERVAL_MS;
+		const { removed, latest_occurred_at } = await removeSettled(sql, {
+			occurredFrom: resumesFrom,
+			settledBy: new Date(now.getTime() - RETENTION_MS),
+		});
+		const mayLeaveMore = removed === MOST_REMOVED_PER_RUN;
+		resumesFrom = mayLeaveMore ? latest_occurred_at : null;
+		if (!mayLeaveMore) restsUntil = now.getTime() + REMOVAL_INTERVAL_MS;
 		if (removed > 0) logger.debug("settled events removed", { removed });
 	};
 }
 
-async function removeSettled(sql: SQL, settledBy: Date): Promise<number> {
-	const removed: unknown[] = await sql`
+type ExpiredEvents = {
+	readonly occurredFrom: Date | null;
+	readonly settledBy: Date;
+};
+
+const removal = z.object({
+	removed: z.number(),
+	latest_occurred_at: z.date().nullable(),
+});
+
+type Removal = z.infer<typeof removal>;
+
+async function removeSettled(
+	sql: SQL,
+	{ occurredFrom, settledBy }: ExpiredEvents,
+): Promise<Removal> {
+	const [row]: unknown[] = await sql`
 		WITH expired AS (
 			SELECT e.id FROM core.events e
-			WHERE e.occurred_at <= ${settledBy}
+			WHERE e.occurred_at >= coalesce(${occurredFrom}::timestamptz, '-infinity')
+				AND e.occurred_at <= ${settledBy}
 				AND NOT EXISTS (
 					SELECT FROM core.event_deliveries d
 					WHERE d.event_id = e.id
@@ -196,11 +214,15 @@ async function removeSettled(sql: SQL, settledBy: Date): Promise<number> {
 		removed_deliveries AS (
 			DELETE FROM core.event_deliveries
 			WHERE event_id IN (SELECT id FROM expired)
+		),
+		removed_events AS (
+			DELETE FROM core.events
+			WHERE id IN (SELECT id FROM expired)
+			RETURNING occurred_at
 		)
-		DELETE FROM core.events
-		WHERE id IN (SELECT id FROM expired)
-		RETURNING id`;
-	return removed.length;
+		SELECT count(*)::integer AS removed, max(occurred_at) AS latest_occurred_at
+		FROM removed_events`;
+	return removal.parse(row);
 }
 
 type AttemptOptions = EventDeliveryOptions & {
