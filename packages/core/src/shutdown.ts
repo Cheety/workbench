@@ -1,8 +1,8 @@
 import type { EventDeliveryLoop } from "./event-delivery-loop.ts";
 import { describeThrown } from "./failure-reason.ts";
-import type { JobLoop } from "./job-loop.ts";
 import type { RunningPlugins } from "./kernel.ts";
 import type { Logger } from "./logger.ts";
+import type { PollLoop } from "./poll-loop.ts";
 import type { RunningServer } from "./server.ts";
 import { systemFailureReason } from "./system-error.ts";
 
@@ -14,7 +14,7 @@ export type RunningInstance = {
 	readonly stopStartingPlugins: () => void;
 	readonly server: Pick<RunningServer, "stop">;
 	readonly eventDelivery: Pick<EventDeliveryLoop, "stop">;
-	readonly jobQueue: Pick<JobLoop, "stop">;
+	readonly jobQueue: Pick<PollLoop, "stop">;
 	readonly plugins: Deactivatable | Promise<Deactivatable>;
 	readonly database: { readonly close: () => Promise<void> };
 };
@@ -48,7 +48,7 @@ export async function shutDownInstance(
 }
 
 async function stopLoop(
-	loop: Pick<EventDeliveryLoop | JobLoop, "stop">,
+	loop: Pick<PollLoop, "stop">,
 	failureMessage: string,
 	logger: Logger,
 ): Promise<ExitCode> {

@@ -115,7 +115,7 @@ const IS_RETRIED: Record<JobFailure["reason"], boolean> = {
 	attempt_lost: false,
 };
 
-type Attempt =
+type AttemptOutcome =
 	| { readonly outcome: "completed" }
 	| {
 			readonly outcome: "postponed";
@@ -125,7 +125,7 @@ type Attempt =
 	| { readonly outcome: "dead_lettered"; readonly failure: JobFailure }
 	| { readonly outcome: "settled_elsewhere" };
 
-const SETTLED_ELSEWHERE: Attempt = { outcome: "settled_elsewhere" };
+const SETTLED_ELSEWHERE: AttemptOutcome = { outcome: "settled_elsewhere" };
 
 class SettledElsewhereError extends Error {
 	constructor() {
@@ -167,11 +167,7 @@ export function createJobQueue(options: JobQueueOptions): JobQueue {
 					loggerOf(claimed, options).warn("job claimed but not declared");
 					continue;
 				}
-				const settled =
-					claimed.attempts > job.maxAttempts
-						? await giveUpLost(claimed, job, options)
-						: await attempt(claimed, job, attemptOptions);
-				report(settled.job, settled.attempt, options);
+				await attemptOrGiveUp(claimed, job, attemptOptions);
 			}
 		},
 	};
@@ -230,24 +226,30 @@ async function claimNext(
 	return row === undefined ? undefined : claimedJob.parse(row);
 }
 
-type Settled = {
-	readonly job: ClaimedJob;
-	readonly attempt: Attempt;
-};
-
-async function attempt(
+async function attemptOrGiveUp(
 	claimed: ClaimedJob,
 	job: RegisteredJob,
 	options: AttemptOptions,
-): Promise<Settled> {
-	return { job: claimed, attempt: await settle(claimed, job, options) };
+): Promise<void> {
+	if (claimed.attempts <= job.maxAttempts) {
+		report(claimed, await runAttempt(claimed, job, options), options);
+		return;
+	}
+	const lost = { ...claimed, attempts: job.maxAttempts };
+	const outcome = await deadLetter(
+		options.sql,
+		claimed,
+		{ reason: "attempt_lost" },
+		{ at: options.now(), attempts: lost.attempts },
+	);
+	report(lost, outcome, options);
 }
 
-async function settle(
+async function runAttempt(
 	claimed: ClaimedJob,
 	job: RegisteredJob,
 	options: AttemptOptions,
-): Promise<Attempt> {
+): Promise<AttemptOutcome> {
 	try {
 		await options.sql.begin(async (transaction) => {
 			await run(transaction, claimed, job, options);
@@ -356,10 +358,13 @@ function settleFailed(
 	job: RegisteredJob,
 	failure: JobFailure,
 	options: AttemptOptions,
-): Promise<Attempt> {
+): Promise<AttemptOutcome> {
 	const now = options.now();
 	if (!IS_RETRIED[failure.reason] || claimed.attempts >= job.maxAttempts)
-		return deadLetter(options.sql, claimed, failure, now);
+		return deadLetter(options.sql, claimed, failure, {
+			at: now,
+			attempts: claimed.attempts,
+		});
 	const retryInMs = Math.max(
 		SHORTEST_RETRY_MS,
 		options.retryDelayMs(claimed.attempts - 1),
@@ -380,7 +385,7 @@ async function postpone(
 	claimed: ClaimedJob,
 	failure: JobFailure,
 	retry: Retry,
-): Promise<Attempt> {
+): Promise<AttemptOutcome> {
 	const postponed: unknown[] = await sql`
 		UPDATE core.jobs
 		SET next_attempt_at = ${retry.at}, failure_reason = ${failure.reason}
@@ -393,15 +398,23 @@ async function postpone(
 		: { outcome: "postponed", failure, retryInMs: retry.inMs };
 }
 
+type Death = {
+	readonly at: Date;
+	readonly attempts: number;
+};
+
 async function deadLetter(
 	sql: SQL,
 	claimed: ClaimedJob,
 	failure: JobFailure,
-	now: Date,
-): Promise<Attempt> {
+	death: Death,
+): Promise<AttemptOutcome> {
 	const dead: unknown[] = await sql`
 		UPDATE core.jobs
-		SET state = 'dead', settled_at = ${now}, failure_reason = ${failure.reason}
+		SET state = 'dead',
+			settled_at = ${death.at},
+			attempts = ${death.attempts},
+			failure_reason = ${failure.reason}
 		WHERE id = ${claimed.id}
 			AND state = 'pending'
 			AND attempts = ${claimed.attempts}
@@ -409,32 +422,6 @@ async function deadLetter(
 	return dead.length === 0
 		? SETTLED_ELSEWHERE
 		: { outcome: "dead_lettered", failure };
-}
-
-async function giveUpLost(
-	claimed: ClaimedJob,
-	job: RegisteredJob,
-	{ sql, now }: Pick<JobQueueOptions, "sql" | "now">,
-): Promise<Settled> {
-	const lost = { ...claimed, attempts: job.maxAttempts };
-	const failure: JobFailure = { reason: "attempt_lost" };
-	const dead: unknown[] = await sql`
-		UPDATE core.jobs
-		SET state = 'dead',
-			settled_at = ${now()},
-			attempts = ${lost.attempts},
-			failure_reason = ${failure.reason}
-		WHERE id = ${claimed.id}
-			AND state = 'pending'
-			AND attempts = ${claimed.attempts}
-		RETURNING id`;
-	return {
-		job: lost,
-		attempt:
-			dead.length === 0
-				? SETTLED_ELSEWHERE
-				: { outcome: "dead_lettered", failure },
-	};
 }
 
 function loggerOf(
@@ -450,22 +437,22 @@ function loggerOf(
 
 function report(
 	claimed: ClaimedJob,
-	attempt: Attempt,
+	outcome: AttemptOutcome,
 	{ logger }: Pick<JobQueueOptions, "logger">,
 ): void {
 	const jobLogger = loggerOf(claimed, { logger });
-	switch (attempt.outcome) {
+	switch (outcome.outcome) {
 		case "completed":
 			jobLogger.debug("job completed");
 			return;
 		case "postponed":
 			jobLogger.error("job failed", {
-				...attempt.failure,
-				retryInMs: attempt.retryInMs,
+				...outcome.failure,
+				retryInMs: outcome.retryInMs,
 			});
 			return;
 		case "dead_lettered":
-			jobLogger.error("job dead-lettered", attempt.failure);
+			jobLogger.error("job dead-lettered", outcome.failure);
 			return;
 		case "settled_elsewhere":
 			return;

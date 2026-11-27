@@ -10,9 +10,7 @@ export type JobLoopOptions = {
 	readonly logger: Logger;
 };
 
-export type JobLoop = PollLoop;
-
-export function startJobLoop(options: JobLoopOptions): JobLoop {
+export function startJobLoop(options: JobLoopOptions): PollLoop {
 	return startPollLoop({
 		run: (stopSignal) => options.queue.runDue(stopSignal),
 		failureMessage: "job queue failed",
