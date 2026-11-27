@@ -36,6 +36,7 @@ export type OperationHarnessOptions = {
 	readonly now?: () => Date;
 	readonly newId?: () => string;
 	readonly random?: () => number;
+	readonly newCorrelationId?: () => string;
 };
 
 export type HarnessCall = {
@@ -142,7 +143,8 @@ function harnessOf(
 		random: options.random ?? (() => FIXED_RANDOM),
 		logger,
 	});
-	let calls = 0;
+	const newCorrelationId =
+		options.newCorrelationId ?? sequentialCorrelationIds();
 	return {
 		logEntries: entries,
 		createWorkspace: async (name) => {
@@ -150,13 +152,8 @@ function harnessOf(
 			await createWorkspace(database.sql, { id, name, createdAt: now() });
 			return id;
 		},
-		call: (call) => {
-			calls += 1;
-			return pipeline.invoke({
-				...call,
-				correlationId: `harness-call-${calls}`,
-			});
-		},
+		call: (call) =>
+			pipeline.invoke({ ...call, correlationId: newCorrelationId() }),
 		stop: async () => {
 			await plugins.deactivate();
 			await database.drop();
@@ -169,5 +166,13 @@ function sequentialIds(): () => string {
 	return () => {
 		issued += 1;
 		return `00000000-0000-4000-8000-${String(issued).padStart(12, "0")}`;
+	};
+}
+
+function sequentialCorrelationIds(): () => string {
+	let issued = 0;
+	return () => {
+		issued += 1;
+		return `harness-call-${issued}`;
 	};
 }
