@@ -32,7 +32,11 @@ import {
 	migrateSchemas,
 } from "./schema-migrations.ts";
 import { CORE_SCHEMA } from "./schema-name.ts";
-import { createFreshDatabase, type FreshDatabase } from "./testing/postgres.ts";
+import {
+	createFreshDatabase,
+	type FreshDatabase,
+	TEST_DATABASE_URL,
+} from "./testing/postgres.ts";
 import { type LogEntry, recordingLogger } from "./testing/recording-logger.ts";
 import { createWorkspace } from "./workspaces.ts";
 
@@ -248,6 +252,56 @@ function boardEvent<Payload>(
 	payload: EventDefinition<Payload>["payload"],
 ): EventDefinition<Payload> {
 	return defineEvent({ plugin: "board", name: "CardDue", version: 1, payload });
+}
+
+const HANDLER_LOCK = 4711;
+
+async function connectionHoldingTheHandlerLock(
+	database: FreshDatabase,
+): Promise<SQL> {
+	const connection = new SQL(database.url, { max: 1 });
+	cleanups.push(() => connection.close());
+	await connection`SELECT pg_advisory_lock(${HANDLER_LOCK})`;
+	return connection;
+}
+
+async function untilAStatementWaitsForTheLock(observer: SQL): Promise<void> {
+	let waiting: unknown[] = [];
+	while (waiting.length === 0)
+		waiting = await observer`
+			SELECT FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'`;
+}
+
+function waitingForTheLock(): EventParticipant {
+	return subscription("search", async (_event, ctx) => {
+		await ctx.sql`SELECT pg_advisory_xact_lock(${HANDLER_LOCK})`;
+	});
+}
+
+async function refuseNewConnections(database: FreshDatabase): Promise<void> {
+	const name = new URL(database.url).pathname.slice(1);
+	const admin = new SQL(TEST_DATABASE_URL, { max: 1 });
+	try {
+		await admin.unsafe(`ALTER DATABASE ${name} ALLOW_CONNECTIONS false`);
+	} finally {
+		await admin.close();
+	}
+}
+
+function poolOfAnInstance(database: FreshDatabase): SQL {
+	const pool = new SQL(database.url, {
+		connectionTimeout: 10,
+		connection: { statement_timeout: 60_000 },
+	});
+	cleanups.push(() => pool.close());
+	return pool;
+}
+
+async function attemptsOf(sql: SQL, eventId: string): Promise<unknown[]> {
+	const rows: unknown[] =
+		await sql`SELECT attempts FROM core.event_deliveries WHERE event_id = ${eventId}`;
+	return [...rows];
 }
 
 type DeliveryScenario = {
@@ -738,6 +792,77 @@ describe("a handler that timed out", () => {
 
 		expect(await lateWrite.promise).toBe("refused");
 		expect(await indexedLabels(database.sql)).toEqual([]);
+		expect(failuresIn(entries)).toEqual([
+			expect.objectContaining({ reason: "handler_timed_out", attempt: 1 }),
+		]);
+	});
+});
+
+describe("a handler whose time is up while a statement of it is running", () => {
+	test.each([
+		["a single connection", (database: FreshDatabase) => database.sql],
+		["the pool an instance builds from its URL", poolOfAnInstance],
+	])(
+		"is given up at once on %s, its statement cancelled and the retry stored",
+		async (_case, poolOf) => {
+			const database = await migratedDatabase();
+			const sql = poolOf(database);
+			const observer = await connectionHoldingTheHandlerLock(database);
+			const timer = manualTimer();
+			const events = registryOf(waitingForTheLock());
+			await publishLabelRenamed(sql, events, EVENT);
+			const { delivery, entries } = deliveryOf({
+				sql,
+				events,
+				handlerTimeout: { ms: 250, setTimer: timer.setTimer },
+			});
+
+			const timerSet = timer.set();
+			const delivering = delivery.deliverDue(NOT_STOPPED);
+			await timerSet;
+			await untilAStatementWaitsForTheLock(observer);
+			timer.expire();
+			await delivering;
+
+			expect(failuresIn(entries)).toEqual([
+				expect.objectContaining({ reason: "handler_timed_out", attempt: 1 }),
+			]);
+			expect(await attemptsOf(sql, EVENT)).toEqual([{ attempts: 1 }]);
+		},
+	);
+
+	test("is given up once the statement ends when the statement cannot be cancelled, and tells the operator why", async () => {
+		const database = await migratedDatabase();
+		const observer = await connectionHoldingTheHandlerLock(database);
+		const timer = manualTimer();
+		const events = registryOf(waitingForTheLock());
+		await publishLabelRenamed(database.sql, events, EVENT);
+		const { delivery, entries } = deliveryOf({
+			sql: database.sql,
+			events,
+			handlerTimeout: { ms: 250, setTimer: timer.setTimer },
+		});
+		const notCancelled = () =>
+			entries.filter((entry) => entry.message === "statement not cancelled");
+
+		const timerSet = timer.set();
+		const delivering = delivery.deliverDue(NOT_STOPPED);
+		await timerSet;
+		await untilAStatementWaitsForTheLock(observer);
+		await refuseNewConnections(database);
+		timer.expire();
+		while (notCancelled().length === 0) await observer`SELECT 1`;
+		await observer`SELECT pg_advisory_unlock(${HANDLER_LOCK})`;
+		await delivering;
+
+		expect(notCancelled()).toEqual([
+			expect.objectContaining({
+				eventId: EVENT,
+				event: "board.LabelRenamed",
+				subscriber: "search",
+				error: expect.objectContaining({ name: "PostgresError" }),
+			}),
+		]);
 		expect(failuresIn(entries)).toEqual([
 			expect.objectContaining({ reason: "handler_timed_out", attempt: 1 }),
 		]);

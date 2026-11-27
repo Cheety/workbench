@@ -21,7 +21,11 @@ import {
 	type MigrationRunner,
 	migrateCoreSchema,
 } from "./schema-migrations.ts";
-import { createFreshDatabase, type FreshDatabase } from "./testing/postgres.ts";
+import {
+	createFreshDatabase,
+	type FreshDatabase,
+	TEST_DATABASE_URL,
+} from "./testing/postgres.ts";
 import { type LogEntry, recordingLogger } from "./testing/recording-logger.ts";
 import { createWorkspace } from "./workspaces.ts";
 
@@ -222,6 +226,56 @@ async function payloadsRunWith<Payload>(
 	return received;
 }
 
+const RUN_LOCK = 4711;
+
+async function connectionHoldingTheRunLock(
+	database: FreshDatabase,
+): Promise<SQL> {
+	const connection = new SQL(database.url, { max: 1 });
+	cleanups.push(() => connection.close());
+	await connection`SELECT pg_advisory_lock(${RUN_LOCK})`;
+	return connection;
+}
+
+async function untilAStatementWaitsForTheLock(observer: SQL): Promise<void> {
+	let waiting: unknown[] = [];
+	while (waiting.length === 0)
+		waiting = await observer`
+			SELECT FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'`;
+}
+
+function waitingForTheRunLock(): SendReminder {
+	return sendingReminders(async (_job, ctx) => {
+		await ctx.sql`SELECT pg_advisory_xact_lock(${RUN_LOCK})`;
+	});
+}
+
+async function refuseNewConnections(database: FreshDatabase): Promise<void> {
+	const name = new URL(database.url).pathname.slice(1);
+	const admin = new SQL(TEST_DATABASE_URL, { max: 1 });
+	try {
+		await admin.unsafe(`ALTER DATABASE ${name} ALLOW_CONNECTIONS false`);
+	} finally {
+		await admin.close();
+	}
+}
+
+function poolOfAnInstance(database: FreshDatabase): SQL {
+	const pool = new SQL(database.url, {
+		connectionTimeout: 10,
+		connection: { statement_timeout: 60_000 },
+	});
+	cleanups.push(() => pool.close());
+	return pool;
+}
+
+async function failureOf(sql: SQL): Promise<unknown[]> {
+	const rows: unknown[] =
+		await sql`SELECT state, attempts, failure_reason FROM core.jobs`;
+	return [...rows];
+}
+
 describe("a job that exceeds its timeout", () => {
 	test("counts as failed and runs again once its retry is due", async () => {
 		const database = await migratedDatabase();
@@ -329,6 +383,79 @@ describe("a job that exceeds its timeout", () => {
 
 		expect(lateWriteOutcome).toBe("refused");
 		expect(await sentReminders(database.sql)).toEqual([]);
+		expect(failuresIn(entries)).toEqual([
+			expect.objectContaining({ reason: "run_timed_out", attempt: 1 }),
+		]);
+	});
+});
+
+describe("a job whose time is up while a statement of its run is running", () => {
+	test.each([
+		["a single connection", (database: FreshDatabase) => database.sql],
+		["the pool an instance builds from its URL", poolOfAnInstance],
+	])(
+		"is given up at once on %s, its statement cancelled and its failure stored",
+		async (_case, poolOf) => {
+			const database = await migratedDatabase();
+			const sql = poolOf(database);
+			const observer = await connectionHoldingTheRunLock(database);
+			const timer = manualTimer();
+			const jobs = registryOf(waitingForTheRunLock());
+			await enqueueReminder(sql, jobs, JOB);
+			const { queue, entries } = queueOf({
+				sql,
+				jobs,
+				runTimeout: { ms: 250, setTimer: timer.setTimer },
+			});
+
+			const timerSet = timer.set();
+			const running = queue.runDue(NOT_STOPPED);
+			await timerSet;
+			await untilAStatementWaitsForTheLock(observer);
+			timer.expire();
+			await running;
+
+			expect(failuresIn(entries)).toEqual([
+				expect.objectContaining({ reason: "run_timed_out", attempt: 1 }),
+			]);
+			expect(await failureOf(sql)).toEqual([
+				{ state: "pending", attempts: 1, failure_reason: "run_timed_out" },
+			]);
+		},
+	);
+
+	test("is given up once the statement ends when the statement cannot be cancelled, and tells the operator why", async () => {
+		const database = await migratedDatabase();
+		const observer = await connectionHoldingTheRunLock(database);
+		const timer = manualTimer();
+		const jobs = registryOf(waitingForTheRunLock());
+		await enqueueReminder(database.sql, jobs, JOB);
+		const { queue, entries } = queueOf({
+			sql: database.sql,
+			jobs,
+			runTimeout: { ms: 250, setTimer: timer.setTimer },
+		});
+		const notCancelled = () =>
+			entries.filter((entry) => entry.message === "statement not cancelled");
+
+		const timerSet = timer.set();
+		const running = queue.runDue(NOT_STOPPED);
+		await timerSet;
+		await untilAStatementWaitsForTheLock(observer);
+		await refuseNewConnections(database);
+		timer.expire();
+		while (notCancelled().length === 0) await observer`SELECT 1`;
+		await observer`SELECT pg_advisory_unlock(${RUN_LOCK})`;
+		await running;
+
+		expect(notCancelled()).toEqual([
+			expect.objectContaining({
+				jobId: JOB,
+				job: "mailer.sendReminder",
+				attempt: 1,
+				error: expect.objectContaining({ name: "PostgresError" }),
+			}),
+		]);
 		expect(failuresIn(entries)).toEqual([
 			expect.objectContaining({ reason: "run_timed_out", attempt: 1 }),
 		]);
