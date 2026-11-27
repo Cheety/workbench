@@ -55,7 +55,10 @@ export async function recordEvent(
 ): Promise<void> {
 	const name = eventName(publication.definition);
 	const event = events.findEvent(name);
-	if (event === undefined || !name.startsWith(`${publication.publisher}.`))
+	if (
+		event === undefined ||
+		publication.definition.plugin !== publication.publisher
+	)
 		throw new UndeclaredEventError(publication.publisher, name);
 	const payload = await event.validatePayload(publication.payload);
 	if (!payload.valid) throw new InvalidEventPayloadError(name, payload.issues);

@@ -1,6 +1,7 @@
 import {
 	type EventHandlerContext,
 	eventName,
+	eventNameParts,
 	eventSubscriptionCapability,
 	type PublishedEvent,
 	subscribedEventOf,
@@ -43,14 +44,13 @@ export type SubscriptionsRead = {
 
 const EVENT_NAME = /^[A-Z][A-Za-z0-9]*$/;
 
-const PUBLISHER_SEPARATOR = ".";
-
 export function isEventSubscriptionCapability(capability: string): boolean {
 	const event = subscribedEventOf(capability);
-	if (event === undefined) return false;
-	const [publisher, ...name] = event.split(PUBLISHER_SEPARATOR);
+	const parts = event === undefined ? undefined : eventNameParts(event);
 	return (
-		isPluginName(publisher) && EVENT_NAME.test(name.join(PUBLISHER_SEPARATOR))
+		parts !== undefined &&
+		isPluginName(parts.plugin) &&
+		EVENT_NAME.test(parts.name)
 	);
 }
 

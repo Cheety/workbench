@@ -49,15 +49,25 @@ export type EventSubscriptionCapability = {
 
 const EVENT_SUBSCRIPTION_CAPABILITY_PREFIX = "event:";
 
-export function eventName(
-	event: Pick<EventDefinition<unknown>, "plugin" | "name">,
-): string {
-	return `${event.plugin}.${event.name}`;
+type EventNameParts = Pick<EventDefinition<unknown>, "plugin" | "name">;
+
+const EVENT_NAME_SEPARATOR = ".";
+
+export function eventName(event: EventNameParts): string {
+	return `${event.plugin}${EVENT_NAME_SEPARATOR}${event.name}`;
 }
 
-export function eventSubscriptionCapability(
-	event: Pick<EventDefinition<unknown>, "plugin" | "name">,
-): string {
+export function eventNameParts(name: string): EventNameParts | undefined {
+	const separator = name.indexOf(EVENT_NAME_SEPARATOR);
+	return separator === -1
+		? undefined
+		: {
+				plugin: name.slice(0, separator),
+				name: name.slice(separator + EVENT_NAME_SEPARATOR.length),
+			};
+}
+
+export function eventSubscriptionCapability(event: EventNameParts): string {
 	return `${EVENT_SUBSCRIPTION_CAPABILITY_PREFIX}${eventName(event)}`;
 }
 
