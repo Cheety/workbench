@@ -15,7 +15,10 @@ import { quote } from "./quote.ts";
 import { pluginSchemaName } from "./schema-name.ts";
 import type { ValidationIssue } from "./schema-validation.ts";
 import { storedPayloadOf } from "./stored-payload.ts";
-import { runInTransactionWithin } from "./transaction-deadline.ts";
+import {
+	runInTransactionWithin,
+	type TransactionStatements,
+} from "./transaction-deadline.ts";
 
 export class UndeclaredJobError extends Error {
 	constructor(plugin: string, job: string) {
@@ -402,10 +405,10 @@ async function run(
 	);
 	const outcome = await runInTransactionWithin(
 		transaction,
-		async (expired) => {
+		async ({ sql, expired }) => {
 			const call = await callOf(job, claimed);
 			if (expired.aborted) return;
-			await callRun(call, contextOf(transaction, options));
+			await callRun(call, contextOf(sql, options));
 		},
 		{
 			timeout: options.runTimeout,
@@ -598,11 +601,11 @@ function report(
 }
 
 function contextOf(
-	transaction: SQL,
+	sql: TransactionStatements,
 	sources: Pick<JobQueueOptions, "now" | "newId" | "random">,
 ): JobContext {
 	return {
-		sql: transaction,
+		sql,
 		now: sources.now,
 		newId: sources.newId,
 		random: sources.random,

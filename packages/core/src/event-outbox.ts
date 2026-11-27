@@ -18,7 +18,10 @@ import { quote } from "./quote.ts";
 import { pluginSchemaName } from "./schema-name.ts";
 import type { ValidationIssue } from "./schema-validation.ts";
 import { storedPayloadOf } from "./stored-payload.ts";
-import { runInTransactionWithin } from "./transaction-deadline.ts";
+import {
+	runInTransactionWithin,
+	type TransactionStatements,
+} from "./transaction-deadline.ts";
 
 export class UndeclaredEventError extends Error {
 	constructor(publisher: string, event: string) {
@@ -431,9 +434,9 @@ async function handle(
 			await savepoint.unsafe(`SET LOCAL search_path TO "${schema}"`);
 			const outcome = await runInTransactionWithin(
 				savepoint,
-				(expired) =>
+				({ sql, expired }) =>
 					validateAndCallHandler(subscription, event, {
-						ctx: contextOf(savepoint, options),
+						ctx: contextOf(sql, options),
 						expired,
 					}),
 				{
@@ -503,11 +506,11 @@ function publishedEventOf(
 }
 
 function contextOf(
-	transaction: SQL,
+	sql: TransactionStatements,
 	sources: Pick<EventDeliveryOptions, "now" | "newId" | "random">,
 ): EventHandlerContext {
 	return {
-		sql: transaction,
+		sql,
 		now: sources.now,
 		newId: sources.newId,
 		random: sources.random,

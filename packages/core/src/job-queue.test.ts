@@ -24,6 +24,7 @@ import {
 import {
 	createFreshDatabase,
 	type FreshDatabase,
+	PostgresGate,
 	TEST_DATABASE_URL,
 } from "./testing/postgres.ts";
 import { type LogEntry, recordingLogger } from "./testing/recording-logger.ts";
@@ -258,6 +259,21 @@ function waitingForTheRunLock(): SendReminder {
 	});
 }
 
+function cancellationBehindAGate(database: FreshDatabase): {
+	readonly gate: PostgresGate;
+	readonly cancellation: SQL;
+} {
+	const gate = PostgresGate.create(database.url);
+	gate.forward();
+	const cancellation = new SQL(gate.url, { max: 1, prepare: false });
+	cleanups.push(async () => {
+		gate.release();
+		await cancellation.close();
+		gate.close();
+	});
+	return { gate, cancellation };
+}
+
 async function refuseNewConnections(database: FreshDatabase): Promise<void> {
 	const name = new URL(database.url).pathname.slice(1);
 	const admin = new SQL(TEST_DATABASE_URL, { max: 1 });
@@ -484,6 +500,55 @@ describe("a job whose time is up while a statement of its run is running", () =>
 			]);
 		},
 	);
+
+	test("is refused every further statement, so that its failure is stored while the lock it waited for is still held", async () => {
+		const database = await migratedDatabase();
+		const observer = await connectionHoldingTheRunLock(database);
+		const { gate, cancellation } = cancellationBehindAGate(database);
+		await cancellation`SELECT 1`;
+		const timer = manualTimer();
+		const furtherStatement = Promise.withResolvers<unknown>();
+		const jobs = registryOf(
+			sendingReminders(async (_job, ctx) => {
+				await ctx.sql`SAVEPOINT before_the_lock`;
+				await ctx.sql`SELECT pg_advisory_xact_lock(${RUN_LOCK})`.catch(
+					() => {},
+				);
+				furtherStatement.resolve(
+					await ctx.sql`ROLLBACK TO SAVEPOINT before_the_lock`.then(
+						() => "run",
+						(error: unknown) => error,
+					),
+				);
+				await ctx.sql`SELECT pg_advisory_xact_lock(${RUN_LOCK})`;
+			}),
+		);
+		await enqueueReminder(database.sql, jobs, JOB);
+		const { queue, entries } = queueOf({
+			sql: database.sql,
+			cancellation,
+			jobs,
+			runTimeout: { ms: 250, setTimer: timer.setTimer },
+		});
+
+		const timerSet = timer.set();
+		const running = queue.runDue(NOT_STOPPED);
+		await timerSet;
+		await untilAStatementWaitsForTheLock(observer);
+		gate.holdResponses();
+		timer.expire();
+		const refusal = await furtherStatement.promise;
+		gate.release();
+		await running;
+
+		expect(refusal).toMatchObject({ name: "StatementRefusedError" });
+		expect(failuresIn(entries)).toEqual([
+			expect.objectContaining({ reason: "run_timed_out", attempt: 1 }),
+		]);
+		expect(await failureOf(database.sql)).toEqual([
+			{ state: "pending", attempts: 1, failure_reason: "run_timed_out" },
+		]);
+	});
 
 	test("is given up once the statement ends when the statement cannot be cancelled, and tells the operator why", async () => {
 		const database = await migratedDatabase();

@@ -2,7 +2,6 @@ import { SQL } from "bun";
 import { z } from "zod";
 import { describeThrown } from "./failure-reason.ts";
 import {
-	type Hook,
 	type HookOutcome,
 	type HookTimeout,
 	runWithin,
@@ -14,6 +13,23 @@ export type TransactionDeadline = {
 	readonly cancellation: SQL;
 	readonly logger: Logger;
 };
+
+export type TransactionStatements = (
+	strings: TemplateStringsArray,
+	...values: readonly unknown[]
+) => Promise<readonly unknown[]>;
+
+export type TransactionHook = (within: {
+	readonly sql: TransactionStatements;
+	readonly expired: AbortSignal;
+}) => Promise<void>;
+
+export class StatementRefusedError extends Error {
+	constructor() {
+		super("statement refused: the time of its hook is up");
+		this.name = "StatementRefusedError";
+	}
+}
 
 const CANCELLATION_CONNECTION_TIMEOUT_S = 5;
 
@@ -35,15 +51,28 @@ export function openStatementCancellation(
 
 export async function runInTransactionWithin(
 	transaction: SQL,
-	hook: Hook,
+	hook: TransactionHook,
 	{ timeout, cancellation, logger }: TransactionDeadline,
 ): Promise<HookOutcome> {
 	const [row]: unknown[] = await transaction`SELECT pg_backend_pid() AS pid`;
 	const { pid } = backend.parse(row);
-	const outcome = await runWithin(hook, timeout);
+	const outcome = await runWithin(
+		(expired) => hook({ sql: statementsUntil(expired, transaction), expired }),
+		timeout,
+	);
 	if (outcome === "timed_out")
 		await cancelStatementInFlight(cancellation, pid, logger);
 	return outcome;
+}
+
+function statementsUntil(
+	expired: AbortSignal,
+	transaction: SQL,
+): TransactionStatements {
+	return async (strings, ...values) => {
+		if (expired.aborted) throw new StatementRefusedError();
+		return await transaction(strings, ...values);
+	};
 }
 
 async function cancelStatementInFlight(

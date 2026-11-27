@@ -89,6 +89,8 @@ export async function createFreshDatabase(): Promise<FreshDatabase> {
 
 type GateMode = "refusing" | "forwarding" | "silent";
 
+type GateDirection = "requests" | "responses";
+
 type DownstreamState = { upstream: Socket | undefined; pending: Uint8Array[] };
 
 export class PostgresGate {
@@ -96,6 +98,8 @@ export class PostgresGate {
 	readonly #target: URL;
 	#listener: TCPSocketListener<DownstreamState> | undefined;
 	#acceptedConnections = 0;
+	readonly #held = new Set<GateDirection>();
+	readonly #heldBack: (() => void)[] = [];
 
 	private constructor(port: number, target: URL) {
 		this.#port = port;
@@ -136,8 +140,26 @@ export class PostgresGate {
 		this.#switchTo("silent");
 	}
 
+	holdRequests(): void {
+		this.#held.add("requests");
+	}
+
+	holdResponses(): void {
+		this.#held.add("responses");
+	}
+
+	release(): void {
+		this.#held.clear();
+		for (const forward of this.#heldBack.splice(0)) forward();
+	}
+
 	close(): void {
 		this.#switchTo("refusing");
+	}
+
+	#pass(direction: GateDirection, forward: () => void): void {
+		if (this.#held.has(direction)) this.#heldBack.push(forward);
+		else forward();
 	}
 
 	#switchTo(mode: GateMode): void {
@@ -165,8 +187,9 @@ export class PostgresGate {
 									upstream.write(chunk);
 								downstream.data.pending = [];
 							},
-							data(_upstream, chunk) {
-								downstream.write(chunk);
+							data: (_upstream, chunk) => {
+								const bytes = new Uint8Array(chunk);
+								this.#pass("responses", () => downstream.write(bytes));
 							},
 							close() {
 								downstream.end();
@@ -177,9 +200,12 @@ export class PostgresGate {
 						},
 					});
 				},
-				data(downstream, chunk) {
-					if (downstream.data.upstream) downstream.data.upstream.write(chunk);
-					else downstream.data.pending.push(new Uint8Array(chunk));
+				data: (downstream, chunk) => {
+					const bytes = new Uint8Array(chunk);
+					this.#pass("requests", () => {
+						if (downstream.data.upstream) downstream.data.upstream.write(bytes);
+						else downstream.data.pending.push(bytes);
+					});
 				},
 				close(downstream) {
 					downstream.data?.upstream?.end();

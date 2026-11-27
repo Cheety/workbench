@@ -35,6 +35,7 @@ import { CORE_SCHEMA } from "./schema-name.ts";
 import {
 	createFreshDatabase,
 	type FreshDatabase,
+	PostgresGate,
 	TEST_DATABASE_URL,
 } from "./testing/postgres.ts";
 import { type LogEntry, recordingLogger } from "./testing/recording-logger.ts";
@@ -282,6 +283,21 @@ function waitingForTheLock(): EventParticipant {
 	return subscription("search", async (_event, ctx) => {
 		await ctx.sql`SELECT pg_advisory_xact_lock(${HANDLER_LOCK})`;
 	});
+}
+
+function cancellationBehindAGate(database: FreshDatabase): {
+	readonly gate: PostgresGate;
+	readonly cancellation: SQL;
+} {
+	const gate = PostgresGate.create(database.url);
+	gate.forward();
+	const cancellation = new SQL(gate.url, { max: 1, prepare: false });
+	cleanups.push(async () => {
+		gate.release();
+		await cancellation.close();
+		gate.close();
+	});
+	return { gate, cancellation };
 }
 
 async function refuseNewConnections(database: FreshDatabase): Promise<void> {
@@ -916,6 +932,53 @@ describe("a handler whose time is up while a statement of it is running", () => 
 			expect(await attemptsOf(sql, EVENT)).toEqual([{ attempts: 1 }]);
 		},
 	);
+
+	test("is refused every further statement, so that the retry is stored while the lock it waited for is still held", async () => {
+		const database = await migratedDatabase();
+		const observer = await connectionHoldingTheHandlerLock(database);
+		const { gate, cancellation } = cancellationBehindAGate(database);
+		await cancellation`SELECT 1`;
+		const timer = manualTimer();
+		const furtherStatement = Promise.withResolvers<unknown>();
+		const events = registryOf(
+			subscription("search", async (_event, ctx) => {
+				await ctx.sql`SAVEPOINT before_the_lock`;
+				await ctx.sql`SELECT pg_advisory_xact_lock(${HANDLER_LOCK})`.catch(
+					() => {},
+				);
+				furtherStatement.resolve(
+					await ctx.sql`ROLLBACK TO SAVEPOINT before_the_lock`.then(
+						() => "run",
+						(error: unknown) => error,
+					),
+				);
+				await ctx.sql`SELECT pg_advisory_xact_lock(${HANDLER_LOCK})`;
+			}),
+		);
+		await publishLabelRenamed(database.sql, events, EVENT);
+		const { delivery, entries } = deliveryOf({
+			sql: database.sql,
+			cancellation,
+			events,
+			handlerTimeout: { ms: 250, setTimer: timer.setTimer },
+		});
+
+		const timerSet = timer.set();
+		const delivering = delivery.deliverDue(NOT_STOPPED);
+		await timerSet;
+		await untilAStatementWaitsForTheLock(observer);
+		gate.holdResponses();
+		timer.expire();
+		const refusal = await furtherStatement.promise;
+		gate.release();
+		await delivering;
+
+		expect(refusal).toMatchObject({ name: "StatementRefusedError" });
+		expect(failuresIn(entries)).toEqual([
+			expect.objectContaining({ reason: "handler_timed_out", attempt: 1 }),
+		]);
+		expect(await attemptsOf(database.sql, EVENT)).toEqual([{ attempts: 1 }]);
+	});
 
 	test("is given up once the statement ends when the statement cannot be cancelled, and tells the operator why", async () => {
 		const database = await migratedDatabase();
