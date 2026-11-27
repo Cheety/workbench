@@ -26,7 +26,7 @@ export type InstanceStartSteps = {
 
 export type InstanceStart = {
 	status(): StartupStatus;
-	operations(): OperationRegistry;
+	readonly operations: OperationRegistry;
 	run(): Promise<StartedPlugins>;
 	stop(): void;
 };
@@ -84,7 +84,7 @@ export function createInstanceStart(
 
 	return {
 		status: () => status,
-		operations: () => operations,
+		operations: { find: (name) => operations.find(name) },
 		run: () => {
 			running ??= start().catch((error: unknown) => {
 				status = "failed";

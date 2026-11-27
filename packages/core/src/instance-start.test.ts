@@ -232,7 +232,7 @@ describe("operations of an instance", () => {
 
 		void instance.run();
 
-		expect(instance.operations().find("board.renameLabel")).toBeUndefined();
+		expect(instance.operations.find("board.renameLabel")).toBeUndefined();
 	});
 
 	test("are those of the started plugins once they started", async () => {
@@ -248,6 +248,6 @@ describe("operations of an instance", () => {
 
 		await instance.run();
 
-		expect(instance.operations().find("board.renameLabel")).toBe(renameLabel);
+		expect(instance.operations.find("board.renameLabel")).toBe(renameLabel);
 	});
 });

@@ -148,7 +148,7 @@ const server = startServerOrExit({
 		authenticate: (token) => authenticateToken(sql, token, now()),
 		pipeline: createOperationPipeline({
 			sql,
-			registry: { find: (name) => instance.operations().find(name) },
+			registry: instance.operations,
 			now,
 			newId: () => crypto.randomUUID(),
 			random: Math.random,
