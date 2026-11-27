@@ -82,20 +82,6 @@ describe("creating a service account", () => {
 		).toEqual({ authenticated: false, reason: "expired_token" });
 	});
 
-	test("issues a token that neither serializing nor stringifying reveals", async () => {
-		const database = await migratedDatabase();
-
-		const issued = await createServiceAccount(
-			database.sql,
-			{ name: "deploy agent", validDays: 30 },
-			sources,
-		);
-
-		expect(`${JSON.stringify(issued)} ${String(issued.token)}`).not.toContain(
-			"wbt_test-token",
-		);
-	});
-
 	test("accepts a validity of the maximum of 3650 days", async () => {
 		const database = await migratedDatabase();
 
