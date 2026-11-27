@@ -21,7 +21,7 @@ export function discoverPluginPackages(
 			.sort();
 		const found = await Promise.all(
 			directories.map((directory) =>
-				readPackage(join(packagesDirectory, directory)),
+				readPluginPackage(join(packagesDirectory, directory)),
 			),
 		);
 		return {
@@ -31,7 +31,9 @@ export function discoverPluginPackages(
 	};
 }
 
-async function readPackage(root: string): Promise<PluginDiscovery> {
+export async function readPluginPackage(
+	root: string,
+): Promise<PluginDiscovery> {
 	const file = Bun.file(join(root, PACKAGE_JSON));
 	if (!(await file.exists())) return NOTHING;
 	let packageJson: unknown;

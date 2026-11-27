@@ -150,6 +150,56 @@ const renameLabel = defineOperation({
 
 Eine Operation mit unbekannter Art oder unbekanntem Ziel, ohne Recht oder mit mehreren, mit dem Recht eines anderen Plugins, ohne Schema, ohne `execute` oder mit einem Namen, den das Plugin schon deklariert, macht das Plugin ungültig: Es wird nicht geladen (`invalid_manifest`), und `detail` nennt jede fehlerhafte Operation.
 
+### Aufruf einer Operation
+
+Ein Akteur ruft eine Operation mit ihrem Namen, einem Workspace und einer Eingabe auf. Die Pipeline des Cores
+
+1. sucht die Operation unter den Operationen der aktiven Plugins,
+2. prüft die Eingabe gegen das Eingabe-Schema,
+3. öffnet eine Transaktion, für eine `query` nur lesend, mit dem Schema des Plugins als `search_path`,
+4. prüft, dass der Workspace in `core.workspaces` existiert,
+5. führt `execute(input, ctx)` aus; `ctx` nennt `actor`, `workspace`, `sql` (die Transaktion als Tagged Template), `now()`, `newId()` und `random()`,
+6. bildet den Rückgabewert über das Ausgabe-Schema ab und schreibt die Transaktion fest.
+
+Wirft `execute` oder passt die Ausgabe nicht zum Schema, wird die Transaktion zurückgerollt. Ein fachlicher Fehler ist ein `OperationError` aus `@workbench/sdk` mit Art (`not_found`, `conflict`, `rejected`), Code (Kleinbuchstaben, Ziffern, Unterstriche) und einer Meldung für den Aufrufer; der Aufrufer erhält den Code als `<plugin>.<code>`. Jeder andere Fehler erreicht den Aufrufer nur als `internal_error`.
+
+| Code                  | Art             | Bedeutung                                                                                          |
+| --------------------- | --------------- | -------------------------------------------------------------------------------------------------- |
+| `invalid_input`       | `invalid_input` | Die Eingabe passt nicht zum Eingabe-Schema; `issues` nennt je Befund Pfad und Meldung.             |
+| `unknown_operation`   | `not_found`     | Kein aktives Plugin hat eine Operation dieses Namens registriert.                                  |
+| `workspace_not_found` | `not_found`     | Der Workspace existiert nicht.                                                                     |
+| `internal_error`      | `internal`      | `execute` warf einen anderen Fehler als `OperationError`, oder die Ausgabe passt nicht zum Schema. |
+| `<plugin>.<code>`     | aus dem Fehler  | `execute` warf einen `OperationError`.                                                             |
+
+Ein `internal_error` steht mit `correlationId`, `operation` und `reason` im Log als Eintrag `operation failed`: `use_case_failed` mit dem Fehler in `error`, oder `invalid_output` mit den Befunden des Ausgabe-Schemas in `issues`.
+
+Die Pipeline prüft bisher weder Rechte noch Idempotency-Keys und schreibt kein Audit; das folgt mit Identität und Zugriff.
+
+### Test-Harness
+
+Plugins testen ihre Operationen als „Akteur ruft Operation auf“ gegen ein echtes Postgres (ADR-0011). Das Harness aus `@workbench/core/testing` legt eine eigene Datenbank an, migriert `core` und die Schemas der Plugins, aktiviert die Plugins und ruft Operationen über dieselbe Pipeline auf wie die Instanz:
+
+```ts
+import {
+	pluginPackageAt,
+	startOperationHarness,
+} from "@workbench/core/testing";
+
+const harness = await startOperationHarness({
+	plugins: [await pluginPackageAt(join(import.meta.dir, ".."))],
+});
+const workspace = await harness.createWorkspace("Alpha");
+const result = await harness.call({
+	actor: { kind: "user", id: "alice" },
+	workspace,
+	operation: "board.renameLabel",
+	input: { label: "Urgent" },
+});
+await harness.stop();
+```
+
+`result` ist `{ ok: true, output }` oder `{ ok: false, failure }` mit `code`, `kind`, `detail` und `issues`. Ohne Angabe gibt das Harness eine feste Uhr (`2026-11-26T08:00:00.000Z`), fortlaufende IDs im UUID-Format (`00000000-0000-4000-8000-000000000001`, …) und `random()` = `0.5`; `now`, `newId` und `random` lassen sich als Optionen übergeben. Lädt ein Plugin nicht, wirft `startOperationHarness` einen `HarnessStartError` mit dem Ladefehler. `harness.logEntries` enthält die Log-Einträge.
+
 ### Contract
 
 Ein Plugin importiert aus einem anderen Plugin nur dessen Contract (ADR-0004). Ein Plugin-Paket veröffentlicht ihn als Subpath-Export `./contract`, der genau eine Datei nennt:
