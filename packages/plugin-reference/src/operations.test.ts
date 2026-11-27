@@ -16,6 +16,15 @@ afterEach(async () => {
 	harness = undefined;
 });
 
+function issuing(...ids: readonly string[]): () => string {
+	const remaining = ids.values();
+	return () => {
+		const next = remaining.next();
+		if (next.done) throw new Error("no id left to issue");
+		return next.value;
+	};
+}
+
 async function startReference(): Promise<OperationHarness> {
 	harness = await startOperationHarness({
 		plugins: [await pluginPackageAt(join(import.meta.dir, ".."))],
@@ -71,11 +80,17 @@ describe("the notes of the reference plugin", () => {
 		expect(listed).toEqual({ ok: true, output: { notes: [] } });
 	});
 
-	test("list the newest notes first, up to the limit", async () => {
+	test("list the newest notes first, up to the limit, whatever order their ids have", async () => {
 		let minute = 0;
 		harness = await startOperationHarness({
 			plugins: [await pluginPackageAt(join(import.meta.dir, ".."))],
 			now: () => new Date(Date.UTC(2026, 10, 26, 8, minute++)),
+			newId: issuing(
+				"00000000-0000-4000-8000-000000000001",
+				"00000000-0000-4000-8000-000000000005",
+				"00000000-0000-4000-8000-000000000009",
+				"00000000-0000-4000-8000-000000000007",
+			),
 		});
 		const workspace = await harness.createWorkspace("Alpha");
 		for (const title of ["Oldest", "Middle", "Newest"])
