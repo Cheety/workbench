@@ -341,7 +341,9 @@ async function complete(
 ): Promise<void> {
 	const completed: unknown[] = await transaction`
 		UPDATE core.jobs SET state = 'completed', settled_at = ${now}
-		WHERE id = ${claimed.id} AND state = 'pending'
+		WHERE id = ${claimed.id}
+			AND state = 'pending'
+			AND attempts = ${claimed.attempts}
 		RETURNING id`;
 	if (completed.length === 0) throw new SettledElsewhereError();
 }

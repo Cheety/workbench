@@ -326,6 +326,53 @@ describe("a job whose attempt neither completed nor failed", () => {
 	});
 });
 
+describe("a job whose stalled attempt ends while the attempt that took it over still runs", () => {
+	test("keeps what the attempt that took it over wrote, and nothing of the stalled one", async () => {
+		const database = await migratedDatabase();
+		await createMailerSchema(database.sql);
+		const second = new SQL(database.url, { max: 1 });
+		cleanups.push(() => second.close());
+		const stalledEntered = Promise.withResolvers<void>();
+		const takeoverEntered = Promise.withResolvers<void>();
+		const releaseStalled = Promise.withResolvers<void>();
+		const releaseTakeover = Promise.withResolvers<void>();
+		let now = NOW;
+		const jobs = registryOf(
+			sendingReminders(async (job, ctx) => {
+				if (job.attempt === 1) {
+					stalledEntered.resolve();
+					await releaseStalled.promise;
+				} else {
+					takeoverEntered.resolve();
+					await releaseTakeover.promise;
+				}
+				await ctx.sql`INSERT INTO reminder_attempts (attempt) VALUES (${job.attempt})`;
+			}),
+		);
+		await enqueueReminder(database.sql, jobs, JOB);
+		const stalled = queueOf({ sql: database.sql, jobs, now: () => now });
+		const stalledRun = stalled.queue.runDue(NOT_STOPPED);
+		await stalledEntered.promise;
+
+		now = new Date(NOW.getTime() + 70_000);
+		const takeover = queueOf({ sql: second, jobs, now: () => now });
+		const takeoverRun = takeover.queue.runDue(NOT_STOPPED);
+		await takeoverEntered.promise;
+		releaseStalled.resolve();
+		await stalledRun;
+		releaseTakeover.resolve();
+		await takeoverRun;
+
+		const rows: unknown[] =
+			await database.sql`SELECT attempt FROM plugin_mailer.reminder_attempts`;
+		expect([...rows]).toEqual([{ attempt: 2 }]);
+		expect(stalled.entries).toEqual([]);
+		expect(takeover.entries).toEqual([
+			expect.objectContaining({ message: "job completed", attempt: 2 }),
+		]);
+	});
+});
+
 describe("a job whose last attempt neither completed nor failed", () => {
 	test("is dead-lettered once its redelivery deadline has passed, without a further attempt", async () => {
 		const database = await migratedDatabase();
