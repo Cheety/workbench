@@ -99,9 +99,15 @@ export type EventDelivery = {
 
 const RETRY = { baseMs: 1_000, capMs: 300_000 } as const;
 
-const RETENTION_MS = 7 * 86_400_000;
+const MOST_ATTEMPTS = 25;
 
-const MOST_REMOVED_PER_RUN = 1_000;
+const DAY_MS = 86_400_000;
+
+const DELIVERY_DEADLINE_MS = 30 * DAY_MS;
+
+const RETENTION_MS = 7 * DAY_MS;
+
+const MOST_SETTLED_PER_RUN = 1_000;
 
 const REMOVAL_INTERVAL_MS = 3_600_000;
 
@@ -137,6 +143,8 @@ type DeliveryFailure =
 	  }
 	| { readonly reason: "delivery_failed"; readonly error: ThrownError };
 
+const EXPIRED = "delivery_expired";
+
 class HandlerFailedError extends Error {
 	readonly failure: DeliveryFailure;
 
@@ -154,7 +162,7 @@ export function createEventDelivery(
 		...options,
 		retryDelayMs: fullJitterBackoff({ ...RETRY, random: options.random }),
 	};
-	const removeExpiredEvents = expiredEventRemoverOf(options);
+	const keepRetention = retentionKeeperOf(options);
 	return {
 		deliverDue: async (stopSignal) => {
 			if (!options.hasCoreSchema()) return;
@@ -162,28 +170,99 @@ export function createEventDelivery(
 				options.events.subscriptions().length === 0 ? undefined : BEFORE_ALL;
 			while (position !== undefined && !stopSignal.aborted)
 				position = await attemptNext(position, attemptOptions);
-			if (position === undefined) await removeExpiredEvents(options.now());
+			if (position === undefined) await keepRetention(options.now());
 		},
 	};
 }
 
-function expiredEventRemoverOf({
+function retentionKeeperOf({
 	sql,
 	logger,
 }: Pick<EventDeliveryOptions, "sql" | "logger">): (now: Date) => Promise<void> {
 	let restsUntil = Number.NEGATIVE_INFINITY;
-	let resumesFrom: Date | null = null;
+	let expiresFrom: Date | null = null;
+	let removesFrom: Date | null = null;
 	return async (now) => {
 		if (now.getTime() < restsUntil) return;
+		const expired = await expireOverdue(
+			{ sql, logger },
+			{ occurredFrom: expiresFrom, now },
+		);
 		const { removed, latest_occurred_at } = await removeSettled(sql, {
-			occurredFrom: resumesFrom,
+			occurredFrom: removesFrom,
 			settledBy: new Date(now.getTime() - RETENTION_MS),
 		});
-		const mayLeaveMore = removed === MOST_REMOVED_PER_RUN;
-		resumesFrom = mayLeaveMore ? latest_occurred_at : null;
-		if (!mayLeaveMore) restsUntil = now.getTime() + REMOVAL_INTERVAL_MS;
+		const mayLeaveMoreOverdue = expired.count === MOST_SETTLED_PER_RUN;
+		const mayLeaveMoreRemovable = removed === MOST_SETTLED_PER_RUN;
+		expiresFrom = mayLeaveMoreOverdue ? expired.latestOccurredAt : null;
+		removesFrom = mayLeaveMoreRemovable ? latest_occurred_at : null;
+		if (!mayLeaveMoreOverdue && !mayLeaveMoreRemovable)
+			restsUntil = now.getTime() + REMOVAL_INTERVAL_MS;
 		if (removed > 0) logger.debug("settled events removed", { removed });
 	};
+}
+
+const expiry = z.object({
+	subscriber: z.string(),
+	expired: z.number(),
+	latest_occurred_at: z.date(),
+});
+
+type OverdueDeliveries = {
+	readonly occurredFrom: Date | null;
+	readonly now: Date;
+};
+
+type Expiry = {
+	readonly count: number;
+	readonly latestOccurredAt: Date | null;
+};
+
+async function expireOverdue(
+	{ sql, logger }: Pick<EventDeliveryOptions, "sql" | "logger">,
+	{ occurredFrom, now }: OverdueDeliveries,
+): Promise<Expiry> {
+	const rows: unknown[] = await sql`
+		WITH overdue AS (
+			SELECT d.event_id, d.subscriber, e.occurred_at
+			FROM core.events e
+			JOIN core.event_deliveries d ON d.event_id = e.id
+			WHERE e.occurred_at >= coalesce(${occurredFrom}::timestamptz, '-infinity')
+				AND e.occurred_at <= ${deadlinePassedBy(now)}
+				AND d.delivered_at IS NULL
+				AND d.dead_lettered_at IS NULL
+			ORDER BY e.occurred_at
+			LIMIT ${MOST_SETTLED_PER_RUN}
+			FOR UPDATE OF d SKIP LOCKED
+		),
+		expired AS (
+			UPDATE core.event_deliveries d
+			SET dead_lettered_at = ${now}, failure_reason = ${EXPIRED}
+			FROM overdue
+			WHERE d.event_id = overdue.event_id AND d.subscriber = overdue.subscriber
+			RETURNING d.subscriber, overdue.occurred_at
+		)
+		SELECT subscriber, count(*)::integer AS expired, max(occurred_at) AS latest_occurred_at
+		FROM expired
+		GROUP BY subscriber
+		ORDER BY subscriber`;
+	let count = 0;
+	let latestOccurredAt: Date | null = null;
+	for (const row of rows.map((row) => expiry.parse(row))) {
+		logger.error("event deliveries expired", {
+			subscriber: row.subscriber,
+			reason: EXPIRED,
+			expired: row.expired,
+		});
+		count += row.expired;
+		if (latestOccurredAt === null || row.latest_occurred_at > latestOccurredAt)
+			latestOccurredAt = row.latest_occurred_at;
+	}
+	return { count, latestOccurredAt };
+}
+
+function deadlinePassedBy(now: Date): Date {
+	return new Date(now.getTime() - DELIVERY_DEADLINE_MS);
 }
 
 type ExpiredEvents = {
@@ -210,10 +289,10 @@ async function removeSettled(
 				AND NOT EXISTS (
 					SELECT FROM core.event_deliveries d
 					WHERE d.event_id = e.id
-						AND (d.delivered_at IS NULL OR d.delivered_at > ${settledBy})
+						AND coalesce(d.delivered_at, d.dead_lettered_at, 'infinity') > ${settledBy}
 				)
 			ORDER BY e.occurred_at
-			LIMIT ${MOST_REMOVED_PER_RUN}
+			LIMIT ${MOST_SETTLED_PER_RUN}
 			FOR UPDATE OF e SKIP LOCKED
 		),
 		removed_deliveries AS (
@@ -246,7 +325,10 @@ type Attempt =
 			readonly failure: DeliveryFailure;
 			readonly retry: Retry;
 	  }
+	| { readonly outcome: "dead_lettered"; readonly failure: DeliveryFailure }
 	| { readonly outcome: "settled_elsewhere" };
+
+const SETTLED_ELSEWHERE: Attempt = { outcome: "settled_elsewhere" };
 
 async function attemptNext(
 	after: Position,
@@ -291,7 +373,9 @@ async function findNextDue(
 			JOIN core.events e ON e.id = d.event_id
 			WHERE d.subscriber = active.subscriber
 				AND d.delivered_at IS NULL
+				AND d.dead_lettered_at IS NULL
 				AND d.next_attempt_at <= ${now}
+				AND e.occurred_at > ${deadlinePassedBy(now)}
 				AND d.event_sequence >= ${after.sequence}::bigint
 				AND (d.event_sequence, d.subscriber) > (${after.sequence}::bigint, ${after.subscriber})
 				AND EXISTS (
@@ -312,14 +396,11 @@ async function attempt(
 	now: Date,
 	options: AttemptOptions,
 ): Promise<Attempt> {
-	const retryOf = (): Retry => {
-		const inMs = options.retryDelayMs(due.attempts);
-		return { at: new Date(now.getTime() + inMs), inMs };
-	};
+	const failed = { delivery: due, now, retryDelayMs: options.retryDelayMs };
 	try {
 		return await options.sql.begin(async (transaction): Promise<Attempt> => {
 			const details = await claim(transaction, due);
-			if (details === undefined) return { outcome: "settled_elsewhere" };
+			if (details === undefined) return SETTLED_ELSEWHERE;
 			const failure = await handle(
 				transaction,
 				subscription,
@@ -330,16 +411,34 @@ async function attempt(
 				await markDelivered(transaction, due, now);
 				return { outcome: "delivered" };
 			}
-			return postpone(transaction, due, failure, retryOf());
+			return settleFailed(transaction, failed, failure);
 		});
 	} catch (error) {
-		return postpone(
-			options.sql,
-			due,
-			{ reason: "delivery_failed", error: describeThrown(error) },
-			retryOf(),
-		);
+		return settleFailed(options.sql, failed, {
+			reason: "delivery_failed",
+			error: describeThrown(error),
+		});
 	}
+}
+
+type FailedAttempt = {
+	readonly delivery: DueDelivery;
+	readonly now: Date;
+	readonly retryDelayMs: (attempt: number) => number;
+};
+
+function settleFailed(
+	sql: SQL,
+	{ delivery, now, retryDelayMs }: FailedAttempt,
+	failure: DeliveryFailure,
+): Promise<Attempt> {
+	if (delivery.attempts + 1 >= MOST_ATTEMPTS)
+		return deadLetter(sql, delivery, failure, now);
+	const inMs = retryDelayMs(delivery.attempts);
+	return postpone(sql, delivery, failure, {
+		at: new Date(now.getTime() + inMs),
+		inMs,
+	});
 }
 
 async function claim(
@@ -353,6 +452,7 @@ async function claim(
 		WHERE d.event_id = ${due.id}
 			AND d.subscriber = ${due.subscriber}
 			AND d.delivered_at IS NULL
+			AND d.dead_lettered_at IS NULL
 			AND d.attempts = ${due.attempts}
 		FOR UPDATE OF d SKIP LOCKED`;
 	return row === undefined ? undefined : eventDetails.parse(row);
@@ -380,11 +480,34 @@ async function postpone(
 		WHERE event_id = ${delivery.id}
 			AND subscriber = ${delivery.subscriber}
 			AND delivered_at IS NULL
+			AND dead_lettered_at IS NULL
 			AND attempts = ${delivery.attempts}
 		RETURNING event_id`;
 	return postponed.length === 0
-		? { outcome: "settled_elsewhere" }
+		? SETTLED_ELSEWHERE
 		: { outcome: "postponed", failure, retry };
+}
+
+async function deadLetter(
+	sql: SQL,
+	delivery: DueDelivery,
+	failure: DeliveryFailure,
+	now: Date,
+): Promise<Attempt> {
+	const deadLettered: unknown[] = await sql`
+		UPDATE core.event_deliveries
+		SET attempts = ${delivery.attempts + 1},
+			dead_lettered_at = ${now},
+			failure_reason = ${failure.reason}
+		WHERE event_id = ${delivery.id}
+			AND subscriber = ${delivery.subscriber}
+			AND delivered_at IS NULL
+			AND dead_lettered_at IS NULL
+			AND attempts = ${delivery.attempts}
+		RETURNING event_id`;
+	return deadLettered.length === 0
+		? SETTLED_ELSEWHERE
+		: { outcome: "dead_lettered", failure };
 }
 
 function loggerOf(
@@ -413,6 +536,12 @@ function report(
 				...attempt.failure,
 				attempt: delivery.attempts + 1,
 				retryInMs: attempt.retry.inMs,
+			});
+			return;
+		case "dead_lettered":
+			deliveryLogger.error("event dead-lettered", {
+				...attempt.failure,
+				attempt: delivery.attempts + 1,
 			});
 			return;
 		case "settled_elsewhere":

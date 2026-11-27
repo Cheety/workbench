@@ -1169,7 +1169,7 @@ describe("a settled event", () => {
 });
 
 describe("an event with a delivery that is still open", () => {
-	test("stays in the outbox with all its deliveries, however long ago the others were delivered", async () => {
+	test("stays in the outbox with all its deliveries until its delivery deadline, however long ago the others were delivered", async () => {
 		const database = await migratedDatabase();
 		const archive = subscription("archive", async () => {});
 		const search = subscription("search", async () => {});
@@ -1184,17 +1184,311 @@ describe("an event with a delivery that is still open", () => {
 		await whileArchiveIsNotActive(NOW).delivery.deliverDue(NOT_STOPPED);
 
 		await whileArchiveIsNotActive(
-			new Date(NOW.getTime() + 365 * DAY_MS),
+			new Date(NOW.getTime() + DELIVERY_DEADLINE_MS - 1),
 		).delivery.deliverDue(NOT_STOPPED);
 
-		const deliveries: unknown[] = await database.sql`
-			SELECT subscriber, delivered_at FROM core.event_deliveries
-			WHERE event_id = ${EVENT}
-			ORDER BY subscriber`;
-		expect([...deliveries]).toEqual([
-			{ subscriber: "archive", delivered_at: null },
-			{ subscriber: "search", delivered_at: NOW },
+		expect(await deliveriesOf(database.sql, EVENT)).toEqual([
+			{
+				subscriber: "archive",
+				attempts: 0,
+				delivered_at: null,
+				dead_lettered_at: null,
+				failure_reason: null,
+			},
+			{
+				subscriber: "search",
+				attempts: 0,
+				delivered_at: NOW,
+				dead_lettered_at: null,
+				failure_reason: null,
+			},
 		]);
+	});
+});
+
+const MOST_ATTEMPTS = 25;
+
+const DELIVERY_DEADLINE_MS = 30 * DAY_MS;
+
+async function deliveriesOf(sql: SQL, eventId: string): Promise<unknown[]> {
+	const rows: unknown[] = await sql`
+		SELECT subscriber, attempts, delivered_at, dead_lettered_at, failure_reason
+		FROM core.event_deliveries
+		WHERE event_id = ${eventId}
+		ORDER BY subscriber`;
+	return [...rows];
+}
+
+function deadLettersIn(entries: readonly LogEntry[]): LogEntry[] {
+	return entries.filter((entry) => entry.message === "event dead-lettered");
+}
+
+function expiriesIn(entries: readonly LogEntry[]): LogEntry[] {
+	return entries.filter(
+		(entry) => entry.message === "event deliveries expired",
+	);
+}
+
+async function insertLabelRenamedOpenFor(
+	sql: SQL,
+	subscriber: string,
+	occurredAt: Date,
+	count: number,
+): Promise<void> {
+	await sql`
+		WITH recorded AS (
+			INSERT INTO core.events (id, name, version, occurred_at, workspace_id, payload)
+			SELECT gen_random_uuid(), 'board.LabelRenamed', 1, ${occurredAt}, ${WORKSPACE}, '{"labelId": "label-1"}'::jsonb
+			FROM generate_series(1, ${count})
+			RETURNING id, sequence
+		)
+		INSERT INTO core.event_deliveries (event_id, event_sequence, subscriber, next_attempt_at)
+		SELECT id, sequence, ${subscriber}, ${occurredAt}
+		FROM recorded`;
+}
+
+describe("a delivery whose handler keeps failing", () => {
+	test("is dead-lettered with the reason of its last attempt after 25 attempts, and not attempted again", async () => {
+		const database = await migratedDatabase();
+		const clock = adjustableClock(NOW);
+		let attempts = 0;
+		const events = registryOf(
+			subscription("search", async () => {
+				attempts += 1;
+				throw new Error("the index is locked");
+			}),
+		);
+		await publishLabelRenamed(database.sql, events, EVENT);
+		const { delivery, entries } = deliveryOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			events,
+			now: clock.now,
+		});
+
+		for (let run = 0; run <= MOST_ATTEMPTS; run += 1) {
+			await delivery.deliverDue(NOT_STOPPED);
+			clock.advanceBy(ONE_HOUR_MS);
+		}
+
+		expect(attempts).toBe(MOST_ATTEMPTS);
+		expect(failuresIn(entries)).toHaveLength(MOST_ATTEMPTS - 1);
+		expect(deadLettersIn(entries)).toEqual([
+			{
+				time: "2026-11-26T08:00:00.000Z",
+				level: "error",
+				message: "event dead-lettered",
+				eventId: EVENT,
+				event: "board.LabelRenamed",
+				subscriber: "search",
+				reason: "handler_threw",
+				error: expect.objectContaining({ message: "the index is locked" }),
+				attempt: MOST_ATTEMPTS,
+			},
+		]);
+		expect(await deliveriesOf(database.sql, EVENT)).toEqual([
+			{
+				subscriber: "search",
+				attempts: MOST_ATTEMPTS,
+				delivered_at: null,
+				dead_lettered_at: new Date(
+					NOW.getTime() + (MOST_ATTEMPTS - 1) * ONE_HOUR_MS,
+				),
+				failure_reason: "handler_threw",
+			},
+		]);
+	});
+
+	test("is dead-lettered when its last attempt fails outside its handler", async () => {
+		const database = await migratedDatabase();
+		const events = registryOf(
+			subscribing("search", labelRenamedWithBrokenSchema, async () => {}),
+		);
+		await publishLabelRenamed(database.sql, events, EVENT);
+		await database.sql`
+			UPDATE core.event_deliveries SET attempts = ${MOST_ATTEMPTS - 1}
+			WHERE event_id = ${EVENT}`;
+		const { delivery, entries } = deliveryOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			events,
+		});
+
+		await delivery.deliverDue(NOT_STOPPED);
+
+		expect(failuresIn(entries)).toEqual([]);
+		expect(deadLettersIn(entries)).toEqual([
+			expect.objectContaining({
+				eventId: EVENT,
+				reason: "delivery_failed",
+				error: expect.objectContaining({ message: "the schema is broken" }),
+				attempt: MOST_ATTEMPTS,
+			}),
+		]);
+		expect(await deliveriesOf(database.sql, EVENT)).toEqual([
+			expect.objectContaining({
+				attempts: MOST_ATTEMPTS,
+				dead_lettered_at: NOW,
+				failure_reason: "delivery_failed",
+			}),
+		]);
+	});
+});
+
+describe("a delivery that is still open when its delivery deadline has passed", () => {
+	test("is dead-lettered as expired for a plugin that is not active, and the operator is told how many per subscriber", async () => {
+		const database = await migratedDatabase();
+		const archive = subscription("archive", async () => {});
+		const search = subscription("search", async () => {});
+		await publishLabelRenamed(database.sql, registryOf(search, archive), EVENT);
+		await publishLabelRenamed(
+			database.sql,
+			registryOf(search, archive),
+			LATER_EVENT,
+		);
+		const whileNeitherIsActive = (now: Date) =>
+			deliveryOf({
+				sql: database.sql,
+				cancellation: database.cancellation,
+				events: registryOf(subscription("statistics", async () => {})),
+				now: () => now,
+			});
+		const justBefore = whileNeitherIsActive(
+			new Date(NOW.getTime() + DELIVERY_DEADLINE_MS - 1),
+		);
+		const onTheDay = whileNeitherIsActive(
+			new Date(NOW.getTime() + DELIVERY_DEADLINE_MS),
+		);
+
+		await justBefore.delivery.deliverDue(NOT_STOPPED);
+		const openJustBefore = await deliveriesOf(database.sql, EVENT);
+		await onTheDay.delivery.deliverDue(NOT_STOPPED);
+
+		expect(openJustBefore).toEqual([
+			expect.objectContaining({
+				subscriber: "archive",
+				dead_lettered_at: null,
+			}),
+			expect.objectContaining({ subscriber: "search", dead_lettered_at: null }),
+		]);
+		expect(await deliveriesOf(database.sql, EVENT)).toEqual([
+			{
+				subscriber: "archive",
+				attempts: 0,
+				delivered_at: null,
+				dead_lettered_at: new Date(NOW.getTime() + DELIVERY_DEADLINE_MS),
+				failure_reason: "delivery_expired",
+			},
+			{
+				subscriber: "search",
+				attempts: 0,
+				delivered_at: null,
+				dead_lettered_at: new Date(NOW.getTime() + DELIVERY_DEADLINE_MS),
+				failure_reason: "delivery_expired",
+			},
+		]);
+		expect(expiriesIn(justBefore.entries)).toEqual([]);
+		expect(expiriesIn(onTheDay.entries)).toEqual([
+			{
+				time: "2026-11-26T08:00:00.000Z",
+				level: "error",
+				message: "event deliveries expired",
+				subscriber: "archive",
+				reason: "delivery_expired",
+				expired: 2,
+			},
+			{
+				time: "2026-11-26T08:00:00.000Z",
+				level: "error",
+				message: "event deliveries expired",
+				subscriber: "search",
+				reason: "delivery_expired",
+				expired: 2,
+			},
+		]);
+	});
+
+	test("is not attempted any more for an active plugin", async () => {
+		const database = await migratedDatabase();
+		const handled: string[] = [];
+		const events = registryOf(
+			subscription("search", async (event) => {
+				handled.push(event.id);
+			}),
+		);
+		await publishLabelRenamed(database.sql, events, EVENT);
+
+		await deliveryOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			events,
+			now: () => new Date(NOW.getTime() + DELIVERY_DEADLINE_MS),
+		}).delivery.deliverDue(NOT_STOPPED);
+
+		expect(handled).toEqual([]);
+		expect(await deliveriesOf(database.sql, EVENT)).toEqual([
+			expect.objectContaining({
+				delivered_at: null,
+				failure_reason: "delivery_expired",
+			}),
+		]);
+	});
+
+	test("is dead-lettered a thousand in a run of the delivery, and the rest in the next run", async () => {
+		const database = await migratedDatabase();
+		await insertLabelRenamedOpenFor(
+			database.sql,
+			"archive",
+			new Date(NOW.getTime() - DELIVERY_DEADLINE_MS),
+			1_001,
+		);
+		const { delivery, entries } = deliveryOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			events: searchSubscribing(),
+		});
+
+		await delivery.deliverDue(NOT_STOPPED);
+		const expiredInTheFirstRun = expiriesIn(entries).map(
+			({ expired }) => expired,
+		);
+		await delivery.deliverDue(NOT_STOPPED);
+
+		expect(expiredInTheFirstRun).toEqual([1_000]);
+		expect(expiriesIn(entries).map(({ expired }) => expired)).toEqual([
+			1_000, 1,
+		]);
+	});
+});
+
+describe("an event whose deliveries were dead-lettered", () => {
+	test("is removed from the outbox 7 days after its last delivery was dead-lettered, and not before", async () => {
+		const database = await migratedDatabase();
+		await publishLabelRenamed(
+			database.sql,
+			registryOf(subscription("archive", async () => {})),
+			EVENT,
+		);
+		const at = (now: Date) =>
+			deliveryOf({
+				sql: database.sql,
+				cancellation: database.cancellation,
+				events: searchSubscribing(),
+				now: () => now,
+			});
+		const deadLetteredAt = NOW.getTime() + DELIVERY_DEADLINE_MS;
+		await at(new Date(deadLetteredAt)).delivery.deliverDue(NOT_STOPPED);
+
+		await at(new Date(deadLetteredAt + 7 * DAY_MS - 1)).delivery.deliverDue(
+			NOT_STOPPED,
+		);
+		const rowsJustBefore = await countRows(database.sql);
+		await at(new Date(deadLetteredAt + 7 * DAY_MS)).delivery.deliverDue(
+			NOT_STOPPED,
+		);
+
+		expect(rowsJustBefore).toEqual({ events: 1, deliveries: 1 });
+		expect(await countRows(database.sql)).toEqual({ events: 0, deliveries: 0 });
 	});
 });
 

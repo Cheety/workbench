@@ -71,8 +71,12 @@ Die Tabellen des Cores, in die eine Mutation ihre Events in ihrer eigenen Transa
 _Avoid_: Queue (die Job-Queue ist die der Jobs), Event-Bus, Event-Store
 
 **Zustellung**:
-Der Aufruf des Event-Handlers genau eines abonnierenden Plugins mit genau einem Event; sie gelingt mindestens einmal.
+Der Aufruf des Event-Handlers genau eines abonnierenden Plugins mit genau einem Event; sie gelingt mindestens einmal oder landet nach ihrem letzten Versuch oder ihrer Zustellfrist im Dead-Letter.
 _Avoid_: Dispatch, Auslieferung, Benachrichtigung
+
+**Zustellfrist**:
+Die Zeit ab dem Event, nach der der Core eine noch offene Zustellung nicht mehr versucht und in den Dead-Letter legt, auch an ein Plugin, das nicht aktiv ist.
+_Avoid_: TTL, Ablaufzeit, Wiederzustellungsfrist (das ist die eines begonnenen Versuchs eines Jobs)
 
 **Job**:
 Hintergrundarbeit eines Plugins, die eine Mutation oder ein Zeitplan einreiht und die der Core nach dem Festschreiben außerhalb der Anfrage ausführt, mindestens einmal.
@@ -91,11 +95,11 @@ Die Tabelle des Cores, in die eine Mutation ihre Jobs in ihrer eigenen Transakti
 _Avoid_: Outbox (das ist die der Events), Warteschlange, Scheduler
 
 **Versuch**:
-Eine Ausführung eines Jobs; sie gelingt, scheitert oder überschreitet ihre Frist, und ein Job hat nur eine begrenzte Zahl davon.
+Eine Ausführung eines Jobs oder ein Aufruf des Event-Handlers für eine Zustellung; sie gelingt, scheitert oder überschreitet ihre Frist, und ein Job wie eine Zustellung hat nur eine begrenzte Zahl davon.
 _Avoid_: Retry (das ist die Wiederholung, also jeder Versuch nach dem ersten), Run, Durchlauf
 
 **Dead-Letter**:
-Die Ablage der Jobs, deren letzter Versuch gescheitert ist; der Core führt sie nicht mehr aus, es sei denn, ein Betreiber reiht sie wieder ein, und löscht sie 30 Tage, nachdem sie dort gelandet sind.
+Die Ablage der Jobs und Zustellungen, die der Core aufgegeben hat, nach ihrem letzten gescheiterten Versuch oder, bei einer Zustellung, nach ihrer Zustellfrist; der Core versucht sie nicht mehr, es sei denn, ein Betreiber reiht sie wieder ein, und löscht einen Job 30 Tage, eine Zustellung samt ihrem Event frühestens 7 Tage, nachdem sie dort gelandet sind.
 _Avoid_: Fehlerliste, Papierkorb, Failed Jobs
 
 **Wiederzustellungsfrist**:
