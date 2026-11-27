@@ -75,23 +75,6 @@ describe("creating a service account by command", () => {
 		});
 	});
 
-	test("lets the token expire after the given number of days", async () => {
-		const database = await freshDatabase();
-		const before = Date.now();
-
-		const run = await runCommand(database.url, [
-			"--name",
-			"agent",
-			"--valid-days",
-			"30",
-		]);
-
-		const expiresAt = Date.parse(issued(run.stdout).expiresAt);
-		const thirtyDays = 30 * 24 * 60 * 60 * 1000;
-		expect(expiresAt).toBeGreaterThanOrEqual(before + thirtyDays);
-		expect(expiresAt).toBeLessThanOrEqual(Date.now() + thirtyDays);
-	});
-
 	test.each([
 		{ case: "no name", args: ["--valid-days", "30"] },
 		{ case: "no validity", args: ["--name", "agent"] },

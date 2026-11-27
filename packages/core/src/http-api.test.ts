@@ -82,7 +82,7 @@ const ledger: PluginPackage = {
 type ApiInstance = {
 	readonly database: FreshDatabase;
 	readonly logEntries: readonly LogEntry[];
-	issueToken(expiresAt: Date): Promise<string>;
+	issueToken(): Promise<string>;
 	setClock(now: Date): void;
 	post(
 		path: string,
@@ -159,11 +159,11 @@ async function startApiInstance(): Promise<ApiInstance> {
 	return {
 		database,
 		logEntries: entries,
-		issueToken: async (expiresAt) => {
+		issueToken: async () => {
 			issuedTokens += 1;
 			const issued = await createServiceAccount(
 				database.sql,
-				{ name: `agent ${issuedTokens}`, expiresAt },
+				{ name: `agent ${issuedTokens}`, validDays: 30 },
 				{
 					now: () => clock,
 					newId,
@@ -195,7 +195,7 @@ function bearer(token: string): Record<string, string> {
 describe("an operation called over HTTP", () => {
 	test("answers a mutation with its output when the token is valid", async () => {
 		const api = await startApiInstance();
-		const token = await api.issueToken(IN_A_MONTH);
+		const token = await api.issueToken();
 
 		const response = await api.post(
 			operationPath("ledger.addEntry"),
@@ -212,7 +212,7 @@ describe("an operation called over HTTP", () => {
 
 	test("answers a query with what a mutation wrote before", async () => {
 		const api = await startApiInstance();
-		const token = await api.issueToken(IN_A_MONTH);
+		const token = await api.issueToken();
 		await api.post(
 			operationPath("ledger.addEntry"),
 			JSON.stringify({ amount: 42 }),
@@ -239,7 +239,7 @@ describe("a call without a valid token", () => {
 			case: "a token in another scheme",
 			reason: "missing_token",
 			headers: async (api: ApiInstance) => ({
-				Authorization: `Basic ${await api.issueToken(IN_A_MONTH)}`,
+				Authorization: `Basic ${await api.issueToken()}`,
 			}),
 		},
 		{
@@ -251,7 +251,7 @@ describe("a call without a valid token", () => {
 			case: "an expired token",
 			reason: "expired_token",
 			headers: async (api: ApiInstance) => {
-				const token = await api.issueToken(IN_A_MONTH);
+				const token = await api.issueToken();
 				api.setClock(IN_A_MONTH);
 				return bearer(token);
 			},
@@ -294,7 +294,7 @@ describe("a call without a valid token", () => {
 
 	test("leaves the operation unexecuted", async () => {
 		const api = await startApiInstance();
-		const token = await api.issueToken(IN_A_MONTH);
+		const token = await api.issueToken();
 
 		await api.post(
 			operationPath("ledger.addEntry"),
@@ -314,7 +314,7 @@ describe("a call without a valid token", () => {
 describe("a failing call over HTTP", () => {
 	test("answers with the problem details of the failure", async () => {
 		const api = await startApiInstance();
-		const token = await api.issueToken(IN_A_MONTH);
+		const token = await api.issueToken();
 
 		const response = await api.post(
 			operationPath("ledger.addEntry"),
@@ -337,7 +337,7 @@ describe("a failing call over HTTP", () => {
 
 	test("answers 400 problem details when the body is not JSON", async () => {
 		const api = await startApiInstance();
-		const token = await api.issueToken(IN_A_MONTH);
+		const token = await api.issueToken();
 
 		const response = await api.post(
 			operationPath("ledger.addEntry"),
@@ -354,7 +354,7 @@ describe("a failing call over HTTP", () => {
 
 	test("answers 413 problem details when the body exceeds 1 MiB", async () => {
 		const api = await startApiInstance();
-		const token = await api.issueToken(IN_A_MONTH);
+		const token = await api.issueToken();
 
 		const response = await api.post(
 			operationPath("ledger.addEntry"),
@@ -371,7 +371,7 @@ describe("a failing call over HTTP", () => {
 
 	test("accepts a body of exactly 1 MiB", async () => {
 		const api = await startApiInstance();
-		const token = await api.issueToken(IN_A_MONTH);
+		const token = await api.issueToken();
 		const body = JSON.stringify({ amount: 42, padding: "" });
 
 		const response = await api.post(
@@ -396,7 +396,7 @@ describe("a failing call over HTTP", () => {
 		"answers 400 problem details when the $case in the path is not valid percent-encoding",
 		async ({ path }) => {
 			const api = await startApiInstance();
-			const token = await api.issueToken(IN_A_MONTH);
+			const token = await api.issueToken();
 
 			const response = await api.post(
 				path,
@@ -414,7 +414,7 @@ describe("a failing call over HTTP", () => {
 
 	test("answers 400 problem details when the workspace in the path is not a UUID", async () => {
 		const api = await startApiInstance();
-		const token = await api.issueToken(IN_A_MONTH);
+		const token = await api.issueToken();
 
 		const response = await api.post(
 			"/api/workspaces/accounts/operations/ledger.addEntry",
@@ -431,7 +431,7 @@ describe("a failing call over HTTP", () => {
 
 	test("answers 404 problem details for an operation no plugin registered", async () => {
 		const api = await startApiInstance();
-		const token = await api.issueToken(IN_A_MONTH);
+		const token = await api.issueToken();
 
 		const response = await api.post(
 			operationPath("ledger.closeBook"),
@@ -445,7 +445,7 @@ describe("a failing call over HTTP", () => {
 
 	test("answers an internal error neutrally and keeps the details in the log", async () => {
 		const api = await startApiInstance();
-		const token = await api.issueToken(IN_A_MONTH);
+		const token = await api.issueToken();
 
 		const response = await api.post(
 			operationPath("ledger.addEntry"),

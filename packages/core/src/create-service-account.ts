@@ -21,8 +21,6 @@ const USAGE =
 
 const MAX_VALID_DAYS = 3650;
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 const CONNECTION_TIMEOUT_MS = 10_000;
 
 const STATEMENT_TIMEOUT_MS = 60_000;
@@ -126,7 +124,7 @@ const created = await createServiceAccount(
 	sql,
 	{
 		name: wanted.name,
-		expiresAt: new Date(now().getTime() + wanted.validDays * DAY_MS),
+		validDays: wanted.validDays,
 	},
 	{
 		now,
