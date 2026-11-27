@@ -17,6 +17,9 @@ Die ID eines Audit-Eintrags kommt aus einer eigenen Quelle der Pipeline (`newAud
 ## Consequences
 
 - Das Recht `core.audit.read` ist für den Instanz-Admin gedacht und wird keiner Rolle zugeordnet. Solange Rechte nicht durchgesetzt werden, darf jeder Akteur mit gültigem Token das Audit jedes Workspaces lesen; mit der Rechteprüfung ist die Operation von selbst für alle anderen gesperrt.
+- Das Ziel eines Eintrags ist bisher immer der Workspace. Eine Operation mit dem Ziel `object` nennt ihr Objekt erst, wenn es ein Objekt-Register gibt; es kommt dann als weitere Spalte dazu, die leer sein darf.
+- Das Audit lässt sich nur je Workspace lesen, weil jede Operation auf einem Workspace aufgerufen wird (ADR-0013). Eine Sicht über die ganze Instanz braucht Operationen ohne Workspace, die es noch nicht gibt.
+- Der Zeitpunkt eines Eintrags entsteht vor dem Festschreiben. Schreibt eine Mutation später fest als eine jüngere, erscheint ihr Eintrag nachträglich zwischen bereits gelesenen; wer rückwärts blättert, sieht ihn erst beim nächsten Durchgang von vorn.
 - Ein API-Token oder Workspace, auf den ein Audit-Eintrag verweist, lässt sich nicht löschen. Widerruf und Archivierung müssen die Zeile behalten.
 - Das Audit wächst mit jeder Mutation und hat noch keine Aufbewahrungsfrist; sie folgt mit der Entscheidung, wie lange ein Mandant seine Nachweise braucht.
 - Ein Plugin mit Datenbankzugriff schreibt im selben Transaktionsobjekt wie der Core. Dass es `core.audit_entries` nicht anfasst, sichern wie bei jedem fremden Schema ADR-0003 und die Review, nicht Postgres.

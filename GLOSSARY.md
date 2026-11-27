@@ -129,7 +129,7 @@ Ein einmaliger, befristeter Link, über den ein neuer Nutzer mit einer festgeleg
 _Avoid_: Invite-Code, Registrierung
 
 **Audit**:
-Der unveränderliche Nachweis der Instanz, welcher Akteur mit welchem API-Token welche Operation auf welchem Workspace ausgeführt hat.
+Der Nachweis der Instanz, welcher Akteur mit welchem API-Token welche Operation auf welchem Workspace ausgeführt hat.
 _Avoid_: Audit-Log, Protokoll, History
 
 **Audit-Eintrag**:
