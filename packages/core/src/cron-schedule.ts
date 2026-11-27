@@ -2,6 +2,7 @@ import { quote } from "./quote.ts";
 
 export type CronSchedule = {
 	nextAfter(time: Date): Date;
+	latestUpTo(time: Date): Date;
 };
 
 export type CronScheduleRead =
@@ -101,14 +102,15 @@ export function readCronSchedule(expression: unknown): CronScheduleRead {
 function scheduleOf(expression: string, fields: Fields): CronScheduleRead {
 	if (findNextAfter(fields, new Date(0)) === undefined)
 		return invalid("never falls due");
+	const found = (due: Date | undefined): Date => {
+		if (due === undefined) throw new CronScheduleNeverDueError(expression);
+		return due;
+	};
 	return {
 		valid: true,
 		schedule: {
-			nextAfter: (time) => {
-				const next = findNextAfter(fields, time);
-				if (next === undefined) throw new CronScheduleNeverDueError(expression);
-				return next;
-			},
+			nextAfter: (time) => found(findNextAfter(fields, time)),
+			latestUpTo: (time) => found(findLatestUpTo(fields, time)),
 		},
 	};
 }
@@ -164,6 +166,28 @@ function findNextAfter(fields: Fields, time: Date): Date | undefined {
 		else if (!fields.hours.has(hour))
 			candidate = Date.UTC(year, month, day, hour + 1);
 		else if (!fields.minutes.has(at.getUTCMinutes())) candidate += MINUTE_MS;
+		else return at;
+	}
+	return undefined;
+}
+
+function findLatestUpTo(fields: Fields, time: Date): Date | undefined {
+	const start = Math.floor(time.getTime() / MINUTE_MS) * MINUTE_MS;
+	const horizon = start - SEARCH_HORIZON_MS;
+	let candidate = start;
+	while (candidate >= horizon) {
+		const at = new Date(candidate);
+		const year = at.getUTCFullYear();
+		const month = at.getUTCMonth();
+		const day = at.getUTCDate();
+		const hour = at.getUTCHours();
+		if (!fields.months.has(month + 1))
+			candidate = Date.UTC(year, month, 1) - MINUTE_MS;
+		else if (!isDueOnDay(fields, at))
+			candidate = Date.UTC(year, month, day) - MINUTE_MS;
+		else if (!fields.hours.has(hour))
+			candidate = Date.UTC(year, month, day, hour) - MINUTE_MS;
+		else if (!fields.minutes.has(at.getUTCMinutes())) candidate -= MINUTE_MS;
 		else return at;
 	}
 	return undefined;

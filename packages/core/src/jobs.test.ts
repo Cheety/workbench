@@ -583,18 +583,19 @@ describe("a cron job", () => {
 		]);
 	});
 
-	test("runs once for the time it fell due while no instance ran, not for each time it missed", async () => {
+	test("catches up on the times it fell due since the due jobs were last run", async () => {
 		const clock = adjustableClock("2026-11-27T09:00:30.000Z");
 		const digests = recordingDigests();
 		const harness = await start([digests.plugin], { now: clock.now });
 
 		await harness.runJobs();
-		clock.advanceBy(ONE_HOUR_MS);
+		clock.advanceBy(12 * ONE_MINUTE_MS);
 		await harness.runJobs();
 		await harness.runJobs();
 
 		expect(digests.run.map((job) => job.dueAt)).toEqual([
 			new Date("2026-11-27T09:05:00.000Z"),
+			new Date("2026-11-27T09:10:00.000Z"),
 		]);
 	});
 

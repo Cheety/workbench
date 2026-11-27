@@ -101,6 +101,61 @@ describe("a cron schedule", () => {
 
 	test.each([
 		[
+			"the start of the minute within a minute",
+			"* * * * *",
+			"2026-11-27T09:00:30.500Z",
+			"2026-11-27T09:00:00.000Z",
+		],
+		[
+			"the very time when it is due then",
+			"*/5 * * * *",
+			"2026-11-27T09:05:00.000Z",
+			"2026-11-27T09:05:00.000Z",
+		],
+		[
+			"a time of day on the day before while it has not come yet",
+			"30 2 * * *",
+			"2026-11-27T02:29:00.000Z",
+			"2026-11-26T02:30:00.000Z",
+		],
+		[
+			"a day of the month earlier in the month",
+			"0 0 1 * *",
+			"2026-11-27T09:00:00.000Z",
+			"2026-11-01T00:00:00.000Z",
+		],
+		[
+			"a weekday before the weekend",
+			"0 9 * * 1-5",
+			"2026-11-29T12:00:00.000Z",
+			"2026-11-27T09:00:00.000Z",
+		],
+		[
+			"a day of the month or a day of the week when both are given",
+			"0 0 13 * 5",
+			"2026-11-27T09:00:00.000Z",
+			"2026-11-27T00:00:00.000Z",
+		],
+		[
+			"the last minute of the year before",
+			"59 23 31 12 *",
+			"2026-11-27T09:00:00.000Z",
+			"2025-12-31T23:59:00.000Z",
+		],
+		[
+			"a leap day years back",
+			"0 0 29 2 *",
+			"2026-11-27T09:00:00.000Z",
+			"2024-02-29T00:00:00.000Z",
+		],
+	])("was last due at %s", (_case, expression, upTo, expected) => {
+		const schedule = scheduleOf(expression);
+
+		expect(schedule.latestUpTo(new Date(upTo))).toEqual(new Date(expected));
+	});
+
+	test.each([
+		[
 			"that is not text",
 			42,
 			"must be a cron expression of five fields: minute, hour, day of month, month and day of week",

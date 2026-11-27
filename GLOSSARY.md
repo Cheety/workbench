@@ -79,7 +79,7 @@ Hintergrundarbeit eines Plugins, die eine Mutation oder ein Zeitplan einreiht un
 _Avoid_: Task, Hintergrundaufgabe, Worker
 
 **Cron-Job**:
-Ein Job, den keine Mutation einreiht, sondern ein Zeitplan, den das Plugin deklariert; er läuft zu jeder Fälligkeit genau einmal.
+Ein Job, den keine Mutation einreiht, sondern ein Zeitplan, den das Plugin deklariert; er läuft für eine Fälligkeit höchstens einmal und für jede, solange nicht mehr als zehn verstreichen, ohne dass der Core sie einreiht.
 _Avoid_: Scheduled Task, Timer, Geplanter Job
 
 **Fälligkeit**:

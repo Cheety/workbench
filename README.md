@@ -396,11 +396,15 @@ export const sendDigest = defineCronJob({
 
 Ein Zeitplan, der nicht diese Form hat oder nie fällig wird (`0 0 30 2 *`), macht das Plugin ungültig (`invalid_manifest`).
 
-Der Core reiht jede Fälligkeit im Voraus ein: Sieht ein Durchgang, dass für einen Cron-Job die nächste Fälligkeit noch nicht in `core.jobs` steht, schreibt er sie mit `due_at` dorthin, und der Job läuft, sobald sie erreicht ist. Je Cron-Job und Fälligkeit gibt es höchstens eine Zeile (`UNIQUE (name, due_at)`); laufen zwei Prozesse gegen dieselbe Datenbank, legt nur einer sie an und nur einer führt sie aus. Von da an ist sie ein Job wie jeder andere, mit Versuchen, Wartezeit, Frist und Dead-Letter.
+Der Core reiht jede Fälligkeit im Voraus ein: Ein Durchgang schreibt für jeden Cron-Job die nächste Fälligkeit nach dem Jetzt mit `due_at` nach `core.jobs`, und der Job läuft, sobald sie erreicht ist. Je Cron-Job und Fälligkeit gibt es höchstens eine Zeile (`UNIQUE (name, due_at)`); laufen zwei Prozesse gegen dieselbe Datenbank, legt nur einer sie an und nur einer führt sie aus. Von da an ist sie ein Job wie jeder andere, mit Versuchen, Wartezeit, Frist und Dead-Letter.
 
-- Läuft zu einer Fälligkeit keine Instanz, wird sie nachgeholt, sobald wieder eine läuft, aber nur diese eine: Die Fälligkeiten, die währenddessen verstrichen sind, entfallen. `dueAt` nennt die nachgeholte.
-- Ein neuer Cron-Job läuft zum ersten Mal zur ersten Fälligkeit nach dem Start, an dem er aktiv wurde, nicht rückwirkend.
-- Eine bereits eingereihte Fälligkeit bleibt bestehen, wenn sich der Zeitplan ändert, und läuft noch einmal nach dem alten.
+Dabei schließt der Core an die jüngste Fälligkeit an, die schon in `core.jobs` steht, nicht an das Jetzt. Sind seit ihr Fälligkeiten verstrichen, ohne eingereiht zu werden, weil ein Durchgang länger dauerte als der Abstand zweier Fälligkeiten oder weil keine Instanz lief, reiht er sie nach, höchstens die zehn jüngsten; `dueAt` nennt jeweils die Fälligkeit, für die der Job läuft.
+
+- Solange je Cron-Job nicht mehr als zehn Fälligkeiten zwischen zwei Durchgängen verstreichen, läuft er für jede genau einmal, auch wenn ein Durchgang oder ein Stillstand sie überdeckt.
+- Verstreichen mehr, etwa bei `* * * * *` nach einer Stunde Stillstand, läuft er für die eine, die schon eingereiht war, und für die zehn jüngsten; die dazwischen entfallen ohne Log-Eintrag. Ein Cron-Job, der keine auslassen darf, rechnet von `dueAt` aus selbst nach.
+- Die Nachgeholten laufen nacheinander, die älteste zuerst, sobald eine Instanz läuft.
+- Ein neuer Cron-Job läuft zum ersten Mal zur ersten Fälligkeit nach dem Start, an dem er aktiv wurde, nicht rückwirkend. War er früher schon einmal aktiv und steht noch eine Fälligkeit von damals in `core.jobs`, gilt sie als die jüngste, und er holt bis zu zehn nach.
+- Eine bereits eingereihte Fälligkeit bleibt bestehen, wenn sich der Zeitplan ändert, und läuft noch einmal nach dem alten; nachgeholt wird nach dem neuen.
 - Eine Wiederholung kann sich mit der nächsten Fälligkeit überschneiden; `dueAt` und `id` unterscheiden die beiden.
 
 ### Test-Harness
@@ -430,7 +434,7 @@ await harness.stop();
 
 Events stellt das Harness nicht von selbst zu: `await harness.deliverEvents()` ruft die Handler aller fälligen Zustellungen auf und kehrt zurück, wenn jede einmal versucht ist. Eine gescheiterte Zustellung wird erst wieder fällig, wenn die Uhr des Harness (`now`) weiter ist als ihre Wartezeit.
 
-Auch Jobs führt das Harness nicht von selbst aus: `await harness.runJobs()` versucht jeden fälligen Job einmal und kehrt dann zurück. Ein gescheiterter Job wird erst wieder fällig, wenn die Uhr des Harness (`now`) weiter ist als seine Wartezeit; ein Test stellt die Uhr vor, statt zu warten. Für einen Cron-Job reiht der erste Aufruf die nächste Fälligkeit nach der Uhr des Harness ein; ist die Uhr danach bei ihr angekommen, führt der nächste Aufruf ihn aus.
+Auch Jobs führt das Harness nicht von selbst aus: `await harness.runJobs()` versucht jeden fälligen Job einmal und kehrt dann zurück. Ein gescheiterter Job wird erst wieder fällig, wenn die Uhr des Harness (`now`) weiter ist als seine Wartezeit; ein Test stellt die Uhr vor, statt zu warten. Für einen Cron-Job reiht der erste Aufruf die nächste Fälligkeit nach der Uhr des Harness ein; ist die Uhr danach bei ihr angekommen, führt der nächste Aufruf ihn aus, auch für die Fälligkeiten, über die der Test die Uhr hinweggestellt hat, höchstens die zehn jüngsten.
 
 Das Referenz-Plugin bietet so die Mutation `reference.createNote` (Eingabe `title`, 1 bis 200 Zeichen nach Entfernen von Leerraum am Rand) und die Query `reference.listNotes` (Eingabe `limit`, 1 bis 100; die neuesten zuerst), beide auf den Notizen eines Workspaces in `plugin_reference.notes`. `reference.createNote` publiziert das Event `reference.NoteCreated` (Version 1, Payload `noteId`), dessen Definition `noteCreated` im Contract des Plugins liegt (siehe [Events](#events)). Seine Tests in `packages/plugin-reference/src/operations.test.ts` zeigen das Harness im Einsatz.
 

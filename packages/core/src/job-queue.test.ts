@@ -568,6 +568,102 @@ describe("a job that fails", () => {
 	});
 });
 
+function everyMinute(run: Date[]): JobRegistry {
+	return registerJobs(
+		readJobs("mailer", {
+			jobs: undefined,
+			cronJobs: [
+				defineCronJob({
+					name: "sendDigest",
+					schedule: "* * * * *",
+					maxAttempts: 3,
+					run: async (job) => {
+						run.push(job.dueAt);
+					},
+				}),
+			],
+		}).value,
+	);
+}
+
+describe("a cron job whose due times pass before a run of the queue enqueues them", () => {
+	test("runs for each due time since the last one that was enqueued, when a run of the queue took longer than its period", async () => {
+		const database = await migratedDatabase();
+		const run: Date[] = [];
+		let now = new Date("2026-11-27T12:00:30.000Z");
+		const { queue } = queueOf({
+			sql: database.sql,
+			jobs: everyMinute(run),
+			now: () => now,
+		});
+
+		await queue.runDue(NOT_STOPPED);
+		now = new Date("2026-11-27T12:02:05.000Z");
+		await queue.runDue(NOT_STOPPED);
+		now = new Date("2026-11-27T12:03:00.000Z");
+		await queue.runDue(NOT_STOPPED);
+
+		expect(run).toEqual([
+			new Date("2026-11-27T12:01:00.000Z"),
+			new Date("2026-11-27T12:02:00.000Z"),
+			new Date("2026-11-27T12:03:00.000Z"),
+		]);
+	});
+
+	test("runs for the one that was enqueued and for the ten latest it missed, however many passed while no instance ran", async () => {
+		const database = await migratedDatabase();
+		const run: Date[] = [];
+		let now = new Date("2026-11-27T12:00:30.000Z");
+		const { queue } = queueOf({
+			sql: database.sql,
+			jobs: everyMinute(run),
+			now: () => now,
+		});
+
+		await queue.runDue(NOT_STOPPED);
+		now = new Date("2026-12-04T12:00:30.000Z");
+		await queue.runDue(NOT_STOPPED);
+		await queue.runDue(NOT_STOPPED);
+
+		expect(run).toEqual([
+			new Date("2026-11-27T12:01:00.000Z"),
+			new Date("2026-12-04T11:51:00.000Z"),
+			new Date("2026-12-04T11:52:00.000Z"),
+			new Date("2026-12-04T11:53:00.000Z"),
+			new Date("2026-12-04T11:54:00.000Z"),
+			new Date("2026-12-04T11:55:00.000Z"),
+			new Date("2026-12-04T11:56:00.000Z"),
+			new Date("2026-12-04T11:57:00.000Z"),
+			new Date("2026-12-04T11:58:00.000Z"),
+			new Date("2026-12-04T11:59:00.000Z"),
+			new Date("2026-12-04T12:00:00.000Z"),
+		]);
+	});
+
+	test("runs for the due times another process left out, not again for those it enqueued", async () => {
+		const database = await migratedDatabase();
+		const second = new SQL(database.url, { max: 1 });
+		cleanups.push(() => second.close());
+		const run: Date[] = [];
+		const jobs = everyMinute(run);
+		let now = new Date("2026-11-27T12:00:30.000Z");
+		const first = queueOf({ sql: database.sql, jobs, now: () => now });
+		const other = queueOf({ sql: second, jobs, now: () => now });
+
+		await first.queue.runDue(NOT_STOPPED);
+		now = new Date("2026-11-27T12:01:00.000Z");
+		await first.queue.runDue(NOT_STOPPED);
+		now = new Date("2026-11-27T12:03:10.000Z");
+		await other.queue.runDue(NOT_STOPPED);
+
+		expect(run).toEqual([
+			new Date("2026-11-27T12:01:00.000Z"),
+			new Date("2026-11-27T12:02:00.000Z"),
+			new Date("2026-11-27T12:03:00.000Z"),
+		]);
+	});
+});
+
 describe("a cron job of an instance with two processes", () => {
 	test("is scheduled and run once for each time it falls due", async () => {
 		const database = await migratedDatabase();

@@ -81,6 +81,8 @@ const RETRY = { baseMs: 5_000, capMs: 3_600_000 } as const;
 
 const SHORTEST_RETRY_MS = 1;
 
+const MOST_CAUGHT_UP_DUE_TIMES = 10;
+
 const claimedJob = z.object({
 	id: z.string(),
 	name: z.string(),
@@ -188,14 +190,45 @@ function dueCronJobEnqueuerOf({
 	return async (now) => {
 		for (const job of jobs.cronJobs()) {
 			if (isEnqueuedBeyond(job, now)) continue;
-			const dueAt = job.schedule.nextAfter(now);
+			const next = job.schedule.nextAfter(now);
+			const dueTimes = [...(await missedDueTimes(sql, job, now)), next];
 			await sql`
 				INSERT INTO core.jobs (id, name, due_at, enqueued_at, next_attempt_at)
-				VALUES (${newJobId()}, ${job.name}, ${dueAt}, ${now}, ${dueAt})
+				SELECT due.id, ${job.name}, due.at::timestamptz, ${now}, due.at::timestamptz
+				FROM unnest(
+					${sql.array(
+						dueTimes.map(() => newJobId()),
+						"UUID",
+					)}::uuid[],
+					${sql.array(
+						dueTimes.map((dueAt) => dueAt.toISOString()),
+						"TEXT",
+					)}::text[]
+				) AS due (id, at)
 				ON CONFLICT (name, due_at) DO NOTHING`;
-			enqueuedDue.set(job.name, dueAt.getTime());
+			enqueuedDue.set(job.name, next.getTime());
 		}
 	};
+}
+
+const latestDueTime = z.object({ latest: z.date().nullable() });
+
+async function missedDueTimes(
+	sql: SQL,
+	job: RegisteredCronJob,
+	now: Date,
+): Promise<readonly Date[]> {
+	const [row]: unknown[] = await sql`
+		SELECT max(due_at) AS latest FROM core.jobs WHERE name = ${job.name}`;
+	const { latest } = latestDueTime.parse(row);
+	if (latest === null) return [];
+	const missed: Date[] = [];
+	let due = job.schedule.latestUpTo(now);
+	while (due > latest && missed.length < MOST_CAUGHT_UP_DUE_TIMES) {
+		missed.push(due);
+		due = job.schedule.latestUpTo(new Date(due.getTime() - 1));
+	}
+	return missed.toReversed();
 }
 
 async function claimNext(
