@@ -13,6 +13,10 @@ import { type HookTimeout, runWithin } from "./hook-timeout.ts";
 import { type LoadFailure, LoadFailures } from "./load-failures.ts";
 import type { Logger } from "./logger.ts";
 import {
+	type OperationRegistry,
+	registerOperations,
+} from "./operation-registry.ts";
+import {
 	catalogPlugins,
 	type PluginDiscovery,
 	type PluginPackage,
@@ -57,6 +61,7 @@ export type DeactivationOutcome = "clean" | "incomplete";
 export type RunningPlugins = {
 	readonly active: readonly string[];
 	readonly failures: readonly LoadFailure[];
+	readonly operations: OperationRegistry;
 	deactivate(): Promise<DeactivationOutcome>;
 };
 
@@ -87,6 +92,9 @@ export async function startPlugins(
 	return {
 		active: activeNames,
 		failures: failures.all,
+		operations: registerOperations(
+			active.flatMap((plugin) => plugin.operations),
+		),
 		deactivate: () => {
 			deactivation ??= deactivate(active, options);
 			return deactivation;

@@ -88,7 +88,7 @@ Kann ein Plugin nicht geladen werden, startet die Instanz trotzdem. Das Log nenn
 
 | `reason`                 | Bedeutung                                                                                             |
 | ------------------------ | ----------------------------------------------------------------------------------------------------- |
-| `invalid_manifest`       | Manifest oder Paketversion ungültig, Einstieg nicht ladbar oder Name anders als im Paket.             |
+| `invalid_manifest`       | Manifest, Operationen oder Paketversion ungültig, Einstieg nicht ladbar, Name anders als im Paket.    |
 | `load_timed_out`         | Der Einstieg des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` geladen.                  |
 | `unknown_plugin`         | In `PLUGINS` genannt, aber kein Plugin-Paket stellt das Plugin bereit.                                |
 | `duplicate_plugin`       | Mehrere Plugin-Pakete deklarieren denselben Plugin-Namen; keines davon wird geladen.                  |
@@ -126,6 +126,29 @@ Seine SQL-Migrationen liegen in einem Verzeichnis des Plugin-Pakets, das die `pa
 - Jeder Migrationslauf (erst `core`, dann die Schemas der Plugins) hält dieselbe Postgres-Advisory-Lock. Starten zwei Prozesse gleichzeitig, wartet der zweite (Log-Eintrag `migration lock held by another run, waiting`) und wendet nichts doppelt an. Ein Signal beendet das Warten; eine laufende Migration läuft zu Ende, weitere beginnen nicht. Jede Anweisung eines Laufs darf höchstens 60 s dauern, das Warten auf Tabellensperren eingeschlossen; dauert sie länger, schlägt die Migration fehl (`migration failed`) und der Lauf gibt die Lock frei (Begründung in ADR-0008).
 - Schlägt eine Migration fehl, wird sie zurückgerollt; die folgenden Migrationen desselben Schemas laufen nicht, die anderer Schemas schon. Das Log nennt Schema, Migration und Fehler (`migration failed`), das Plugin wird nicht geladen (`migration_failed`), und die Instanz meldet nicht „bereit“.
 - Nennt die `package.json` Migrationen, deklariert das Manifest aber nicht `database`, ist das Manifest ungültig.
+
+### Operationen
+
+Ein Plugin deklariert seine Operationen in `definePlugin({ manifest, operations })`, jede mit `defineOperation()` aus `@workbench/sdk`:
+
+```ts
+const renameLabel = defineOperation({
+	name: "renameLabel",
+	kind: "mutation",
+	target: "workspace",
+	right: "board.label.edit",
+	input: z.object({ label: z.string().min(1) }),
+	output: z.object({ label: z.string() }),
+	execute: async (input, ctx) => ({ label: input.label }),
+});
+```
+
+- `name` ist Verb und Objekt in camelCase (`createLabel`). Die Registry vergibt den Namen `<plugin>.<name>`, hier `board.renameLabel`.
+- `kind` ist `query` (nur lesen) oder `mutation`, `target` ist `object` oder `workspace`.
+- `right` nennt genau ein Recht des eigenen Plugins: `<plugin>.` gefolgt von Abschnitten aus Kleinbuchstaben, Ziffern und Bindestrichen, durch Punkte getrennt (`board.label.edit`).
+- `input` und `output` sind Schemas nach [Standard Schema](https://standardschema.dev), etwa von zod 4 (ADR-0010).
+
+Eine Operation mit unbekannter Art oder unbekanntem Ziel, ohne Recht oder mit mehreren, mit dem Recht eines anderen Plugins, ohne Schema, ohne `execute` oder mit einem Namen, den das Plugin schon deklariert, macht das Plugin ungültig: Es wird nicht geladen (`invalid_manifest`), und `detail` nennt jede fehlerhafte Operation.
 
 ### Contract
 

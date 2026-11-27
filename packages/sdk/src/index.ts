@@ -1,3 +1,7 @@
+import type { OperationDefinition } from "./operation.ts";
+
+export * from "./operation.ts";
+
 export const DATABASE_CAPABILITY = "database";
 
 export type DatabaseCapability = {
@@ -16,6 +20,7 @@ export type PluginContext = {
 
 export type PluginDefinition = {
 	readonly manifest: PluginManifest;
+	readonly operations?: readonly OperationDefinition<unknown, unknown>[];
 	activate?(ctx: PluginContext): void | Promise<void>;
 	deactivate?(): void | Promise<void>;
 };

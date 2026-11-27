@@ -1,0 +1,55 @@
+export type InputIssue = {
+	readonly path: readonly (string | number)[];
+	readonly message: string;
+};
+
+export type Validation =
+	| { readonly valid: true; readonly value: unknown }
+	| { readonly valid: false; readonly issues: readonly InputIssue[] };
+
+export type Validator = (value: unknown) => Promise<Validation>;
+
+export class InvalidSchemaResultError extends Error {
+	constructor() {
+		super("the schema returned a result that is not a Standard Schema result");
+		this.name = "InvalidSchemaResultError";
+	}
+}
+
+const UNNAMED_ISSUE = "invalid value";
+
+export function validatorOf(schema: unknown): Validator | undefined {
+	if (!isRecord(schema)) return undefined;
+	const standard = schema["~standard"];
+	if (!isRecord(standard)) return undefined;
+	const validate = standard.validate;
+	if (typeof validate !== "function") return undefined;
+	return async (value) => {
+		const result: unknown = await validate.call(standard, value);
+		return readResult(result);
+	};
+}
+
+function readResult(result: unknown): Validation {
+	if (!isRecord(result)) throw new InvalidSchemaResultError();
+	if (result.issues === undefined) return { valid: true, value: result.value };
+	if (!Array.isArray(result.issues)) throw new InvalidSchemaResultError();
+	return { valid: false, issues: result.issues.map(readIssue) };
+}
+
+function readIssue(issue: unknown): InputIssue {
+	if (!isRecord(issue)) return { path: [], message: UNNAMED_ISSUE };
+	return {
+		path: Array.isArray(issue.path) ? issue.path.map(readPathSegment) : [],
+		message: typeof issue.message === "string" ? issue.message : UNNAMED_ISSUE,
+	};
+}
+
+function readPathSegment(segment: unknown): string | number {
+	const key = isRecord(segment) ? segment.key : segment;
+	return typeof key === "number" ? key : String(key);
+}
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}

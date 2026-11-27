@@ -1,4 +1,8 @@
 import { DATABASE_CAPABILITY, type PluginContext } from "@workbench/sdk";
+import {
+	type RegisteredOperation,
+	readOperations,
+} from "./operation-registry.ts";
 import { quote } from "./quote.ts";
 import type { Migration } from "./schema-migrations.ts";
 import { MAX_PLUGIN_NAME_LENGTH } from "./schema-name.ts";
@@ -26,6 +30,7 @@ export type ValidPlugin = {
 	readonly version: string;
 	readonly requires: ReadonlyMap<string, string>;
 	readonly capabilities: readonly string[];
+	readonly operations: readonly RegisteredOperation[];
 	loadMigrations(): Promise<readonly Migration[]>;
 	activate(ctx: PluginContext): Promise<void>;
 	deactivate(): Promise<void>;
@@ -57,6 +62,7 @@ export function validatePlugin(
 		definition.manifest,
 		offeredCapabilities,
 	);
+	const operations = readOperations(declaredName, definition.operations);
 	const problems = [
 		...nameProblems(definition.manifest, declaredName),
 		...requires.problems,
@@ -64,6 +70,7 @@ export function validatePlugin(
 		...migrationProblems(loadMigrations, capabilities.value),
 		...hookProblems(definition, "activate"),
 		...hookProblems(definition, "deactivate"),
+		...operations.problems,
 	];
 	if (!isSemVerVersion(version))
 		problems.push("package.json version must be a SemVer version");
@@ -77,6 +84,7 @@ export function validatePlugin(
 			version,
 			requires: requires.value,
 			capabilities: capabilities.value,
+			operations: operations.value,
 			loadMigrations: loadMigrations ?? (async () => []),
 			activate: async (ctx) => {
 				if (typeof definition.activate === "function")

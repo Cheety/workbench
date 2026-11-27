@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+	defineOperation,
 	definePlugin,
 	type PluginContext,
 	type PluginDefinition,
 } from "@workbench/sdk";
+import { z } from "zod";
 import { Secret } from "./config.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import {
@@ -1925,5 +1927,149 @@ describe("plugin schemas in Postgres", () => {
 			"plugin_sticky_notes",
 		]);
 		expect(tables.map((row) => row.table_name)).toEqual(["notes"]);
+	});
+});
+
+const createCard = defineOperation({
+	name: "createCard",
+	kind: "mutation",
+	target: "workspace",
+	right: "board.card.create",
+	input: z.object({ title: z.string() }),
+	output: z.object({ id: z.string() }),
+	execute: async () => ({ id: "card-1" }),
+});
+
+const listCards = defineOperation({
+	name: "listCards",
+	kind: "query",
+	target: "workspace",
+	right: "board.card.read",
+	input: z.object({}),
+	output: z.object({ ids: z.array(z.string()) }),
+	execute: async () => ({ ids: [] }),
+});
+
+describe("operations of plugins", () => {
+	test("are registered under the plugin name and the name of the operation", async () => {
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: { name: "board" },
+						operations: [createCard, listCards],
+					}),
+				),
+			],
+			enabledPlugins: ["board"],
+		});
+
+		expect(plugins.operations.names).toEqual([
+			"board.createCard",
+			"board.listCards",
+		]);
+	});
+
+	test("are not registered for a plugin that is not loaded", async () => {
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: { name: "board", requires: { missing: "^1.0.0" } },
+						operations: [createCard],
+					}),
+				),
+			],
+			enabledPlugins: ["board"],
+		});
+
+		expect(plugins.operations.names).toEqual([]);
+	});
+
+	test.each([
+		[
+			"an operation name declared twice",
+			[createCard, listCards, { ...listCards, right: "board.card.list" }],
+			'operation "board.listCards" is declared more than once',
+		],
+		[
+			"an operation without a right",
+			[{ ...createCard, right: undefined }],
+			'operation "board.createCard" must name exactly one right of plugin "board", such as "board.workspace.edit"',
+		],
+		[
+			"an operation with several rights",
+			[{ ...createCard, right: ["board.card.create", "board.card.edit"] }],
+			'operation "board.createCard" must name exactly one right of plugin "board", such as "board.workspace.edit"',
+		],
+		[
+			"an operation with a right of another plugin",
+			[{ ...createCard, right: "chat.message.send" }],
+			'operation "board.createCard" must name exactly one right of plugin "board", such as "board.workspace.edit"',
+		],
+		[
+			"an operation name that is not a verb and an object in camelCase",
+			[{ ...createCard, name: "create-card" }],
+			'operations[0].name must be a verb and an object in camelCase, such as "renameWorkspace"',
+		],
+		[
+			"an operation of unknown kind",
+			[{ ...createCard, kind: "command" }],
+			'operation "board.createCard" must be of kind "query" or "mutation"',
+		],
+		[
+			"an operation with an unknown target",
+			[{ ...createCard, target: "instance" }],
+			'operation "board.createCard" must target "object" or "workspace"',
+		],
+		[
+			"an operation without an input schema",
+			[{ ...createCard, input: { title: "string" } }],
+			'operation "board.createCard" must declare its input as a schema',
+		],
+		[
+			"an operation without an output schema",
+			[{ ...createCard, output: undefined }],
+			'operation "board.createCard" must declare its output as a schema',
+		],
+		[
+			"an operation that cannot be executed",
+			[{ ...createCard, execute: "INSERT" }],
+			'operation "board.createCard" must have an execute function',
+		],
+		[
+			"operations that are not a list",
+			{ createCard },
+			"operations must be a list of operations",
+		],
+		[
+			"an operation that is not an object",
+			["createCard"],
+			"operations[0] must be an operation",
+		],
+	])("rejects a plugin with %s", async (_case, operations, problem) => {
+		const { plugins } = await start({
+			packages: [
+				{
+					packageName: "@workbench/plugin-board",
+					pluginName: "board",
+					version: "1.0.0",
+					loadDefinition: async () => ({
+						manifest: { name: "board" },
+						operations,
+					}),
+				},
+			],
+			enabledPlugins: ["board"],
+		});
+
+		expect(plugins.failures).toEqual([
+			{
+				plugin: "board",
+				reason: "invalid_manifest",
+				detail: `plugin package "@workbench/plugin-board" has an invalid manifest: ${problem}`,
+			},
+		]);
+		expect(plugins.operations.names).toEqual([]);
 	});
 });
