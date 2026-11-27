@@ -54,6 +54,7 @@ export function startEventDeliveryLoop(
 		}
 		cancelPoll();
 		running = run();
+		void running;
 	}
 
 	waitForPoll();
