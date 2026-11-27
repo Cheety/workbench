@@ -3,6 +3,7 @@ import {
 	type DatabaseCapability,
 	type PluginContext,
 } from "@workbench/sdk";
+import { CORE_OPERATIONS } from "./core-operations.ts";
 import {
 	describeThrown,
 	summarize,
@@ -92,9 +93,10 @@ export async function startPlugins(
 	return {
 		active: activeNames,
 		failures: failures.all,
-		operations: registerOperations(
-			active.flatMap((plugin) => plugin.operations),
-		),
+		operations: registerOperations([
+			...CORE_OPERATIONS,
+			...active.flatMap((plugin) => plugin.operations),
+		]),
 		deactivate: () => {
 			deactivation ??= deactivate(active, options);
 			return deactivation;

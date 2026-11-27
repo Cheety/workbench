@@ -128,6 +128,14 @@ _Avoid_: Superuser, Root
 Ein einmaliger, befristeter Link, über den ein neuer Nutzer mit einer festgelegten Mitgliedschaft in die Instanz kommt.
 _Avoid_: Invite-Code, Registrierung
 
+**Audit**:
+Der unveränderliche Nachweis der Instanz, welcher Akteur mit welchem API-Token welche Operation auf welchem Workspace ausgeführt hat.
+_Avoid_: Audit-Log, Protokoll, History
+
+**Audit-Eintrag**:
+Der Nachweis genau eines Vorgangs im Audit, z. B. einer gelungenen Mutation: Akteur, API-Token, Operation, Ziel, Zeitpunkt und Ergebnis.
+_Avoid_: Log-Eintrag (das ist eine Zeile im Log für den Betreiber), Audit-Event, Audit-Record
+
 ## Zusammenarbeit
 
 **Presence**:

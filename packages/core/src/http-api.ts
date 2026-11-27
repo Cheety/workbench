@@ -85,6 +85,7 @@ export async function answerApiRequest(
 	const result = await api.pipeline.invoke({
 		operation,
 		actor: authentication.actor,
+		apiTokenId: authentication.apiTokenId,
 		workspace,
 		input: input.value,
 		correlationId,

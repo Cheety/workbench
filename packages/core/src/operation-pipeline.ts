@@ -6,6 +6,7 @@ import {
 	type OperationKind,
 } from "@workbench/sdk";
 import type { SQL } from "bun";
+import { type NewAuditEntry, recordAuditEntry } from "./audit.ts";
 import { describeThrown } from "./failure-reason.ts";
 import type { Logger } from "./logger.ts";
 import {
@@ -26,6 +27,7 @@ import { workspaceExists } from "./workspaces.ts";
 export type OperationCall = {
 	readonly operation: string;
 	readonly actor: Actor;
+	readonly apiTokenId: string | null;
 	readonly workspace: string;
 	readonly input: unknown;
 	readonly correlationId: string;
@@ -49,6 +51,7 @@ export type OperationPipelineOptions = {
 	readonly registry: OperationRegistry;
 	readonly now: () => Date;
 	readonly newId: () => string;
+	readonly newAuditEntryId: () => string;
 	readonly random: () => number;
 	readonly logger: Logger;
 };
@@ -131,11 +134,17 @@ async function invoke(
 			options.sql,
 			async (transaction) => {
 				await requireWorkspace(transaction, call.workspace);
-				return execute(
+				const executed = await execute(
 					operation,
 					input.value,
 					contextOf(call, transaction, options),
 				);
+				if (IS_AUDITED[operation.kind])
+					await recordAuditEntry(
+						transaction,
+						auditEntryOf(call, operation, options),
+					);
+				return executed;
 			},
 		);
 		return { ok: true, output };
@@ -150,6 +159,11 @@ const BEGIN_TRANSACTION: Record<
 > = {
 	query: (sql, body) => sql.begin("read only", body),
 	mutation: (sql, body) => sql.begin(body),
+};
+
+const IS_AUDITED: Record<OperationKind, boolean> = {
+	query: false,
+	mutation: true,
 };
 
 function inTransaction(
@@ -194,6 +208,21 @@ function contextOf(
 		now: sources.now,
 		newId: sources.newId,
 		random: sources.random,
+	};
+}
+
+function auditEntryOf(
+	call: OperationCall,
+	operation: RegisteredOperation,
+	sources: Pick<OperationPipelineOptions, "now" | "newAuditEntryId">,
+): NewAuditEntry {
+	return {
+		id: sources.newAuditEntryId(),
+		occurredAt: sources.now(),
+		actor: call.actor,
+		apiTokenId: call.apiTokenId,
+		operation: operation.name,
+		workspace: call.workspace,
 	};
 }
 

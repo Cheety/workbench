@@ -64,6 +64,10 @@ const FIXED_NOW = new Date("2026-11-26T08:00:00.000Z");
 
 const FIXED_RANDOM = 0.5;
 
+const OPERATION_ID_GROUP = "8000";
+
+const AUDIT_ENTRY_ID_GROUP = "a000";
+
 const NOT_STOPPED = new AbortController().signal;
 
 const HOOK_TIMEOUT_MS = 10_000;
@@ -134,12 +138,13 @@ function harnessOf(
 	}: { readonly logger: Logger; readonly entries: readonly LogEntry[] },
 ): OperationHarness {
 	const now = options.now ?? (() => FIXED_NOW);
-	const newId = options.newId ?? sequentialIds();
+	const newId = options.newId ?? sequentialIds(OPERATION_ID_GROUP);
 	const pipeline: OperationPipeline = createOperationPipeline({
 		sql: database.sql,
 		registry: plugins.operations,
 		now,
 		newId,
+		newAuditEntryId: sequentialIds(AUDIT_ENTRY_ID_GROUP),
 		random: options.random ?? (() => FIXED_RANDOM),
 		logger,
 	});
@@ -153,7 +158,11 @@ function harnessOf(
 			return id;
 		},
 		call: (call) =>
-			pipeline.invoke({ ...call, correlationId: newCorrelationId() }),
+			pipeline.invoke({
+				...call,
+				apiTokenId: null,
+				correlationId: newCorrelationId(),
+			}),
 		stop: async () => {
 			try {
 				await plugins.deactivate();
@@ -164,11 +173,11 @@ function harnessOf(
 	};
 }
 
-function sequentialIds(): () => string {
+function sequentialIds(group: string): () => string {
 	let issued = 0;
 	return () => {
 		issued += 1;
-		return `00000000-0000-4000-8000-${String(issued).padStart(12, "0")}`;
+		return `00000000-0000-4000-${group}-${String(issued).padStart(12, "0")}`;
 	};
 }
 

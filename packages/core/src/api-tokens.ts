@@ -10,10 +10,15 @@ const API_TOKEN_BYTES = 32;
 export type RejectedTokenReason = "unknown_token" | "expired_token";
 
 export type Authentication =
-	| { readonly authenticated: true; readonly actor: Actor }
+	| {
+			readonly authenticated: true;
+			readonly actor: Actor;
+			readonly apiTokenId: string;
+	  }
 	| { readonly authenticated: false; readonly reason: RejectedTokenReason };
 
 const tokenRow = z.object({
+	id: z.string(),
 	service_account_id: z.string(),
 	expires_at: z.date(),
 });
@@ -36,7 +41,7 @@ export async function authenticateToken(
 	now: Date,
 ): Promise<Authentication> {
 	const rows: unknown[] =
-		await sql`SELECT service_account_id, expires_at FROM core.api_tokens WHERE token_hash = ${apiTokenHash(token)}`;
+		await sql`SELECT id, service_account_id, expires_at FROM core.api_tokens WHERE token_hash = ${apiTokenHash(token)}`;
 	const [row] = rows;
 	if (row === undefined)
 		return { authenticated: false, reason: "unknown_token" };
@@ -46,5 +51,6 @@ export async function authenticateToken(
 	return {
 		authenticated: true,
 		actor: { kind: "service_account", id: found.service_account_id },
+		apiTokenId: found.id,
 	};
 }

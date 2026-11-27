@@ -80,6 +80,7 @@ describe("creating a service account by command", () => {
 		).toEqual({
 			authenticated: true,
 			actor: { kind: "service_account", id: serviceAccount },
+			apiTokenId: expect.any(String),
 		});
 	});
 
