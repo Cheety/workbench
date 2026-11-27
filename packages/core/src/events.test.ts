@@ -353,8 +353,8 @@ describe("an event a mutation publishes", () => {
 			time: "2026-11-26T08:00:00.000Z",
 			level: "debug",
 			message: "event delivered",
-			event: "00000000-0000-4000-e000-000000000001",
-			name: "ledger.EntryAdded",
+			eventId: "00000000-0000-4000-e000-000000000001",
+			event: "ledger.EntryAdded",
 			subscriber: "statistics",
 		});
 	});
@@ -444,8 +444,8 @@ describe("an event whose handler fails", () => {
 				time: "2026-11-26T08:00:00.000Z",
 				level: "error",
 				message: "event not delivered",
-				event,
-				name: "ledger.EntryAdded",
+				eventId: event,
+				event: "ledger.EntryAdded",
 				subscriber: "flaky",
 				reason: "handler_threw",
 				error: expect.objectContaining({
@@ -455,7 +455,7 @@ describe("an event whose handler fails", () => {
 				attempt: 1,
 				retryInMs: 500,
 			},
-			expect.objectContaining({ event, attempt: 2, retryInMs: 1000 }),
+			expect.objectContaining({ eventId: event, attempt: 2, retryInMs: 1000 }),
 		]);
 	});
 

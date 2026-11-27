@@ -290,7 +290,7 @@ Der Core vermerkt die Zustellung in der Transaktion des Handlers. Was der Handle
 
 Ein Handler ist deshalb idempotent: Eine Wirkung außerhalb der eigenen Datenbank, etwa eine Mail, kann sich wiederholen, wenn der Handler nach ihr scheitert. Die `id` des Events ist der Schlüssel, an dem er eine Wiederholung erkennt.
 
-Eine gelungene Zustellung steht nur mit `LOG_LEVEL=debug` im Log, als Eintrag `event delivered` mit `event`, `name` und `subscriber`. Jede gescheiterte Zustellung steht im Log als Eintrag `event not delivered` mit `event` (der ID), `name`, `subscriber`, `attempt`, `retryInMs` und `reason`:
+Eine gelungene Zustellung steht nur mit `LOG_LEVEL=debug` im Log, als Eintrag `event delivered` mit `eventId`, `event` (dem Namen, etwa `board.LabelRenamed`) und `subscriber`. Jede gescheiterte Zustellung steht im Log als Eintrag `event not delivered` mit `eventId`, `event`, `subscriber`, `attempt`, `retryInMs` und `reason`:
 
 | `reason`            | Bedeutung                                                                                                                                                                     |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -226,8 +226,8 @@ describe("event delivery", () => {
 		expect(attempts).toBe(2);
 		expect(failuresIn(entries)).toEqual([
 			expect.objectContaining({
-				event: EVENT,
-				name: "board.LabelRenamed",
+				eventId: EVENT,
+				event: "board.LabelRenamed",
 				subscriber: "search",
 				reason: "handler_timed_out",
 				timeoutMs: 250,
@@ -351,8 +351,8 @@ describe("a delivery that fails outside its handler", () => {
 		]);
 		expect(failuresIn(entries)).toEqual([
 			expect.objectContaining({
-				event: EVENT,
-				name: "board.LabelRenamed",
+				eventId: EVENT,
+				event: "board.LabelRenamed",
 				subscriber: "search",
 				reason: "delivery_failed",
 				error: expect.objectContaining({ name: "PostgresError" }),
@@ -381,7 +381,7 @@ describe("a delivery that fails outside its handler", () => {
 		expect(handled).toEqual([]);
 		expect(failuresIn(entries)).toEqual([
 			expect.objectContaining({
-				event: EVENT,
+				eventId: EVENT,
 				reason: "delivery_failed",
 				error: expect.objectContaining({ message: "the schema is broken" }),
 				attempt: 1,

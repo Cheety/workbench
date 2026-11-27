@@ -284,8 +284,8 @@ function loggerOf(
 	{ logger }: Pick<EventDeliveryOptions, "logger">,
 ): Logger {
 	return logger.with({
-		event: delivery.id,
-		name: delivery.name,
+		eventId: delivery.id,
+		event: delivery.name,
 		subscriber: delivery.subscriber,
 	});
 }
