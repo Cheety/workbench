@@ -42,12 +42,28 @@ function startTestServer(startupStatus: StartupStatus = "started") {
 		}),
 		newCorrelationId: () => `generated-${nextId++}`,
 		startupStatus: () => startupStatus,
+		api: {
+			authenticate: async () => ({
+				authenticated: false,
+				reason: "unknown_token",
+			}),
+			pipeline: {
+				invoke: async () => {
+					throw new Error("no operation runs in these tests");
+				},
+			},
+		},
 	});
 	running = server;
 	return {
 		gate,
 		get: (path: string, headers: Record<string, string> = {}) =>
 			fetch(`http://127.0.0.1:${server.port}${path}`, { headers }),
+		post: (path: string) =>
+			fetch(`http://127.0.0.1:${server.port}${path}`, {
+				method: "POST",
+				body: "{}",
+			}),
 		logEntries: (): LogEntry[] => lines.map((line) => JSON.parse(line)),
 	};
 }
@@ -217,9 +233,13 @@ describe("unknown routes", () => {
 			"application/problem+json",
 		);
 		expect(await response.json()).toEqual({
-			type: "about:blank",
+			type: "urn:workbench:problem:route_not_found",
 			title: "Not Found",
 			status: 404,
+			detail: "no route matches the method and path of the request",
+			code: "route_not_found",
+			correlationId: "generated-1",
+			issues: [],
 		});
 		expect(logEntries()).toEqual([
 			expect.objectContaining({
@@ -229,5 +249,26 @@ describe("unknown routes", () => {
 				status: 404,
 			}),
 		]);
+	});
+});
+
+describe("the HTTP API", () => {
+	test("answers 503 problem details while the instance is still starting", async () => {
+		const { post } = startTestServer("starting");
+
+		const response = await post(
+			"/api/workspaces/00000000-0000-4000-8000-00000000aaaa/operations/board.renameLabel",
+		);
+
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({
+			type: "urn:workbench:problem:instance_not_ready",
+			title: "Service Unavailable",
+			status: 503,
+			detail: "the instance is still starting",
+			code: "instance_not_ready",
+			correlationId: "generated-1",
+			issues: [],
+		});
 	});
 });

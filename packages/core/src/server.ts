@@ -1,6 +1,17 @@
-import { UNKNOWN_FAILURE_REASON } from "./failure-reason.ts";
+import { describeThrown } from "./failure-reason.ts";
+import {
+	API_PATH_PREFIX,
+	type ApiRequest,
+	answerApiRequest,
+	type HttpApi,
+} from "./http-api.ts";
 import type { Logger } from "./logger.ts";
 import type { DatabaseCheck } from "./postgres.ts";
+import {
+	type Problem,
+	problemResponse,
+	ROUTE_NOT_FOUND,
+} from "./problem-details.ts";
 
 export const CORRELATION_ID_HEADER = "X-Correlation-ID";
 
@@ -15,6 +26,20 @@ const HEALTH_STATUS = {
 	notReady: "not_ready",
 } as const;
 
+const INTERNAL_ERROR: Problem = {
+	code: "internal_error",
+	kind: "internal",
+	detail: "the request failed for an internal reason",
+	issues: [],
+};
+
+const INSTANCE_NOT_READY: Problem = {
+	code: "instance_not_ready",
+	kind: "not_ready",
+	detail: "the instance is still starting",
+	issues: [],
+};
+
 export type StartupStatus = "starting" | "started" | "failed";
 
 export type ServerOptions = {
@@ -23,6 +48,7 @@ export type ServerOptions = {
 	readonly checkDatabase: DatabaseCheck;
 	readonly newCorrelationId: () => string;
 	readonly startupStatus: () => StartupStatus;
+	readonly api: HttpApi;
 };
 
 export type RunningServer = {
@@ -49,21 +75,18 @@ async function handleRequest(
 		acceptCorrelationId(request) ?? options.newCorrelationId();
 	const logger = options.logger.with({ correlationId });
 	const path = new URL(request.url).pathname;
-	const response = await route(request.method, path, options, logger).catch(
-		(error: unknown) => {
-			logger.error("request failed", { error: errorName(error) });
-			return problem(500, "Internal Server Error");
-		},
-	);
+	const response = await route(
+		{ request, path, correlationId, logger },
+		options,
+	).catch((error: unknown) => {
+		logger.error("request failed", { error: describeThrown(error) });
+		return problemResponse(INTERNAL_ERROR, correlationId);
+	});
 	response.headers.set(CORRELATION_ID_HEADER, correlationId);
 	const entry = { method: request.method, path, status: response.status };
 	const level = path.startsWith(HEALTH_PATH_PREFIX) ? "debug" : "info";
 	logger[level]("request completed", entry);
 	return response;
-}
-
-function errorName(error: unknown): string {
-	return error instanceof Error ? error.name : UNKNOWN_FAILURE_REASON;
 }
 
 function acceptCorrelationId(request: Request): string | undefined {
@@ -74,16 +97,20 @@ function acceptCorrelationId(request: Request): string | undefined {
 }
 
 async function route(
-	method: string,
-	path: string,
+	apiRequest: ApiRequest,
 	options: ServerOptions,
-	logger: Logger,
 ): Promise<Response> {
-	if (method === "GET" && path === LIVENESS_PATH)
+	const { request, path, correlationId, logger } = apiRequest;
+	if (request.method === "GET" && path === LIVENESS_PATH)
 		return Response.json({ status: HEALTH_STATUS.alive });
-	if (method === "GET" && path === READINESS_PATH)
+	if (request.method === "GET" && path === READINESS_PATH)
 		return readiness(options, logger);
-	return problem(404, "Not Found");
+	if (path.startsWith(API_PATH_PREFIX)) {
+		if (options.startupStatus() === "starting")
+			return problemResponse(INSTANCE_NOT_READY, correlationId);
+		return answerApiRequest(options.api, apiRequest);
+	}
+	return problemResponse(ROUTE_NOT_FOUND, correlationId);
 }
 
 async function readiness(
@@ -107,11 +134,4 @@ async function readiness(
 
 function notReady(): Response {
 	return Response.json({ status: HEALTH_STATUS.notReady }, { status: 503 });
-}
-
-function problem(status: number, title: string): Response {
-	return Response.json(
-		{ type: "about:blank", title, status },
-		{ status, headers: { "Content-Type": "application/problem+json" } },
-	);
 }
