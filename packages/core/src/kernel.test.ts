@@ -2013,99 +2013,88 @@ describe("operations of plugins", () => {
 		[
 			"an operation name declared twice",
 			[createCard, listCards, { ...listCards, right: "board.card.list" }],
-			"board.listCards",
-			"more than once",
+			'operation "board.listCards" is declared more than once',
 		],
 		[
 			"an operation without a right",
 			[{ ...createCard, right: undefined }],
-			"board.createCard",
-			"right",
+			'operation "board.createCard" must name exactly one right of plugin "board", such as "board.workspace.edit"',
 		],
 		[
 			"an operation with several rights",
 			[{ ...createCard, right: ["board.card.create", "board.card.edit"] }],
-			"board.createCard",
-			"right",
+			'operation "board.createCard" must name exactly one right of plugin "board", such as "board.workspace.edit"',
 		],
 		[
 			"an operation with a right of another plugin",
 			[{ ...createCard, right: "chat.message.send" }],
-			"board.createCard",
-			"right",
+			'operation "board.createCard" must name exactly one right of plugin "board", such as "board.workspace.edit"',
 		],
 		[
 			"an operation name that is not a verb and an object in camelCase",
 			[{ ...createCard, name: "create-card" }],
-			"operations[0].name",
-			"camelCase",
+			'operations[0].name must be a verb and an object in camelCase, such as "renameWorkspace"',
 		],
 		[
 			"an operation of unknown kind",
 			[{ ...createCard, kind: "command" }],
-			"board.createCard",
-			"kind",
+			'operation "board.createCard" must be of kind "query" or "mutation"',
 		],
 		[
 			"an operation with an unknown target",
 			[{ ...createCard, target: "instance" }],
-			"board.createCard",
-			"target",
+			'operation "board.createCard" must target "object" or "workspace"',
 		],
 		[
 			"an operation without an input schema",
 			[{ ...createCard, input: { title: "string" } }],
-			"board.createCard",
-			"input",
+			'operation "board.createCard" must declare its input as a schema',
 		],
 		[
 			"an operation without an output schema",
 			[{ ...createCard, output: undefined }],
-			"board.createCard",
-			"output",
+			'operation "board.createCard" must declare its output as a schema',
 		],
 		[
 			"an operation that cannot be executed",
 			[{ ...createCard, execute: "INSERT" }],
-			"board.createCard",
-			"execute",
+			'operation "board.createCard" must have an execute function',
 		],
-		["operations that are not a list", { createCard }, "operations", "list"],
+		[
+			"operations that are not a list",
+			{ createCard },
+			"operations must be a list of operations",
+		],
 		[
 			"an operation that is not an object",
 			["createCard"],
-			"operations[0]",
-			"an operation",
+			"operations[0] must be an operation",
 		],
-	])(
-		"rejects a plugin with %s",
-		async (_case, operations, subject, keyword) => {
-			const { plugins } = await start({
-				packages: [
-					{
-						packageName: "@workbench/plugin-board",
-						pluginName: "board",
-						version: "1.0.0",
-						loadDefinition: async () => ({
-							manifest: { name: "board" },
-							operations,
-						}),
-					},
-				],
-				enabledPlugins: ["board"],
-			});
-
-			expect(plugins.failures).toEqual([
+	])("rejects a plugin with %s", async (_case, operations, problem) => {
+		const { plugins } = await start({
+			packages: [
 				{
-					plugin: "board",
-					reason: "invalid_manifest",
-					detail: expect.stringContaining(subject),
+					packageName: "@workbench/plugin-board",
+					pluginName: "board",
+					version: "1.0.0",
+					loadDefinition: async () => ({
+						manifest: { name: "board" },
+						operations,
+					}),
 				},
-			]);
-			expect(plugins.failures[0]?.detail).toContain(keyword);
-			expect(plugins.operations.find("board.createCard")).toBeUndefined();
-		},
-	);
+			],
+			enabledPlugins: ["board"],
+		});
+
+		expect(plugins.failures).toEqual([
+			{
+				plugin: "board",
+				reason: "invalid_manifest",
+				detail: `plugin package "@workbench/plugin-board" has an invalid manifest: ${problem}`,
+			},
+		]);
+		expect(plugins.operations.find("board.createCard")).toBeUndefined();
+	});
 });
 
 const cardCreated = defineEvent({
