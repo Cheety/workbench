@@ -149,9 +149,12 @@ async function startApiInstance(): Promise<ApiInstance> {
 			pipeline: createOperationPipeline({
 				sql: database.sql,
 				registry: plugins.operations,
+				events: plugins.events,
 				now: () => clock,
 				newId,
 				newAuditEntryId: newId,
+				newEventId: newId,
+				eventsCommitted: () => {},
 				random: () => 0.5,
 				logger,
 			}),

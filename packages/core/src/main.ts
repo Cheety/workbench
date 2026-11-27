@@ -149,9 +149,12 @@ const server = startServerOrExit({
 		pipeline: createOperationPipeline({
 			sql,
 			registry: instance.operations,
+			events: instance.events,
 			now,
 			newId: () => crypto.randomUUID(),
 			newAuditEntryId: () => crypto.randomUUID(),
+			newEventId: () => crypto.randomUUID(),
+			eventsCommitted: () => {},
 			random: Math.random,
 			logger,
 		}),

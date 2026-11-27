@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { authenticateToken } from "./api-tokens.ts";
 import { Secret } from "./config.ts";
+import { registerEvents } from "./event-registry.ts";
 import { createLogger } from "./logger.ts";
 import { createOperationPipeline } from "./operation-pipeline.ts";
 import { registerOperations } from "./operation-registry.ts";
@@ -61,9 +62,12 @@ async function startTestServer(startupStatus: StartupStatus = "started") {
 			pipeline: createOperationPipeline({
 				sql,
 				registry: registerOperations([]),
+				events: registerEvents([]),
 				now: () => NOW,
 				newId: () => "00000000-0000-4000-8000-000000000001",
 				newAuditEntryId: () => "00000000-0000-4000-a000-000000000001",
+				newEventId: () => "00000000-0000-4000-e000-000000000001",
+				eventsCommitted: () => {},
 				random: () => 0.5,
 				logger,
 			}),

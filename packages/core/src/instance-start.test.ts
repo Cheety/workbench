@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { DatabaseWaitOutcome } from "./database-wait.ts";
 import {
+	type RegisteredEvent,
+	type RegisteredSubscription,
+	registerEvents,
+} from "./event-registry.ts";
+import {
 	createInstanceStart,
 	type InstanceStartSteps,
 	type StartedPlugins,
@@ -17,6 +22,7 @@ function pluginsWith(...failures: LoadFailure[]): StartedPlugins {
 	return {
 		failures,
 		operations: registerOperations([]),
+		events: registerEvents([]),
 		deactivate: async () => "clean",
 	};
 }
@@ -249,5 +255,50 @@ describe("operations of an instance", () => {
 		await instance.run();
 
 		expect(instance.operations.find("board.renameLabel")).toBe(renameLabel);
+	});
+});
+
+describe("events of an instance", () => {
+	const labelRenamed: RegisteredEvent = {
+		name: "board.LabelRenamed",
+		version: 1,
+		validatePayload: async (value) => ({ valid: true, value }),
+	};
+	const indexLabel: RegisteredSubscription = {
+		subscriber: "search",
+		event: labelRenamed.name,
+		validatePayload: labelRenamed.validatePayload,
+		handle: async () => {},
+	};
+
+	test("are none while the plugins are still starting", () => {
+		const instance = createInstanceStart(
+			steps({ startPlugins: () => new Promise(() => {}) }),
+			recordingLogger().logger,
+		);
+
+		void instance.run();
+
+		expect(instance.events.findEvent("board.LabelRenamed")).toBeUndefined();
+		expect(instance.events.subscriptions()).toEqual([]);
+	});
+
+	test("are those of the started plugins once they started, with their subscriptions", async () => {
+		const instance = createInstanceStart(
+			steps({
+				startPlugins: async () => ({
+					...pluginsWith(),
+					events: registerEvents([
+						{ events: [labelRenamed], subscriptions: [indexLabel] },
+					]),
+				}),
+			}),
+			recordingLogger().logger,
+		);
+
+		await instance.run();
+
+		expect(instance.events.findEvent("board.LabelRenamed")).toBe(labelRenamed);
+		expect(instance.events.subscriptions()).toEqual([indexLabel]);
 	});
 });

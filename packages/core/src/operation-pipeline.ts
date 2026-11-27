@@ -7,6 +7,8 @@ import {
 } from "@workbench/sdk";
 import type { SQL } from "bun";
 import { type NewAuditEntry, recordAuditEntry } from "./audit.ts";
+import { recordEvent } from "./event-outbox.ts";
+import type { EventRegistry } from "./event-registry.ts";
 import { describeThrown } from "./failure-reason.ts";
 import type { Logger } from "./logger.ts";
 import {
@@ -49,9 +51,12 @@ export type OperationResult =
 export type OperationPipelineOptions = {
 	readonly sql: SQL;
 	readonly registry: OperationRegistry;
+	readonly events: EventRegistry;
 	readonly now: () => Date;
 	readonly newId: () => string;
 	readonly newAuditEntryId: () => string;
+	readonly newEventId: () => string;
+	readonly eventsCommitted: () => void;
 	readonly random: () => number;
 	readonly logger: Logger;
 };
@@ -88,6 +93,15 @@ class InvalidOutputError extends Error {
 		super("the output does not match the output schema of the operation");
 		this.name = "InvalidOutputError";
 		this.issues = issues;
+	}
+}
+
+class EventPublishedByQueryError extends Error {
+	constructor(operation: string) {
+		super(
+			`the query ${quote(operation)} published an event; only a mutation publishes events`,
+		);
+		this.name = "EventPublishedByQueryError";
 	}
 }
 
@@ -129,6 +143,7 @@ async function invoke(
 				detail: "the input does not match the input schema of the operation",
 				issues: input.issues,
 			});
+		const publisher = publisherOf(call, operation, options);
 		const output = await inTransaction(
 			operation,
 			options.sql,
@@ -137,7 +152,7 @@ async function invoke(
 				const executed = await execute(
 					operation,
 					input.value,
-					contextOf(call, transaction, options),
+					contextOf(call, transaction, options, publisher.into(transaction)),
 				);
 				if (IS_AUDITED[operation.kind])
 					await recordAuditEntry(
@@ -147,6 +162,7 @@ async function invoke(
 				return executed;
 			},
 		);
+		if (publisher.hasPublished()) options.eventsCommitted();
 		return { ok: true, output };
 	} catch (error) {
 		return failed(logAndMapFailure(error, logger, operation.owner));
@@ -162,6 +178,11 @@ const BEGIN_TRANSACTION: Record<
 };
 
 const IS_AUDITED: Record<OperationKind, boolean> = {
+	query: false,
+	mutation: true,
+};
+
+const CAN_PUBLISH: Record<OperationKind, boolean> = {
 	query: false,
 	mutation: true,
 };
@@ -200,6 +221,7 @@ function contextOf(
 	call: OperationCall,
 	transaction: SQL,
 	sources: Pick<OperationPipelineOptions, "now" | "newId" | "random">,
+	publish: OperationContext["publish"],
 ): OperationContext {
 	return {
 		actor: call.actor,
@@ -208,6 +230,36 @@ function contextOf(
 		now: sources.now,
 		newId: sources.newId,
 		random: sources.random,
+		publish,
+	};
+}
+
+type Publisher = {
+	into(transaction: SQL): OperationContext["publish"];
+	hasPublished(): boolean;
+};
+
+function publisherOf(
+	call: OperationCall,
+	operation: RegisteredOperation,
+	sources: Pick<OperationPipelineOptions, "events" | "now" | "newEventId">,
+): Publisher {
+	let hasPublished = false;
+	return {
+		into: (transaction) => async (definition, payload) => {
+			if (!CAN_PUBLISH[operation.kind])
+				throw new EventPublishedByQueryError(operation.name);
+			await recordEvent(transaction, sources.events, {
+				id: sources.newEventId(),
+				publisher: ownerName(operation.owner),
+				definition,
+				payload,
+				occurredAt: sources.now(),
+				workspace: call.workspace,
+			});
+			hasPublished = true;
+		},
+		hasPublished: () => hasPublished,
 	};
 }
 

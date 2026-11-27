@@ -1,4 +1,5 @@
 import type { DatabaseWaitOutcome } from "./database-wait.ts";
+import { type EventRegistry, registerEvents } from "./event-registry.ts";
 import { describeThrown } from "./failure-reason.ts";
 import type { RunningPlugins } from "./kernel.ts";
 import type { Logger } from "./logger.ts";
@@ -11,7 +12,7 @@ import type { StartupStatus } from "./server.ts";
 
 export type StartedPlugins = Pick<
 	RunningPlugins,
-	"failures" | "operations" | "deactivate"
+	"failures" | "operations" | "events" | "deactivate"
 >;
 
 export type InstanceStartSteps = {
@@ -27,6 +28,7 @@ export type InstanceStartSteps = {
 export type InstanceStart = {
 	status(): StartupStatus;
 	readonly operations: OperationRegistry;
+	readonly events: EventRegistry;
 	run(): Promise<StartedPlugins>;
 	stop(): void;
 };
@@ -36,6 +38,7 @@ type StartFailure = "core_schema_not_migrated" | "plugin_schema_not_migrated";
 const NO_PLUGINS: StartedPlugins = {
 	failures: [],
 	operations: registerOperations([]),
+	events: registerEvents([]),
 	deactivate: async () => "clean",
 };
 
@@ -46,6 +49,7 @@ export function createInstanceStart(
 	const stopping = new AbortController();
 	let status: StartupStatus = "starting";
 	let operations = NO_PLUGINS.operations;
+	let events = NO_PLUGINS.events;
 	let running: Promise<StartedPlugins> | undefined;
 
 	const fail = (
@@ -70,6 +74,7 @@ export function createInstanceStart(
 		if (coreSchema === "not_migrated") return fail("core_schema_not_migrated");
 		const plugins = await steps.startPlugins(signal);
 		operations = plugins.operations;
+		events = plugins.events;
 		const unmigrated = plugins.failures
 			.filter((failure) => failure.reason === "migration_failed")
 			.map((failure) => failure.plugin);
@@ -85,6 +90,10 @@ export function createInstanceStart(
 	return {
 		status: () => status,
 		operations: { find: (name) => operations.find(name) },
+		events: {
+			findEvent: (name) => events.findEvent(name),
+			subscriptions: () => events.subscriptions(),
+		},
 		run: () => {
 			running ??= start().catch((error: unknown) => {
 				status = "failed";

@@ -66,6 +66,14 @@ _Avoid_: Subscription (außer als Bezeichner im Code), Listener, Hook
 Die Funktion eines Plugins, die der Core für ein Event-Abo mit jedem Event aufruft.
 _Avoid_: Listener, Callback, Consumer
 
+**Outbox**:
+Die Tabellen des Cores, in die eine Mutation ihre Events in ihrer eigenen Transaktion schreibt und aus denen der Core sie nach dem Festschreiben zustellt.
+_Avoid_: Queue, Event-Bus, Event-Store
+
+**Zustellung**:
+Der Aufruf des Event-Handlers genau eines abonnierenden Plugins mit genau einem Event; sie gelingt mindestens einmal.
+_Avoid_: Dispatch, Auslieferung, Benachrichtigung
+
 ## Inhalte
 
 **Objekt**:
