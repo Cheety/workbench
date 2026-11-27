@@ -33,7 +33,7 @@ const MAX_CURSOR_LENGTH = 200;
 
 const auditEntry = z.object({
 	id: z.string(),
-	occurredAt: z.string(),
+	occurredAt: z.iso.datetime(),
 	actor: z.object({ kind: z.enum(ACTOR_KINDS), id: z.string() }),
 	apiTokenId: z.string().nullable(),
 	operation: z.string(),
