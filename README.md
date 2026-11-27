@@ -146,6 +146,7 @@ Die Architekturtests in `packages/architecture` lassen `bun run check` scheitern
 - der Contract eine Datei seines eigenen Pakets importiert, etwa Server- oder Client-Code des Plugins; erlaubt sind andere Pakete und die Contracts fremder Plugins,
 - das Verzeichnis der Contract-Datei den Einstieg des Plugins enthält oder `./contract` keine einzelne Datei nennt,
 - der Core oder das SDK außerhalb ihrer Tests Begriffe der fachlichen Plugins enthält, etwa `kanban`, `issue tracker` oder `note`; die Liste steht in `packages/architecture/src/domain-language.ts`.
+- der Core oder das SDK außerhalb ihrer Tests ein Plugin-Paket importiert, auch dessen Contract oder über einen relativen Pfad; der Kernel findet die Plugin-Pakete erst zur Laufzeit (ADR-0007).
 
 ## Umgebungsvariablen
 

@@ -37,7 +37,9 @@ type Import = {
 const PACKAGE_JSON = "package.json";
 const CONTRACT_SUBPATH = "contract";
 const INSTALLED_DEPENDENCIES = "node_modules";
-const SOURCE_FILES = new Bun.Glob("**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}");
+export const SOURCE_FILES = new Bun.Glob(
+	"**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
+);
 const GAP = String.raw`(?:\s|/\*[\s\S]*?\*/|//[^\n]*\n)*`;
 const MODULE_SPECIFIER = new RegExp(
 	String.raw`(?<![\w$.])(?:import\.meta\.resolve|require\.resolve|mock\.module|from|import|require)${GAP}\(?${GAP}(["'\x60])([^"'\x60\r\n]+)\1`,
@@ -97,7 +99,7 @@ function violatedRule(
 		: undefined;
 }
 
-async function findPluginPackages(
+export async function findPluginPackages(
 	packagesDirectory: string,
 ): Promise<readonly PluginPackage[]> {
 	const entries = await readdir(packagesDirectory, { withFileTypes: true });
@@ -151,7 +153,7 @@ function contractExportOf(
 	return { kind: "published", file };
 }
 
-function importsIn(source: string): Omit<Import, "file">[] {
+export function importsIn(source: string): Omit<Import, "file">[] {
 	const modules = Array.from(source.matchAll(MODULE_SPECIFIER)).flatMap(
 		([, , importPath]) =>
 			importPath === undefined
@@ -173,7 +175,7 @@ function isPathImport(importPath: string): boolean {
 	return importPath.startsWith(".") || isAbsolute(importPath);
 }
 
-function importedPlugin(
+export function importedPlugin(
 	importPath: string,
 	importedFile: string | undefined,
 	plugins: readonly PluginPackage[],
