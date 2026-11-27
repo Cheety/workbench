@@ -389,7 +389,7 @@ export const sendDigest = defineCronJob({
 });
 ```
 
-- `schedule` ist ein Cron-Ausdruck aus fünf Feldern, in UTC: Minute (0 bis 59), Stunde (0 bis 23), Tag des Monats (1 bis 31), Monat (1 bis 12) und Wochentag (0 bis 7, 0 und 7 sind Sonntag). Ein Feld ist `*`, eine Zahl, ein Bereich (`1-5`) oder eine Liste davon (`0,30`), je mit optionaler Schrittweite (`*/15`, `10-50/20`). Namen wie `MON` oder `JAN` und Kürzel wie `@daily` gibt es nicht. Schränkt der Ausdruck sowohl den Tag des Monats als auch den Wochentag ein, ist der Job fällig, wenn einer von beiden passt, wie bei `cron`.
+- `schedule` ist ein Cron-Ausdruck aus fünf Feldern, in UTC: Minute (0 bis 59), Stunde (0 bis 23), Tag des Monats (1 bis 31), Monat (1 bis 12) und Wochentag (0 bis 7, 0 und 7 sind Sonntag). Ein Feld ist `*`, eine Zahl, ein Bereich (`1-5`) oder eine Liste davon (`0,30`), je mit optionaler Schrittweite (`*/15`, `10-50/20`). Namen wie `MON` oder `JAN` und Kürzel wie `@daily` gibt es nicht. Beginnt weder der Tag des Monats noch der Wochentag mit `*`, ist der Job fällig, wenn einer von beiden passt, wie bei `cron`: `0 0 13 * 5` läuft am 13. und an jedem Freitag. Beginnt eines der beiden Felder mit `*`, auch als `*/2`, müssen beide passen.
 - Der Cron-Job teilt sich den Namensraum mit den Jobs des Plugins und heißt `<plugin>.<name>`.
 - `job` nennt `id`, `name`, `attempt` und `dueAt`, die Fälligkeit, für die er läuft; `ctx` ist derselbe wie bei einem Job.
 

@@ -29,7 +29,8 @@ const DAY_OF_WEEK: FieldRange = { label: "day of week", min: 0, max: 7 };
 
 const SUNDAY = 0;
 const SUNDAY_AS_SEVEN = 7;
-const DAYS_OF_A_WEEK = 7;
+
+const ANY = "*";
 
 const FIELD_ITEM = /^(?:\*|(\d{1,2})(?:-(\d{1,2}))?)(?:\/(\d{1,2}))?$/;
 
@@ -45,6 +46,8 @@ type Fields = {
 	readonly daysOfMonth: ReadonlySet<number>;
 	readonly months: ReadonlySet<number>;
 	readonly daysOfWeek: ReadonlySet<number>;
+	readonly isAnyDayOfMonth: boolean;
+	readonly isAnyDayOfWeek: boolean;
 };
 
 export function readCronSchedule(expression: unknown): CronScheduleRead {
@@ -81,6 +84,8 @@ export function readCronSchedule(expression: unknown): CronScheduleRead {
 		daysOfWeek: new Set(
 			[...daysOfWeek].map((day) => (day === SUNDAY_AS_SEVEN ? SUNDAY : day)),
 		),
+		isAnyDayOfMonth: dayOfMonth.startsWith(ANY),
+		isAnyDayOfWeek: dayOfWeek.startsWith(ANY),
 	};
 	if (findNextAfter(fields, new Date(0)) === undefined)
 		return invalid("never falls due");
@@ -164,9 +169,7 @@ function findNextAfter(fields: Fields, time: Date): Date | undefined {
 function isDueOnDay(fields: Fields, at: Date): boolean {
 	const onDayOfMonth = fields.daysOfMonth.has(at.getUTCDate());
 	const onDayOfWeek = fields.daysOfWeek.has(at.getUTCDay());
-	const isAnyDayOfMonth =
-		fields.daysOfMonth.size === DAY_OF_MONTH.max - DAY_OF_MONTH.min + 1;
-	const isAnyDayOfWeek = fields.daysOfWeek.size === DAYS_OF_A_WEEK;
-	if (isAnyDayOfMonth || isAnyDayOfWeek) return onDayOfMonth && onDayOfWeek;
+	if (fields.isAnyDayOfMonth || fields.isAnyDayOfWeek)
+		return onDayOfMonth && onDayOfWeek;
 	return onDayOfMonth || onDayOfWeek;
 }

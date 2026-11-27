@@ -64,6 +64,24 @@ describe("a cron schedule", () => {
 			"2026-12-04T00:00:00.000Z",
 		],
 		[
+			"every day when the days of the month are a range that covers them all and a day of the week is given",
+			"0 0 1-31 * 1",
+			"2026-11-27T09:00:00.000Z",
+			"2026-11-28T00:00:00.000Z",
+		],
+		[
+			"a day of the week on a stepped day of the month when the day of the month starts with a star",
+			"0 0 */2 * 1",
+			"2026-11-27T09:00:00.000Z",
+			"2026-12-07T00:00:00.000Z",
+		],
+		[
+			"a day of the month on a stepped day of the week when the day of the week starts with a star",
+			"0 0 13 * */2",
+			"2026-11-27T09:00:00.000Z",
+			"2026-12-13T00:00:00.000Z",
+		],
+		[
 			"a leap day years ahead",
 			"0 0 29 2 *",
 			"2026-11-27T09:00:00.000Z",
