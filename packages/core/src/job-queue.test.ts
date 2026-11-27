@@ -326,6 +326,58 @@ describe("a job whose attempt neither completed nor failed", () => {
 	});
 });
 
+describe("a job whose last attempt neither completed nor failed", () => {
+	test("is dead-lettered once its redelivery deadline has passed, without a further attempt", async () => {
+		const database = await migratedDatabase();
+		const second = new SQL(database.url, { max: 1 });
+		cleanups.push(() => second.close());
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const attempts: number[] = [];
+		let now = NOW;
+		const jobs = registryOf(
+			defineJob({
+				name: "sendReminder",
+				payload: z.object({ cardId: z.string() }),
+				maxAttempts: 1,
+				run: async (job) => {
+					attempts.push(job.attempt);
+					entered.resolve();
+					await release.promise;
+				},
+			}),
+		);
+		await enqueueReminder(database.sql, jobs, JOB);
+		const stalled = queueOf({ sql: database.sql, jobs, now: () => now });
+		const stalledRun = stalled.queue.runDue(NOT_STOPPED);
+		await entered.promise;
+		const takingOver = queueOf({ sql: second, jobs, now: () => now });
+
+		now = new Date(NOW.getTime() + 70_000);
+		await takingOver.queue.runDue(NOT_STOPPED);
+		release.resolve();
+		await stalledRun;
+
+		const rows: unknown[] = await database.sql`
+			SELECT state, attempts, failure_reason FROM core.jobs`;
+		expect(attempts).toEqual([1]);
+		expect([...rows]).toEqual([
+			{ state: "dead", attempts: 1, failure_reason: "attempt_lost" },
+		]);
+		expect(takingOver.entries).toEqual([
+			expect.objectContaining({
+				level: "error",
+				message: "job dead-lettered",
+				jobId: JOB,
+				job: "mailer.sendReminder",
+				attempt: 1,
+				reason: "attempt_lost",
+			}),
+		]);
+		expect(stalled.entries).toEqual([]);
+	});
+});
+
 describe("a job that fails outside its run function", () => {
 	test("counts the attempt and waits for its retry when its transaction cannot be committed", async () => {
 		const database = await migratedDatabase();

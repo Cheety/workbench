@@ -355,12 +355,13 @@ Ein Job ist deshalb idempotent: Eine Wirkung außerhalb der eigenen Datenbank, e
 
 Ein erledigter Job steht nur mit `LOG_LEVEL=debug` im Log, als Eintrag `job completed` mit `jobId`, `job` (dem Namen) und `attempt`. Jeder gescheiterte Versuch steht im Log als Eintrag `job failed` mit `jobId`, `job`, `attempt`, `retryInMs` und `reason`; der letzte als Eintrag `job dead-lettered`, ohne `retryInMs`:
 
-| `reason`          | Bedeutung                                                                                                                                                                              |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `run_threw`       | `run` hat geworfen; der Fehler steht in `error`.                                                                                                                                       |
-| `run_timed_out`   | `run` wurde nicht innerhalb von `timeoutMs` fertig.                                                                                                                                    |
-| `invalid_payload` | Das Schema der Definition lehnt die gespeicherte Payload ab, etwa nach einer Änderung des Schemas; `issues` nennt die Mängel. Der Job landet sofort im Dead-Letter, ohne Wiederholung. |
-| `attempt_failed`  | Der Versuch scheiterte außerhalb von `run`, etwa beim Festschreiben (ein aufgeschobener Constraint) oder weil das Schema der Payload warf; der Fehler steht in `error`.                |
+| `reason`          | Bedeutung                                                                                                                                                                                  |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `run_threw`       | `run` hat geworfen; der Fehler steht in `error`.                                                                                                                                           |
+| `run_timed_out`   | `run` wurde nicht innerhalb von `timeoutMs` fertig.                                                                                                                                        |
+| `invalid_payload` | Das Schema der Definition lehnt die gespeicherte Payload ab, etwa nach einer Änderung des Schemas; `issues` nennt die Mängel. Der Job landet sofort im Dead-Letter, ohne Wiederholung.     |
+| `attempt_failed`  | Der Versuch scheiterte außerhalb von `run`, etwa beim Festschreiben (ein aufgeschobener Constraint) oder weil das Schema der Payload warf; der Fehler steht in `error`.                    |
+| `attempt_lost`    | Der letzte Versuch gelang weder noch scheiterte er vor Ablauf der Wiederzustellungsfrist, etwa weil der Prozess mitten darin endete. Der Job landet im Dead-Letter, ohne weiteren Versuch. |
 
 Die Job-Queue `core.jobs` zeigt den Stand jedes Jobs: `state` ist `pending`, `completed` oder `dead`, dazu `attempts`, `next_attempt_at`, `settled_at` und `failure_reason`, der Grund des letzten gescheiterten Versuchs. Der Dead-Letter sind die Zeilen mit `state = 'dead'`. Ein Betreiber reiht einen solchen Job nach behobener Ursache von Hand wieder ein:
 
@@ -368,7 +369,7 @@ Die Job-Queue `core.jobs` zeigt den Stand jedes Jobs: `state` ist `pending`, `co
 UPDATE core.jobs SET state = 'pending', settled_at = NULL, attempts = 0, next_attempt_at = now() WHERE id = '…';
 ```
 
-- Beginnt ein Versuch, zählt der Core ihn sofort und stellt den Job für die Wiederzustellungsfrist zurück: die Frist eines Versuchs (`PLUGIN_HOOK_TIMEOUT_MS`) plus 60 s. Endet der Prozess mitten im Versuch, läuft der Job nach dieser Frist erneut, auch in einem anderen Prozess; der abgebrochene Versuch zählt mit. Weil die Frist länger ist als die eines Versuchs, laufen nie zwei Versuche desselben Jobs zugleich, solange `run` seine Frist einhält.
+- Beginnt ein Versuch, zählt der Core ihn sofort und stellt den Job für die Wiederzustellungsfrist zurück: die Frist eines Versuchs (`PLUGIN_HOOK_TIMEOUT_MS`) plus 60 s. Endet der Prozess mitten im Versuch, läuft der Job nach dieser Frist erneut, auch in einem anderen Prozess; der abgebrochene Versuch zählt mit, und war es der letzte, landet der Job mit `attempt_lost` im Dead-Letter. Weil die Frist länger ist als die eines Versuchs, laufen nie zwei Versuche desselben Jobs zugleich, solange `run` seine Frist einhält.
 - Die Reihenfolge ist nicht zugesichert: Ein Job, der scheitert, hält die übrigen nicht auf.
 - Ein Job eines Plugins, das gerade nicht aktiv ist, bleibt liegen, bis es wieder aktiv ist, ohne Frist.
 - Ein Job hat bisher keinen Akteur, publiziert keine Events und reiht selbst keine Jobs ein; das gilt auch für einen Cron-Job.

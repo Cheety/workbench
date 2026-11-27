@@ -104,13 +104,15 @@ type JobFailure =
 			readonly reason: "invalid_payload";
 			readonly issues: readonly ValidationIssue[];
 	  }
-	| { readonly reason: "attempt_failed"; readonly error: ThrownError };
+	| { readonly reason: "attempt_failed"; readonly error: ThrownError }
+	| { readonly reason: "attempt_lost" };
 
 const IS_RETRIED: Record<JobFailure["reason"], boolean> = {
 	run_threw: true,
 	run_timed_out: true,
 	invalid_payload: false,
 	attempt_failed: true,
+	attempt_lost: false,
 };
 
 type Attempt =
@@ -162,7 +164,11 @@ export function createJobQueue(options: JobQueueOptions): JobQueue {
 				if (claimed === undefined) return;
 				const job = options.jobs.find(claimed.name);
 				if (job === undefined) continue;
-				report(claimed, await attempt(claimed, job, attemptOptions), options);
+				const settled =
+					claimed.attempts > job.maxAttempts
+						? await giveUpLost(claimed, job, options)
+						: await attempt(claimed, job, attemptOptions);
+				report(settled.job, settled.attempt, options);
 			}
 		},
 	};
@@ -221,7 +227,20 @@ async function claimNext(
 	return row === undefined ? undefined : claimedJob.parse(row);
 }
 
+type Settled = {
+	readonly job: ClaimedJob;
+	readonly attempt: Attempt;
+};
+
 async function attempt(
+	claimed: ClaimedJob,
+	job: RegisteredJob,
+	options: AttemptOptions,
+): Promise<Settled> {
+	return { job: claimed, attempt: await settle(claimed, job, options) };
+}
+
+async function settle(
 	claimed: ClaimedJob,
 	job: RegisteredJob,
 	options: AttemptOptions,
@@ -385,6 +404,32 @@ async function deadLetter(
 	return dead.length === 0
 		? SETTLED_ELSEWHERE
 		: { outcome: "dead_lettered", failure };
+}
+
+async function giveUpLost(
+	claimed: ClaimedJob,
+	job: RegisteredJob,
+	{ sql, now }: Pick<JobQueueOptions, "sql" | "now">,
+): Promise<Settled> {
+	const lost = { ...claimed, attempts: job.maxAttempts };
+	const failure: JobFailure = { reason: "attempt_lost" };
+	const dead: unknown[] = await sql`
+		UPDATE core.jobs
+		SET state = 'dead',
+			settled_at = ${now()},
+			attempts = ${lost.attempts},
+			failure_reason = ${failure.reason}
+		WHERE id = ${claimed.id}
+			AND state = 'pending'
+			AND attempts = ${claimed.attempts}
+		RETURNING id`;
+	return {
+		job: lost,
+		attempt:
+			dead.length === 0
+				? SETTLED_ELSEWHERE
+				: { outcome: "dead_lettered", failure },
+	};
 }
 
 function report(
