@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { defineCronJob, defineJob, type JobDefinition } from "@workbench/sdk";
+import {
+	defineCronJob,
+	defineJob,
+	type JobDefinition,
+	type SchemaResult,
+} from "@workbench/sdk";
 import { SQL } from "bun";
 import { z } from "zod";
 import { Secret } from "./config.ts";
@@ -48,6 +53,19 @@ function registryOf<Payload = { cardId: string }>(
 		readJobs("mailer", { jobs: definitions, cronJobs: undefined }).value,
 	);
 }
+
+const sendReminderWithStalledSchema: SendReminder = defineJob({
+	name: "sendReminder",
+	payload: {
+		"~standard": {
+			version: 1,
+			vendor: "stalled",
+			validate: () => new Promise<SchemaResult<{ cardId: string }>>(() => {}),
+		},
+	},
+	maxAttempts: 3,
+	run: async () => {},
+});
 
 const cleanups: (() => Promise<void>)[] = [];
 
@@ -240,6 +258,37 @@ describe("a job that exceeds its timeout", () => {
 			expect.objectContaining({
 				jobId: JOB,
 				job: "mailer.sendReminder",
+				attempt: 1,
+				reason: "run_timed_out",
+				timeoutMs: 250,
+				retryInMs: 2500,
+			}),
+		]);
+	});
+
+	test("counts as failed when its payload schema does not finish validating in time", async () => {
+		const database = await migratedDatabase();
+		const timer = manualTimer();
+		await enqueueReminder(
+			database.sql,
+			registryOf(sendingReminders(async () => {})),
+			JOB,
+		);
+		const { queue, entries } = queueOf({
+			sql: database.sql,
+			jobs: registryOf(sendReminderWithStalledSchema),
+			runTimeout: { ms: 250, setTimer: timer.setTimer },
+		});
+
+		const timerSet = timer.set();
+		const running = queue.runDue(NOT_STOPPED);
+		await timerSet;
+		timer.expire();
+		await running;
+
+		expect(failuresIn(entries)).toEqual([
+			expect.objectContaining({
+				jobId: JOB,
 				attempt: 1,
 				reason: "run_timed_out",
 				timeoutMs: 250,

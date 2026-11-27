@@ -341,18 +341,15 @@ async function handle(
 	event: PublishedEvent<unknown>,
 	options: AttemptOptions,
 ): Promise<DeliveryFailure | undefined> {
-	const payload = await subscription.validatePayload(event.payload);
-	if (!payload.valid)
-		return { reason: "invalid_payload", issues: payload.issues };
 	const schema = pluginSchemaName(subscription.subscriber);
 	try {
 		await transaction.savepoint(async (savepoint) => {
 			await savepoint.unsafe(`SET LOCAL search_path TO "${schema}"`);
 			const outcome = await runWithin(
 				() =>
-					callHandler(
+					validateAndCallHandler(
 						subscription,
-						{ ...event, payload: payload.value },
+						event,
 						contextOf(savepoint, options),
 					),
 				options.handlerTimeout,
@@ -368,6 +365,20 @@ async function handle(
 		if (error instanceof HandlerFailedError) return error.failure;
 		throw error;
 	}
+}
+
+async function validateAndCallHandler(
+	subscription: RegisteredSubscription,
+	event: PublishedEvent<unknown>,
+	ctx: EventHandlerContext,
+): Promise<void> {
+	const payload = await subscription.validatePayload(event.payload);
+	if (!payload.valid)
+		throw new HandlerFailedError({
+			reason: "invalid_payload",
+			issues: payload.issues,
+		});
+	await callHandler(subscription, { ...event, payload: payload.value }, ctx);
 }
 
 async function callHandler(

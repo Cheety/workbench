@@ -107,6 +107,17 @@ const labelRenamedWithBrokenSchema = defineEvent({
 	},
 });
 
+const labelRenamedWithStalledSchema = defineEvent({
+	...labelRenamed,
+	payload: {
+		"~standard": {
+			version: 1,
+			vendor: "stalled",
+			validate: () => new Promise<SchemaResult<{ labelId: string }>>(() => {}),
+		},
+	},
+});
+
 const cleanups: (() => Promise<void>)[] = [];
 
 afterEach(async () => {
@@ -371,6 +382,39 @@ describe("event delivery", () => {
 				timeoutMs: 250,
 				attempt: 1,
 				retryInMs: 500,
+			}),
+		]);
+	});
+
+	test("gives up on a payload schema that does not finish validating in time, as on a handler", async () => {
+		const database = await migratedDatabase();
+		const timer = manualTimer();
+		const handled: string[] = [];
+		const events = registryOf(
+			subscribing("search", labelRenamedWithStalledSchema, async (event) => {
+				handled.push(event.id);
+			}),
+		);
+		await publishLabelRenamed(database.sql, events, EVENT);
+		const { delivery, entries } = deliveryOf({
+			sql: database.sql,
+			events,
+			handlerTimeout: { ms: 250, setTimer: timer.setTimer },
+		});
+
+		const timerSet = timer.set();
+		const delivering = delivery.deliverDue(NOT_STOPPED);
+		await timerSet;
+		timer.expire();
+		await delivering;
+
+		expect(handled).toEqual([]);
+		expect(failuresIn(entries)).toEqual([
+			expect.objectContaining({
+				eventId: EVENT,
+				reason: "handler_timed_out",
+				timeoutMs: 250,
+				attempt: 1,
 			}),
 		]);
 	});

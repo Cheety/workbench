@@ -392,12 +392,12 @@ async function run(
 	job: RegisteredJob,
 	options: Pick<JobQueueOptions, "now" | "newId" | "random" | "runTimeout">,
 ): Promise<void> {
-	const call = await callOf(job, claimed);
 	await transaction.unsafe(
 		`SET LOCAL search_path TO "${pluginSchemaName(job.plugin)}"`,
 	);
 	const outcome = await runWithin(
-		() => callRun(call, contextOf(transaction, options)),
+		async () =>
+			callRun(await callOf(job, claimed), contextOf(transaction, options)),
 		options.runTimeout,
 	);
 	if (outcome === "timed_out")
