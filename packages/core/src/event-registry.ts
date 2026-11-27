@@ -6,6 +6,7 @@ import {
 	subscribedEventOf,
 } from "@workbench/sdk";
 import { isRecord } from "./is-record.ts";
+import { isPluginName } from "./plugin-name.ts";
 import { quote } from "./quote.ts";
 import { type Validator, validatorOf } from "./schema-validation.ts";
 
@@ -40,15 +41,17 @@ export type SubscriptionsRead = {
 	readonly problems: readonly string[];
 };
 
-const PUBLISHER_NAME = /^[a-z][a-z0-9-]*$/;
-
 const EVENT_NAME = /^[A-Z][A-Za-z0-9]*$/;
 
-const FULL_EVENT_NAME = /^[a-z][a-z0-9-]*\.[A-Z][A-Za-z0-9]*$/;
+const PUBLISHER_SEPARATOR = ".";
 
 export function isEventSubscriptionCapability(capability: string): boolean {
 	const event = subscribedEventOf(capability);
-	return event !== undefined && FULL_EVENT_NAME.test(event);
+	if (event === undefined) return false;
+	const [publisher, ...name] = event.split(PUBLISHER_SEPARATOR);
+	return (
+		isPluginName(publisher) && EVENT_NAME.test(name.join(PUBLISHER_SEPARATOR))
+	);
 }
 
 export function readEvents(plugin: string, declared: unknown): EventsRead {
@@ -114,8 +117,7 @@ type DefinitionRead =
 function readDefinition(candidate: Record<string, unknown>): DefinitionRead {
 	const { plugin, name, version, payload } = candidate;
 	if (
-		typeof plugin !== "string" ||
-		!PUBLISHER_NAME.test(plugin) ||
+		!isPluginName(plugin) ||
 		typeof name !== "string" ||
 		!EVENT_NAME.test(name)
 	)

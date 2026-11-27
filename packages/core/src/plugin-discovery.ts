@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { isRecord } from "./is-record.ts";
 import type { PluginDiscovery, PluginPackage } from "./kernel.ts";
 import { readMigrations } from "./migration-files.ts";
-import { isPluginName } from "./plugin-manifest.ts";
+import { isPluginName } from "./plugin-name.ts";
 import { systemFailureReason } from "./system-error.ts";
 
 const PACKAGE_JSON = "package.json";

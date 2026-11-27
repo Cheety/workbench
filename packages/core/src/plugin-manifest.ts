@@ -12,11 +12,10 @@ import {
 	type RegisteredOperation,
 	readOperations,
 } from "./operation-registry.ts";
+import { isPluginName } from "./plugin-name.ts";
 import { quote } from "./quote.ts";
 import type { Migration } from "./schema-migrations.ts";
 import { MAX_PLUGIN_NAME_LENGTH } from "./schema-name.ts";
-
-const PLUGIN_NAME = /^[a-z][a-z0-9-]*$/;
 
 const SEMVER_VERSION =
 	/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
@@ -29,10 +28,6 @@ const SEMVER_RANGE = new RegExp(
 	String.raw`^\s*${COMPARATOR_SET}(?:\s*\|\|\s*${COMPARATOR_SET})*\s*$`,
 );
 const MAX_SEMVER_RANGE_LENGTH = 256;
-
-export function isPluginName(value: unknown): value is string {
-	return typeof value === "string" && PLUGIN_NAME.test(value);
-}
 
 export type ValidPlugin = {
 	readonly name: string;
