@@ -26,12 +26,92 @@ export type ProblemDetails = {
 
 export const PROBLEM_CONTENT_TYPE = "application/problem+json";
 
-export const ROUTE_NOT_FOUND: Problem = {
-	code: "route_not_found",
-	kind: "not_found",
-	detail: "no route matches the method and path of the request",
-	issues: [],
+export const MAX_BODY_BYTES = 1024 * 1024;
+
+export type UnreadyStartupStatus = "starting" | "failed";
+
+type RequestProblemCode =
+	| "route_not_found"
+	| "unauthenticated"
+	| "malformed_path"
+	| "invalid_workspace_id"
+	| "invalid_input"
+	| "body_too_large"
+	| "instance_not_ready"
+	| "internal_error";
+
+type RequestProblem<C extends RequestProblemCode> = Problem & {
+	readonly code: C;
 };
+
+type RequestProblemCatalogue = {
+	readonly [C in Exclude<
+		RequestProblemCode,
+		"instance_not_ready"
+	>]: RequestProblem<C>;
+} & {
+	readonly instance_not_ready: Readonly<
+		Record<UnreadyStartupStatus, RequestProblem<"instance_not_ready">>
+	>;
+};
+
+function requestProblem<C extends RequestProblemCode>(
+	code: C,
+	kind: ProblemKind,
+	detail: string,
+): RequestProblem<C> {
+	return { code, kind, detail, issues: [] };
+}
+
+export const REQUEST_PROBLEMS = {
+	route_not_found: requestProblem(
+		"route_not_found",
+		"not_found",
+		"no route matches the method and path of the request",
+	),
+	unauthenticated: requestProblem(
+		"unauthenticated",
+		"unauthenticated",
+		"the request needs a valid API token as a bearer token",
+	),
+	malformed_path: requestProblem(
+		"malformed_path",
+		"invalid_input",
+		"the path of the request is not valid percent-encoding",
+	),
+	invalid_workspace_id: requestProblem(
+		"invalid_workspace_id",
+		"invalid_input",
+		"the workspace in the path is not a UUID",
+	),
+	invalid_input: requestProblem(
+		"invalid_input",
+		"invalid_input",
+		"the request body is not JSON",
+	),
+	body_too_large: requestProblem(
+		"body_too_large",
+		"too_large",
+		`the request body exceeds ${MAX_BODY_BYTES} bytes`,
+	),
+	instance_not_ready: {
+		starting: requestProblem(
+			"instance_not_ready",
+			"not_ready",
+			"the instance is still starting",
+		),
+		failed: requestProblem(
+			"instance_not_ready",
+			"not_ready",
+			"the instance failed to start",
+		),
+	},
+	internal_error: requestProblem(
+		"internal_error",
+		"internal",
+		"the request failed for an internal reason",
+	),
+} as const satisfies RequestProblemCatalogue;
 
 const PROBLEM_TYPE_PREFIX = "urn:workbench:problem:";
 

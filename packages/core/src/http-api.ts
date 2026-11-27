@@ -2,9 +2,9 @@ import type { Authentication } from "./api-tokens.ts";
 import type { Logger } from "./logger.ts";
 import type { OperationPipeline } from "./operation-pipeline.ts";
 import {
-	type Problem,
+	MAX_BODY_BYTES,
 	problemResponse,
-	ROUTE_NOT_FOUND,
+	REQUEST_PROBLEMS,
 } from "./problem-details.ts";
 import { isWorkspaceId } from "./workspaces.ts";
 
@@ -14,8 +14,6 @@ export const OPERATION_PATH_TEMPLATE =
 	"/api/workspaces/{workspace}/operations/{operation}";
 
 const OPERATION_PATH = /^\/api\/workspaces\/([^/]+)\/operations\/([^/]+)$/;
-
-export const MAX_BODY_BYTES = 1024 * 1024;
 
 const BEARER = /^Bearer ([^\s]+)$/i;
 
@@ -35,41 +33,6 @@ type ApiAuthentication =
 	| Authentication
 	| { readonly authenticated: false; readonly reason: "missing_token" };
 
-const UNAUTHENTICATED: Problem = {
-	code: "unauthenticated",
-	kind: "unauthenticated",
-	detail: "the request needs a valid API token as a bearer token",
-	issues: [],
-};
-
-const BODY_TOO_LARGE: Problem = {
-	code: "body_too_large",
-	kind: "too_large",
-	detail: `the request body exceeds ${MAX_BODY_BYTES} bytes`,
-	issues: [],
-};
-
-const MALFORMED_PATH: Problem = {
-	code: "malformed_path",
-	kind: "invalid_input",
-	detail: "the path of the request is not valid percent-encoding",
-	issues: [],
-};
-
-const INVALID_WORKSPACE_ID: Problem = {
-	code: "invalid_workspace_id",
-	kind: "invalid_input",
-	detail: "the workspace in the path is not a UUID",
-	issues: [],
-};
-
-const BODY_NOT_JSON: Problem = {
-	code: "invalid_input",
-	kind: "invalid_input",
-	detail: "the request body is not JSON",
-	issues: [],
-};
-
 export async function answerApiRequest(
 	api: HttpApi,
 	{ request, path, correlationId, logger }: ApiRequest,
@@ -83,24 +46,32 @@ export async function answerApiRequest(
 		logger.warn("request not authenticated", {
 			reason: authentication.reason,
 		});
-		const response = problemResponse(UNAUTHENTICATED, correlationId);
+		const response = problemResponse(
+			REQUEST_PROBLEMS.unauthenticated,
+			correlationId,
+		);
 		response.headers.set("WWW-Authenticate", "Bearer");
 		return response;
 	}
 	const route = OPERATION_PATH.exec(path);
 	if (request.method !== "POST" || route === null)
-		return problemResponse(ROUTE_NOT_FOUND, correlationId);
+		return problemResponse(REQUEST_PROBLEMS.route_not_found, correlationId);
 	const [, encodedWorkspace = "", encodedOperation = ""] = route;
 	const workspace = decodedSegment(encodedWorkspace);
 	const operation = decodedSegment(encodedOperation);
 	if (workspace === undefined || operation === undefined)
-		return problemResponse(MALFORMED_PATH, correlationId);
+		return problemResponse(REQUEST_PROBLEMS.malformed_path, correlationId);
 	if (!isWorkspaceId(workspace))
-		return problemResponse(INVALID_WORKSPACE_ID, correlationId);
+		return problemResponse(
+			REQUEST_PROBLEMS.invalid_workspace_id,
+			correlationId,
+		);
 	const body = await limitedText(request);
-	if (body === undefined) return problemResponse(BODY_TOO_LARGE, correlationId);
+	if (body === undefined)
+		return problemResponse(REQUEST_PROBLEMS.body_too_large, correlationId);
 	const input = parsedJson(body);
-	if (!input.parsed) return problemResponse(BODY_NOT_JSON, correlationId);
+	if (!input.parsed)
+		return problemResponse(REQUEST_PROBLEMS.invalid_input, correlationId);
 	const result = await api.pipeline.invoke({
 		operation,
 		actor: authentication.actor,

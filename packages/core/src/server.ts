@@ -3,9 +3,9 @@ import { API_PATH_PREFIX, answerApiRequest, type HttpApi } from "./http-api.ts";
 import type { Logger } from "./logger.ts";
 import type { DatabaseCheck } from "./postgres.ts";
 import {
-	type Problem,
 	problemResponse,
-	ROUTE_NOT_FOUND,
+	REQUEST_PROBLEMS,
+	type UnreadyStartupStatus,
 } from "./problem-details.ts";
 
 export const CORRELATION_ID_HEADER = "X-Correlation-ID";
@@ -21,29 +21,7 @@ const HEALTH_STATUS = {
 	notReady: "not_ready",
 } as const;
 
-const INTERNAL_ERROR: Problem = {
-	code: "internal_error",
-	kind: "internal",
-	detail: "the request failed for an internal reason",
-	issues: [],
-};
-
-export type StartupStatus = "starting" | "started" | "failed";
-
-const INSTANCE_NOT_READY: Record<Exclude<StartupStatus, "started">, Problem> = {
-	starting: {
-		code: "instance_not_ready",
-		kind: "not_ready",
-		detail: "the instance is still starting",
-		issues: [],
-	},
-	failed: {
-		code: "instance_not_ready",
-		kind: "not_ready",
-		detail: "the instance failed to start",
-		issues: [],
-	},
-};
+export type StartupStatus = "started" | UnreadyStartupStatus;
 
 type IncomingRequest = {
 	readonly request: Request;
@@ -90,7 +68,7 @@ async function handleRequest(
 		options,
 	).catch((error: unknown) => {
 		logger.error("request failed", { error: describeThrown(error) });
-		return problemResponse(INTERNAL_ERROR, correlationId);
+		return problemResponse(REQUEST_PROBLEMS.internal_error, correlationId);
 	});
 	response.headers.set(CORRELATION_ID_HEADER, correlationId);
 	const entry = { method: request.method, path, status: response.status };
@@ -118,10 +96,13 @@ async function route(
 	if (path.startsWith(API_PATH_PREFIX)) {
 		const startup = options.startupStatus();
 		if (startup !== "started")
-			return problemResponse(INSTANCE_NOT_READY[startup], correlationId);
+			return problemResponse(
+				REQUEST_PROBLEMS.instance_not_ready[startup],
+				correlationId,
+			);
 		return answerApiRequest(options.api, incoming);
 	}
-	return problemResponse(ROUTE_NOT_FOUND, correlationId);
+	return problemResponse(REQUEST_PROBLEMS.route_not_found, correlationId);
 }
 
 async function readiness(
