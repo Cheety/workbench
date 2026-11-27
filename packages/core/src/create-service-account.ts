@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import { SQL } from "bun";
 import { z } from "zod";
-import { API_TOKEN_BYTES, apiTokenFrom } from "./api-tokens.ts";
+import { newApiToken } from "./api-tokens.ts";
 import {
 	type Config,
 	InvalidConfigError,
@@ -14,12 +14,14 @@ import {
 	CORE_MIGRATIONS_DIRECTORY,
 	migrateCoreSchema,
 } from "./schema-migrations.ts";
-import { createServiceAccount } from "./service-accounts.ts";
+import {
+	checkValidDays,
+	createServiceAccount,
+	InvalidValidDaysError,
+	MAX_VALID_DAYS,
+} from "./service-accounts.ts";
 
-const USAGE =
-	"usage: create-service-account --name <name> --valid-days <1-3650>";
-
-const MAX_VALID_DAYS = 3650;
+const USAGE = `usage: create-service-account --name <name> --valid-days <1-${MAX_VALID_DAYS}>`;
 
 const CONNECTION_TIMEOUT_MS = 10_000;
 
@@ -36,8 +38,7 @@ const request = z.object({
 	validDays: z
 		.string()
 		.regex(/^[1-9][0-9]*$/)
-		.transform(Number)
-		.pipe(z.number().max(MAX_VALID_DAYS)),
+		.transform(Number),
 });
 
 type ServiceAccountRequest = z.infer<typeof request>;
@@ -59,9 +60,12 @@ function readRequest(
 			name: values.name,
 			validDays: values["valid-days"],
 		});
-		return parsed.success ? parsed.data : undefined;
+		if (!parsed.success) return undefined;
+		checkValidDays(parsed.data.validDays);
+		return parsed.data;
 	} catch (error) {
-		if (error instanceof TypeError) return undefined;
+		if (error instanceof TypeError || error instanceof InvalidValidDaysError)
+			return undefined;
 		throw error;
 	}
 }
@@ -119,7 +123,11 @@ if (migrated !== "migrated")
 		reason: "core_schema_not_migrated",
 	});
 
-const sql = new SQL(config.databaseUrl.reveal(), { max: 1 });
+const sql = new SQL(config.databaseUrl.reveal(), {
+	max: 1,
+	connectionTimeout: CONNECTION_TIMEOUT_MS / 1000,
+	connection: { statement_timeout: STATEMENT_TIMEOUT_MS },
+});
 const created = await createServiceAccount(
 	sql,
 	{
@@ -130,15 +138,16 @@ const created = await createServiceAccount(
 		now,
 		newId: () => crypto.randomUUID(),
 		newToken: () =>
-			apiTokenFrom(crypto.getRandomValues(new Uint8Array(API_TOKEN_BYTES))),
+			newApiToken((length) => crypto.getRandomValues(new Uint8Array(length))),
 	},
-).catch((error: unknown) =>
-	abort(logger, "service account not created", {
-		reason: "database_failed",
-		error: describeThrown(error),
-	}),
-);
-await sql.close();
+)
+	.finally(() => sql.close())
+	.catch((error: unknown) =>
+		abort(logger, "service account not created", {
+			reason: "database_failed",
+			error: describeThrown(error),
+		}),
+	);
 process.stdout.write(
 	`${JSON.stringify({
 		serviceAccount: created.serviceAccountId,

@@ -6,15 +6,16 @@ import {
 	CORE_MIGRATIONS_DIRECTORY,
 	migrateCoreSchema,
 } from "./schema-migrations.ts";
-import { createServiceAccount } from "./service-accounts.ts";
+import {
+	createServiceAccount,
+	InvalidValidDaysError,
+} from "./service-accounts.ts";
 import { createFreshDatabase, type FreshDatabase } from "./testing/postgres.ts";
 import { recordingLogger } from "./testing/recording-logger.ts";
 
 const NOW = new Date("2026-11-26T08:00:00.000Z");
 
 const THIRTY_DAYS_LATER = new Date("2026-12-26T08:00:00.000Z");
-
-const SERVICE_ACCOUNT_ID = "00000000-0000-4000-8000-000000000001";
 
 const databases: FreshDatabase[] = [];
 
@@ -40,23 +41,24 @@ async function migratedDatabase(): Promise<FreshDatabase> {
 	return database;
 }
 
+const sources = {
+	now: () => NOW,
+	newId: () => crypto.randomUUID(),
+	newToken: () => "wbt_test-token",
+};
+
 describe("creating a service account", () => {
 	test("issues a token that expires the given number of days after creation", async () => {
 		const database = await migratedDatabase();
-		const ids = [SERVICE_ACCOUNT_ID, "00000000-0000-4000-8000-000000000002"];
 
 		const issued = await createServiceAccount(
 			database.sql,
 			{ name: "deploy agent", validDays: 30 },
-			{
-				now: () => NOW,
-				newId: () => ids.shift() ?? "",
-				newToken: () => "wbt_test-token",
-			},
+			sources,
 		);
 
 		expect(issued).toEqual({
-			serviceAccountId: SERVICE_ACCOUNT_ID,
+			serviceAccountId: expect.any(String),
 			token: "wbt_test-token",
 			expiresAt: THIRTY_DAYS_LATER,
 		});
@@ -68,7 +70,7 @@ describe("creating a service account", () => {
 			),
 		).toEqual({
 			authenticated: true,
-			actor: { kind: "service_account", id: SERVICE_ACCOUNT_ID },
+			actor: { kind: "service_account", id: issued.serviceAccountId },
 		});
 		expect(
 			await authenticateToken(
@@ -78,4 +80,40 @@ describe("creating a service account", () => {
 			),
 		).toEqual({ authenticated: false, reason: "expired_token" });
 	});
+
+	test("accepts a validity of the maximum of 3650 days", async () => {
+		const database = await migratedDatabase();
+
+		const issued = await createServiceAccount(
+			database.sql,
+			{ name: "deploy agent", validDays: 3650 },
+			sources,
+		);
+
+		expect(issued.expiresAt).toEqual(new Date("2036-11-23T08:00:00.000Z"));
+	});
+
+	test.each([
+		{ case: "zero days", validDays: 0 },
+		{ case: "a negative number of days", validDays: -1 },
+		{ case: "a fraction of a day", validDays: 1.5 },
+		{ case: "more than 3650 days", validDays: 3651 },
+		{ case: "no number", validDays: Number.NaN },
+	])(
+		"rejects a validity of $case and stores no service account",
+		async ({ validDays }) => {
+			const database = await migratedDatabase();
+
+			const creating = createServiceAccount(
+				database.sql,
+				{ name: "deploy agent", validDays },
+				sources,
+			);
+
+			await expect(creating).rejects.toBeInstanceOf(InvalidValidDaysError);
+			expect(await database.sql`SELECT id FROM core.service_accounts`).toEqual(
+				[],
+			);
+		},
+	);
 });

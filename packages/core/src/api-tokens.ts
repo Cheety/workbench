@@ -4,7 +4,7 @@ import { z } from "zod";
 
 export const API_TOKEN_PREFIX = "wbt_";
 
-export const API_TOKEN_BYTES = 32;
+const API_TOKEN_BYTES = 32;
 
 export type RejectedTokenReason = "unknown_token" | "expired_token";
 
@@ -17,8 +17,10 @@ const tokenRow = z.object({
 	expires_at: z.date(),
 });
 
-export function apiTokenFrom(randomBytes: Uint8Array): string {
-	return `${API_TOKEN_PREFIX}${Buffer.from(randomBytes).toString("base64url")}`;
+export function newApiToken(
+	randomBytes: (length: number) => Uint8Array,
+): string {
+	return `${API_TOKEN_PREFIX}${Buffer.from(randomBytes(API_TOKEN_BYTES)).toString("base64url")}`;
 }
 
 export function apiTokenHash(token: string): string {

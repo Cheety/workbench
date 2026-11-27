@@ -20,11 +20,32 @@ export type IssuedToken = {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+export const MAX_VALID_DAYS = 3650;
+
+export class InvalidValidDaysError extends Error {
+	constructor(validDays: number) {
+		super(
+			`a token is valid for a whole number of days from 1 to ${MAX_VALID_DAYS}, not ${validDays}`,
+		);
+		this.name = "InvalidValidDaysError";
+	}
+}
+
+export function checkValidDays(validDays: number): void {
+	if (
+		!Number.isInteger(validDays) ||
+		validDays < 1 ||
+		validDays > MAX_VALID_DAYS
+	)
+		throw new InvalidValidDaysError(validDays);
+}
+
 export async function createServiceAccount(
 	sql: SQL,
 	account: NewServiceAccount,
 	sources: ServiceAccountSources,
 ): Promise<IssuedToken> {
+	checkValidDays(account.validDays);
 	const serviceAccountId = sources.newId();
 	const tokenId = sources.newId();
 	const token = sources.newToken();
