@@ -169,7 +169,6 @@ describe("the contract export of a plugin", () => {
 	])("rejects any file of its own package: %s", async (source, importPath) => {
 		const packages = await packagesDirectoryWith({
 			...NOTES_PLUGIN,
-			"plugin-notes/src/contract/note.ts": "export type Note = {};",
 			"plugin-notes/src/contract/index.ts": source,
 		});
 
@@ -178,6 +177,20 @@ describe("the contract export of a plugin", () => {
 				rule: "contract_imports_plugin_code",
 				file: "plugin-notes/src/contract/index.ts",
 				importPath,
+			},
+		]);
+	});
+
+	test("rejects a file in the directory of the contract that the contract does not reach", async () => {
+		const packages = await packagesDirectoryWith({
+			...NOTES_PLUGIN,
+			"plugin-notes/src/contract/draft.ts": "export const draft = {};",
+		});
+
+		expect(await findPluginBoundaryViolations(packages)).toEqual([
+			{
+				rule: "contract_beside_other_code",
+				file: "plugin-notes/src/contract/draft.ts",
 			},
 		]);
 	});
@@ -191,16 +204,24 @@ describe("the contract export of a plugin", () => {
 			}),
 			"plugin-notes/server/plugin.ts": "export default {};",
 			"plugin-notes/src/client/ui.tsx": "export const Ui = () => null;",
-			"plugin-notes/src/contract.ts": 'import { Ui } from "./client/ui.tsx";',
+			"plugin-notes/src/contract.ts": "export type Note = { id: string };",
 		});
 
 		expect(await findPluginBoundaryViolations(packages)).toEqual([
 			{
-				rule: "contract_imports_plugin_code",
-				file: "plugin-notes/src/contract.ts",
-				importPath: "./client/ui.tsx",
+				rule: "contract_beside_other_code",
+				file: "plugin-notes/src/client/ui.tsx",
 			},
 		]);
+	});
+
+	test("allows tests in the directory of the contract", async () => {
+		const packages = await packagesDirectoryWith({
+			...NOTES_PLUGIN,
+			"plugin-notes/src/contract/index.test.ts": 'import "../store.ts";',
+		});
+
+		expect(await findPluginBoundaryViolations(packages)).toEqual([]);
 	});
 
 	test("allows other packages and the contracts of foreign plugins", async () => {

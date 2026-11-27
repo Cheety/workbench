@@ -1,7 +1,10 @@
 import { readdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-export type PluginBoundaryViolation = ImportViolation | ContractExportViolation;
+export type PluginBoundaryViolation =
+	| ImportViolation
+	| ContractExportViolation
+	| ContractDirectoryViolation;
 
 type ImportViolation = {
 	readonly rule: "foreign_plugin_internals" | "contract_imports_plugin_code";
@@ -11,6 +14,11 @@ type ImportViolation = {
 
 type ContractExportViolation = {
 	readonly rule: "contract_beside_entry" | "contract_export_not_a_path";
+	readonly file: string;
+};
+
+type ContractDirectoryViolation = {
+	readonly rule: "contract_beside_other_code";
 	readonly file: string;
 };
 
@@ -37,6 +45,7 @@ type Import = {
 const PACKAGE_JSON = "package.json";
 const CONTRACT_SUBPATH = "contract";
 const INSTALLED_DEPENDENCIES = "node_modules";
+const TEST_FILE = /\.test\.[cm]?[jt]sx?$/;
 const SOURCE_FILES = new Bun.Glob("**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}");
 const GAP = String.raw`(?:\s|/\*[\s\S]*?\*/|//[^\n]*\n)*`;
 const MODULE_SPECIFIER = new RegExp(
@@ -60,6 +69,11 @@ export async function findPluginBoundaryViolations(
 		for await (const path of SOURCE_FILES.scan(plugin.root)) {
 			if (path.split(sep).includes(INSTALLED_DEPENDENCIES)) continue;
 			const file = join(plugin.root, path);
+			if (isBesideContract(file, plugin.contract))
+				violations.push({
+					rule: "contract_beside_other_code",
+					file: relative(packagesDirectory, file),
+				});
 			for (const { importPath, isPath } of importsIn(
 				await Bun.file(file).text(),
 			)) {
@@ -163,6 +177,15 @@ function importsIn(source: string): Omit<Import, "file">[] {
 			importPath === undefined ? [] : [{ importPath, isPath: kind === "path" }],
 	);
 	return [...modules, ...references];
+}
+
+function isBesideContract(file: string, contract: ContractExport): boolean {
+	return (
+		contract.kind === "published" &&
+		file !== contract.file &&
+		isWithin(file, dirname(contract.file)) &&
+		!TEST_FILE.test(file)
+	);
 }
 
 function isContractImport(plugin: PluginPackage, importPath: string): boolean {
