@@ -363,21 +363,32 @@ describe("a page of the audit", () => {
 		const workspace = await harness.createWorkspace("Accounts");
 		await addEntries(harness, workspace, 3);
 
-		const ids: string[] = [];
-		let cursor: string | null = null;
-		do {
-			const page = pageOf(
-				await listAuditEntries(harness, workspace, { limit: 1, cursor }),
-			);
-			ids.push(...page.entries.map((listed) => listed.id));
-			cursor = page.nextCursor;
-		} while (cursor !== null);
+		const first = pageOf(
+			await listAuditEntries(harness, workspace, { limit: 1, cursor: null }),
+		);
+		const second = pageOf(
+			await listAuditEntries(harness, workspace, {
+				limit: 1,
+				cursor: first.nextCursor,
+			}),
+		);
+		const third = pageOf(
+			await listAuditEntries(harness, workspace, {
+				limit: 1,
+				cursor: second.nextCursor,
+			}),
+		);
 
-		expect(ids).toEqual([
-			"00000000-0000-4000-a000-000000000003",
-			"00000000-0000-4000-a000-000000000002",
-			"00000000-0000-4000-a000-000000000001",
+		expect(
+			[first, second, third].map((page) =>
+				page.entries.map((listed) => listed.id),
+			),
+		).toEqual([
+			["00000000-0000-4000-a000-000000000003"],
+			["00000000-0000-4000-a000-000000000002"],
+			["00000000-0000-4000-a000-000000000001"],
 		]);
+		expect(third.nextCursor).toBeNull();
 	});
 
 	test.each([
