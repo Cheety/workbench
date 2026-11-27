@@ -350,7 +350,7 @@ describe("the audit read over HTTP", () => {
 
 		const response = await api.post(
 			operationPath("core.listAuditEntries"),
-			JSON.stringify({ limit: 10 }),
+			JSON.stringify({ limit: 10, cursor: null }),
 			bearer(token),
 		);
 
@@ -374,6 +374,7 @@ describe("the audit read over HTTP", () => {
 					result: "succeeded",
 				},
 			],
+			nextCursor: null,
 		});
 		for (const text of [body, stored?.entries]) {
 			expect(text).not.toContain(token);

@@ -186,7 +186,7 @@ describe("the operation harness", () => {
 			actor: ALICE,
 			workspace,
 			operation: "core.listAuditEntries",
-			input: { limit: 10 },
+			input: { limit: 10, cursor: null },
 		});
 
 		expect([first, second]).toEqual([
@@ -204,6 +204,7 @@ describe("the operation harness", () => {
 						id: "00000000-0000-4000-a000-000000000001",
 					}),
 				],
+				nextCursor: null,
 			},
 		});
 	});

@@ -125,16 +125,52 @@ function everyMinuteFrom(start: string): () => Date {
 	return () => new Date(Date.parse(start) + 60_000 * minutes++);
 }
 
+type AuditPage = {
+	readonly limit: number;
+	readonly cursor: string | null;
+};
+
+const FIRST_TEN: AuditPage = { limit: 10, cursor: null };
+
 function listAuditEntries(
 	harness: OperationHarness,
 	workspace: string,
+	page: AuditPage = FIRST_TEN,
 ): Promise<OperationResult> {
 	return harness.call({
 		actor: AUDITOR,
 		workspace,
 		operation: "core.listAuditEntries",
-		input: { limit: 10 },
+		input: page,
 	});
+}
+
+const auditPage = z.object({
+	entries: z.array(z.object({ id: z.string(), occurredAt: z.string() })),
+	nextCursor: z.string().nullable(),
+});
+
+function pageOf(result: OperationResult): z.infer<typeof auditPage> {
+	if (!result.ok) throw new Error("the audit could not be listed");
+	return auditPage.parse(result.output);
+}
+
+async function addEntries(
+	harness: OperationHarness,
+	workspace: string,
+	count: number,
+): Promise<void> {
+	for (let amount = 1; amount <= count; amount++)
+		await harness.call({
+			actor: ALICE,
+			workspace,
+			operation: "ledger.addEntry",
+			input: { amount },
+		});
+}
+
+function cursorOf(position: unknown): string {
+	return Buffer.from(JSON.stringify(position)).toString("base64url");
 }
 
 describe("the audit of a workspace", () => {
@@ -166,6 +202,7 @@ describe("the audit of a workspace", () => {
 						result: "succeeded",
 					},
 				],
+				nextCursor: null,
 			},
 		});
 	});
@@ -205,6 +242,7 @@ describe("the audit of a workspace", () => {
 						operation: "ledger.addEntry",
 					}),
 				],
+				nextCursor: null,
 			},
 		});
 	});
@@ -222,7 +260,10 @@ describe("the audit of a workspace", () => {
 
 		const listed = await listAuditEntries(harness, workspace);
 
-		expect(listed).toEqual({ ok: true, output: { entries: [] } });
+		expect(listed).toEqual({
+			ok: true,
+			output: { entries: [], nextCursor: null },
+		});
 	});
 
 	test.each([
@@ -247,7 +288,10 @@ describe("the audit of a workspace", () => {
 		const listed = await listAuditEntries(harness, workspace);
 
 		expect(called.ok).toBe(false);
-		expect(listed).toEqual({ ok: true, output: { entries: [] } });
+		expect(listed).toEqual({
+			ok: true,
+			output: { entries: [], nextCursor: null },
+		});
 	});
 
 	test("holds only the entries of the workspace it is asked for", async () => {
@@ -263,7 +307,126 @@ describe("the audit of a workspace", () => {
 
 		const listed = await listAuditEntries(harness, archive);
 
-		expect(listed).toEqual({ ok: true, output: { entries: [] } });
+		expect(listed).toEqual({
+			ok: true,
+			output: { entries: [], nextCursor: null },
+		});
+	});
+});
+
+describe("a page of the audit", () => {
+	test("holds at most the limit and continues after the cursor of the page before", async () => {
+		const harness = await startLedger({
+			now: everyMinuteFrom("2026-11-27T08:00:00.000Z"),
+		});
+		const workspace = await harness.createWorkspace("Accounts");
+		await addEntries(harness, workspace, 3);
+
+		const first = pageOf(
+			await listAuditEntries(harness, workspace, { limit: 2, cursor: null }),
+		);
+		const second = pageOf(
+			await listAuditEntries(harness, workspace, {
+				limit: 2,
+				cursor: first.nextCursor,
+			}),
+		);
+
+		expect(first.entries.map((listed) => listed.occurredAt)).toEqual([
+			"2026-11-27T08:03:00.000Z",
+			"2026-11-27T08:02:00.000Z",
+		]);
+		expect(first.nextCursor).toEqual(expect.any(String));
+		expect(second).toEqual({
+			entries: [
+				expect.objectContaining({ occurredAt: "2026-11-27T08:01:00.000Z" }),
+			],
+			nextCursor: null,
+		});
+	});
+
+	test("names no next cursor when it holds the last entries exactly up to the limit", async () => {
+		const harness = await startLedger();
+		const workspace = await harness.createWorkspace("Accounts");
+		await addEntries(harness, workspace, 2);
+
+		const page = pageOf(
+			await listAuditEntries(harness, workspace, { limit: 2, cursor: null }),
+		);
+
+		expect(page.entries).toHaveLength(2);
+		expect(page.nextCursor).toBeNull();
+	});
+
+	test("neither repeats nor skips an entry among entries of the same time", async () => {
+		const harness = await startLedger();
+		const workspace = await harness.createWorkspace("Accounts");
+		await addEntries(harness, workspace, 3);
+
+		const ids: string[] = [];
+		let cursor: string | null = null;
+		do {
+			const page = pageOf(
+				await listAuditEntries(harness, workspace, { limit: 1, cursor }),
+			);
+			ids.push(...page.entries.map((listed) => listed.id));
+			cursor = page.nextCursor;
+		} while (cursor !== null);
+
+		expect(ids).toEqual([
+			"00000000-0000-4000-a000-000000000003",
+			"00000000-0000-4000-a000-000000000002",
+			"00000000-0000-4000-a000-000000000001",
+		]);
+	});
+
+	test.each([
+		["that is no encoded position", "not a cursor"],
+		["that encodes something else than a position", cursorOf({ page: 2 })],
+		[
+			"whose time is no time",
+			cursorOf(["yesterday", "00000000-0000-4000-a000-000000000001"]),
+		],
+		["whose id is no UUID", cursorOf(["2026-11-27T08:00:00.000Z", "first"])],
+	])("is refused for a cursor %s", async (_case, cursor) => {
+		const harness = await startLedger();
+		const workspace = await harness.createWorkspace("Accounts");
+
+		const listed = await listAuditEntries(harness, workspace, {
+			limit: 10,
+			cursor,
+		});
+
+		expect(listed).toEqual({
+			ok: false,
+			failure: {
+				code: "core.invalid_cursor",
+				kind: "rejected",
+				detail: "the cursor is not one that a page of the audit named",
+				issues: [],
+			},
+		});
+	});
+
+	test.each([
+		["a limit of 0", { limit: 0, cursor: null }],
+		["a limit over 100", { limit: 101, cursor: null }],
+		["no cursor at all", { limit: 10 }],
+	])("is refused as invalid input for %s", async (_case, input) => {
+		const harness = await startLedger();
+		const workspace = await harness.createWorkspace("Accounts");
+
+		const listed = await harness.call({
+			actor: AUDITOR,
+			workspace,
+			operation: "core.listAuditEntries",
+			input,
+		});
+
+		expect(listed).toEqual({
+			ok: false,
+			failure: expect.objectContaining({ code: "invalid_input" }),
+		});
 	});
 });
 
