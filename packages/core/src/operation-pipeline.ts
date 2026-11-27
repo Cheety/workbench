@@ -142,7 +142,7 @@ async function invoke(
 				if (IS_AUDITED[operation.kind])
 					await recordAuditEntry(
 						transaction,
-						auditEntryOf(call, operation, options),
+						newAuditEntryOf(call, operation, options),
 					);
 				return executed;
 			},
@@ -211,7 +211,7 @@ function contextOf(
 	};
 }
 
-function auditEntryOf(
+function newAuditEntryOf(
 	call: OperationCall,
 	operation: RegisteredOperation,
 	sources: Pick<OperationPipelineOptions, "now" | "newAuditEntryId">,
