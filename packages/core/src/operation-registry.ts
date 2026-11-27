@@ -85,49 +85,68 @@ function readOperation(
 			],
 		};
 	const fullName = `${plugin}.${name}`;
-	const validateInput = validatorOf(input);
-	const validateOutput = validatorOf(output);
-	if (
-		isOneOf(kind, OPERATION_KINDS) &&
-		isOneOf(target, OPERATION_TARGETS) &&
-		isRightOf(plugin, right) &&
-		validateInput !== undefined &&
-		validateOutput !== undefined &&
-		typeof execute === "function"
-	)
-		return {
-			valid: true,
-			operation: {
-				name: fullName,
-				plugin,
-				kind,
-				target,
-				right,
-				validateInput,
-				validateOutput,
-				execute: async (value, ctx) => {
-					const result: unknown = await execute.call(candidate, value, ctx);
-					return result;
-				},
-			},
-		};
 	const operation = `operation ${quote(fullName)}`;
 	const problems: string[] = [];
-	if (!isOneOf(kind, OPERATION_KINDS))
-		problems.push(`${operation} must be of kind "query" or "mutation"`);
-	if (!isOneOf(target, OPERATION_TARGETS))
-		problems.push(`${operation} must target "object" or "workspace"`);
-	if (!isRightOf(plugin, right))
-		problems.push(
-			`${operation} must name exactly one right of plugin ${quote(plugin)}, such as ${quote(`${plugin}.workspace.edit`)}`,
-		);
-	if (validateInput === undefined)
-		problems.push(`${operation} must declare its input as a schema`);
-	if (validateOutput === undefined)
-		problems.push(`${operation} must declare its output as a schema`);
-	if (typeof execute !== "function")
-		problems.push(`${operation} must have an execute function`);
-	return { valid: false, problems };
+	const accepted = <Value>(
+		value: Value | undefined,
+		problem: string,
+	): Value | undefined => {
+		if (value === undefined) problems.push(problem);
+		return value;
+	};
+	const validKind = accepted(
+		isOneOf(kind, OPERATION_KINDS) ? kind : undefined,
+		`${operation} must be of kind ${alternatives(OPERATION_KINDS)}`,
+	);
+	const validTarget = accepted(
+		isOneOf(target, OPERATION_TARGETS) ? target : undefined,
+		`${operation} must target ${alternatives(OPERATION_TARGETS)}`,
+	);
+	const validRight = accepted(
+		isRightOf(plugin, right) ? right : undefined,
+		`${operation} must name exactly one right of plugin ${quote(plugin)}, such as ${quote(`${plugin}.workspace.edit`)}`,
+	);
+	const validateInput = accepted(
+		validatorOf(input),
+		`${operation} must declare its input as a schema`,
+	);
+	const validateOutput = accepted(
+		validatorOf(output),
+		`${operation} must declare its output as a schema`,
+	);
+	const validExecute = accepted(
+		typeof execute === "function" ? execute : undefined,
+		`${operation} must have an execute function`,
+	);
+	if (
+		validKind === undefined ||
+		validTarget === undefined ||
+		validRight === undefined ||
+		validateInput === undefined ||
+		validateOutput === undefined ||
+		validExecute === undefined
+	)
+		return { valid: false, problems };
+	return {
+		valid: true,
+		operation: {
+			name: fullName,
+			plugin,
+			kind: validKind,
+			target: validTarget,
+			right: validRight,
+			validateInput,
+			validateOutput,
+			execute: async (value, ctx) => {
+				const result: unknown = await validExecute.call(candidate, value, ctx);
+				return result;
+			},
+		},
+	};
+}
+
+function alternatives(members: readonly string[]): string {
+	return members.map(quote).join(" or ");
 }
 
 function isOneOf<Member extends string>(
