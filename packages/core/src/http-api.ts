@@ -15,6 +15,8 @@ export const OPERATION_PATH_TEMPLATE =
 
 const OPERATION_PATH = /^\/api\/workspaces\/([^/]+)\/operations\/([^/]+)$/;
 
+const OPERATION_METHOD = "POST";
+
 const BEARER = /^Bearer ([^\s]+)$/i;
 
 export type HttpApi = {
@@ -37,6 +39,15 @@ export async function answerApiRequest(
 	api: HttpApi,
 	{ request, path, correlationId, logger }: ApiRequest,
 ): Promise<Response> {
+	const route = OPERATION_PATH.exec(path);
+	if (route !== null && request.method !== OPERATION_METHOD) {
+		const response = problemResponse(
+			REQUEST_PROBLEMS.method_not_allowed,
+			correlationId,
+		);
+		response.headers.set("Allow", OPERATION_METHOD);
+		return response;
+	}
 	const token = bearerToken(request);
 	const authentication: ApiAuthentication =
 		token === undefined
@@ -53,8 +64,7 @@ export async function answerApiRequest(
 		response.headers.set("WWW-Authenticate", "Bearer");
 		return response;
 	}
-	const route = OPERATION_PATH.exec(path);
-	if (request.method !== "POST" || route === null)
+	if (route === null)
 		return problemResponse(REQUEST_PROBLEMS.route_not_found, correlationId);
 	const [, encodedWorkspace = "", encodedOperation = ""] = route;
 	const workspace = decodedSegment(encodedWorkspace);

@@ -4,6 +4,7 @@ import type { ValidationIssue } from "./schema-validation.ts";
 export type ProblemKind =
 	| FailureKind
 	| "unauthenticated"
+	| "method_not_allowed"
 	| "too_large"
 	| "not_ready";
 
@@ -32,6 +33,7 @@ export type UnreadyStartupStatus = "starting" | "failed";
 
 type RequestProblemCode =
 	| "route_not_found"
+	| "method_not_allowed"
 	| "unauthenticated"
 	| "malformed_path"
 	| "invalid_workspace_id"
@@ -68,6 +70,11 @@ export const REQUEST_PROBLEMS = {
 		"route_not_found",
 		"not_found",
 		"no route matches the method and path of the request",
+	),
+	method_not_allowed: requestProblem(
+		"method_not_allowed",
+		"method_not_allowed",
+		"the operation path only accepts POST",
 	),
 	unauthenticated: requestProblem(
 		"unauthenticated",
@@ -122,6 +129,7 @@ const STATUS_OF: Record<
 	invalid_input: { status: 400, title: "Bad Request" },
 	unauthenticated: { status: 401, title: "Unauthorized" },
 	not_found: { status: 404, title: "Not Found" },
+	method_not_allowed: { status: 405, title: "Method Not Allowed" },
 	conflict: { status: 409, title: "Conflict" },
 	too_large: { status: 413, title: "Content Too Large" },
 	rejected: { status: 422, title: "Unprocessable Content" },

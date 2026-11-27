@@ -89,6 +89,7 @@ type ApiInstance = {
 		body: string,
 		headers: Record<string, string>,
 	): Promise<Response>;
+	send(method: string, path: string): Promise<Response>;
 };
 
 const cleanups: (() => Promise<void>)[] = [];
@@ -181,6 +182,8 @@ async function startApiInstance(): Promise<ApiInstance> {
 				body,
 				headers,
 			}),
+		send: (method, path) =>
+			fetch(`http://127.0.0.1:${server.port}${path}`, { method }),
 	};
 }
 
@@ -326,6 +329,32 @@ describe("a call without a valid token", () => {
 
 		expect(await listed.json()).toEqual({ entries: [] });
 	});
+});
+
+describe("a call with another method than POST", () => {
+	test.each(["GET", "PUT", "DELETE"])(
+		"is answered with 405 problem details allowing POST for %s, before authentication",
+		async (method) => {
+			const api = await startApiInstance();
+
+			const response = await api.send(method, operationPath("ledger.addEntry"));
+
+			expect(response.status).toBe(405);
+			expect(response.headers.get("Allow")).toBe("POST");
+			expect(response.headers.get("Content-Type")).toBe(
+				"application/problem+json",
+			);
+			expect(await response.json()).toEqual({
+				type: "urn:workbench:problem:method_not_allowed",
+				title: "Method Not Allowed",
+				status: 405,
+				detail: "the operation path only accepts POST",
+				code: "method_not_allowed",
+				correlationId: "request-1",
+				issues: [],
+			});
+		},
+	);
 });
 
 describe("a failing call over HTTP", () => {
