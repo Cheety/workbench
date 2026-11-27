@@ -73,6 +73,7 @@ export type JobQueueOptions = {
 	readonly sql: SQL;
 	readonly cancellation: SQL;
 	readonly jobs: JobRegistry;
+	readonly hasCoreSchema: () => boolean;
 	readonly now: () => Date;
 	readonly newId: () => string;
 	readonly newJobId: () => string;
@@ -180,7 +181,7 @@ export function createJobQueue(options: JobQueueOptions): JobQueue {
 	const removeExpiredJobs = expiredJobRemoverOf(options);
 	return {
 		runDue: async (stopSignal) => {
-			if (options.jobs.names().length === 0) return;
+			if (!options.hasCoreSchema()) return;
 			const dueBy = options.now();
 			await enqueueDueCronJobs(dueBy);
 			while (!stopSignal.aborted) {

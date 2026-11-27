@@ -85,6 +85,7 @@ export type EventDeliveryOptions = {
 	readonly sql: SQL;
 	readonly cancellation: SQL;
 	readonly events: EventRegistry;
+	readonly hasCoreSchema: () => boolean;
 	readonly now: () => Date;
 	readonly newId: () => string;
 	readonly random: () => number;
@@ -156,8 +157,9 @@ export function createEventDelivery(
 	const removeExpiredEvents = expiredEventRemoverOf(options);
 	return {
 		deliverDue: async (stopSignal) => {
-			if (options.events.subscriptions().length === 0) return;
-			let position: Position | undefined = BEFORE_ALL;
+			if (!options.hasCoreSchema()) return;
+			let position: Position | undefined =
+				options.events.subscriptions().length === 0 ? undefined : BEFORE_ALL;
 			while (position !== undefined && !stopSignal.aborted)
 				position = await attemptNext(position, attemptOptions);
 			if (position === undefined) await removeExpiredEvents(options.now());

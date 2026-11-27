@@ -128,6 +128,7 @@ type QueueScenario = {
 	readonly random?: () => number;
 	readonly runTimeout?: HookTimeout;
 	readonly newJobId?: () => string;
+	readonly hasCoreSchema?: () => boolean;
 };
 
 function queueOf(scenario: QueueScenario) {
@@ -136,6 +137,7 @@ function queueOf(scenario: QueueScenario) {
 		sql: scenario.sql,
 		cancellation: scenario.cancellation,
 		jobs: scenario.jobs,
+		hasCoreSchema: scenario.hasCoreSchema ?? (() => true),
 		now: scenario.now ?? (() => NOW),
 		newId: () => "00000000-0000-4000-8000-000000000001",
 		random: scenario.random ?? (() => 0.5),
@@ -1407,6 +1409,29 @@ describe("a settled job", () => {
 	);
 });
 
+describe("a settled job of a plugin that is no longer active", () => {
+	test("is removed in an instance where no plugin declares a job", async () => {
+		const database = await migratedDatabase();
+		const jobs = registryOf(sendingReminders(async () => {}));
+		await enqueueReminder(database.sql, jobs, JOB);
+		await queueOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			jobs,
+		}).queue.runDue(NOT_STOPPED);
+		const { queue } = queueOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			jobs: registryOf(),
+			now: () => new Date(NOW.getTime() + 7 * DAY_MS),
+		});
+
+		await queue.runDue(NOT_STOPPED);
+
+		expect(await countJobs(database.sql)).toEqual({ jobs: 0 });
+	});
+});
+
 describe("a pending job", () => {
 	test("stays in the queue however long ago it was enqueued", async () => {
 		const database = await migratedDatabase();
@@ -1592,12 +1617,13 @@ describe("the job loop on the queue", () => {
 });
 
 describe("the job queue", () => {
-	test("asks Postgres for nothing while no plugin declares a job, so it may run before the core schema exists", async () => {
+	test("asks Postgres for nothing until the core schema exists", async () => {
 		const database = await freshDatabase();
 		const { queue } = queueOf({
 			sql: database.sql,
 			cancellation: database.cancellation,
-			jobs: registryOf(),
+			jobs: registryOf(sendingReminders(async () => {})),
+			hasCoreSchema: () => false,
 		});
 
 		const run = queue.runDue(NOT_STOPPED);

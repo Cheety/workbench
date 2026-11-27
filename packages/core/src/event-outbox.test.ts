@@ -332,6 +332,7 @@ type DeliveryScenario = {
 	readonly now?: () => Date;
 	readonly random?: () => number;
 	readonly handlerTimeout?: HookTimeout;
+	readonly hasCoreSchema?: () => boolean;
 };
 
 function deliveryOf(scenario: DeliveryScenario) {
@@ -340,6 +341,7 @@ function deliveryOf(scenario: DeliveryScenario) {
 		sql: scenario.sql,
 		cancellation: scenario.cancellation,
 		events: scenario.events,
+		hasCoreSchema: scenario.hasCoreSchema ?? (() => true),
 		now: scenario.now ?? (() => NOW),
 		newId: () => "00000000-0000-4000-8000-000000000001",
 		random: scenario.random ?? (() => 0.5),
@@ -660,12 +662,13 @@ describe("event delivery", () => {
 		expect(handled).toEqual([EVENT]);
 	});
 
-	test("asks Postgres for nothing while no plugin subscribes to an event, so it may run before the core schema exists", async () => {
+	test("asks Postgres for nothing until the core schema exists", async () => {
 		const database = await freshDatabase();
 		const { delivery } = deliveryOf({
 			sql: database.sql,
 			cancellation: database.cancellation,
-			events: registerEvents({ active: [], notActive: [] }),
+			events: registryOf(subscribing("search", labelRenamed, async () => {})),
+			hasCoreSchema: () => false,
 		});
 
 		await expect(delivery.deliverDue(NOT_STOPPED)).resolves.toBeUndefined();
@@ -1171,6 +1174,22 @@ describe("a settled event", () => {
 		);
 
 		expect(rowsJustBefore).toEqual({ events: 1, deliveries: 0 });
+		expect(await countRows(database.sql)).toEqual({ events: 0, deliveries: 0 });
+	});
+
+	test("is removed in an instance where no active plugin subscribes to any event", async () => {
+		const database = await migratedDatabase();
+		const events = registryOfBoardPublishing(labelRenamed);
+		await publishLabelRenamed(database.sql, events, EVENT);
+		const { delivery } = deliveryOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			events,
+			now: () => new Date(NOW.getTime() + 7 * DAY_MS),
+		});
+
+		await delivery.deliverDue(NOT_STOPPED);
+
 		expect(await countRows(database.sql)).toEqual({ events: 0, deliveries: 0 });
 	});
 });

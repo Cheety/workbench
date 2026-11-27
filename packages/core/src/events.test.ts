@@ -374,6 +374,7 @@ async function startInstanceOn(
 	const delivery = createEventDelivery({
 		...sources,
 		cancellation: database.cancellation,
+		hasCoreSchema: () => true,
 		handlerTimeout: { ms: 10_000, setTimer: setSystemTimer },
 	});
 	return {

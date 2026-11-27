@@ -172,6 +172,41 @@ describe("instance start", () => {
 		expect(started).toBe(false);
 	});
 
+	test("has no core schema while it is being migrated or when it is not migrated", async () => {
+		const migrating = createInstanceStart(
+			steps({ migrateCoreSchema: () => new Promise(() => {}) }),
+			recordingLogger().logger,
+		);
+		const notMigrated = createInstanceStart(
+			steps({ migrateCoreSchema: async () => "not_migrated" }),
+			recordingLogger().logger,
+		);
+
+		void migrating.run();
+		await notMigrated.run();
+
+		expect(migrating.hasCoreSchema()).toBe(false);
+		expect(notMigrated.hasCoreSchema()).toBe(false);
+	});
+
+	test("has the core schema once it is migrated, while the plugins are still starting", async () => {
+		const pluginsStarting = Promise.withResolvers<void>();
+		const instance = createInstanceStart(
+			steps({
+				startPlugins: () => {
+					pluginsStarting.resolve();
+					return new Promise(() => {});
+				},
+			}),
+			recordingLogger().logger,
+		);
+
+		void instance.run();
+		await pluginsStarting.promise;
+
+		expect(instance.hasCoreSchema()).toBe(true);
+	});
+
 	test("has failed when a step throws unexpectedly, and passes the error on", async () => {
 		const instance = createInstanceStart(
 			steps({ startPlugins: () => Promise.reject(new Error("disk on fire")) }),

@@ -28,6 +28,7 @@ export type InstanceStartSteps = {
 
 export type InstanceStart = {
 	status(): StartupStatus;
+	hasCoreSchema(): boolean;
 	readonly operations: OperationRegistry;
 	readonly events: EventRegistry;
 	readonly jobs: JobRegistry;
@@ -51,6 +52,7 @@ export function createInstanceStart(
 ): InstanceStart {
 	const stopping = new AbortController();
 	let status: StartupStatus = "starting";
+	let hasCoreSchema = false;
 	let operations = NO_PLUGINS.operations;
 	let events = NO_PLUGINS.events;
 	let jobs = NO_PLUGINS.jobs;
@@ -76,6 +78,7 @@ export function createInstanceStart(
 		}
 		if (coreSchema === "stopped") return NO_PLUGINS;
 		if (coreSchema === "not_migrated") return fail("core_schema_not_migrated");
+		hasCoreSchema = true;
 		const plugins = await steps.startPlugins(signal);
 		operations = plugins.operations;
 		events = plugins.events;
@@ -94,6 +97,7 @@ export function createInstanceStart(
 
 	return {
 		status: () => status,
+		hasCoreSchema: () => hasCoreSchema,
 		operations: { find: (name) => operations.find(name) },
 		events: {
 			findEvent: (name) => events.findEvent(name),

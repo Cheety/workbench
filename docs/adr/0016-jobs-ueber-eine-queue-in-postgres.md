@@ -30,6 +30,7 @@ Ein Zeitplan, den der Core beim Laden annimmt, hat von jedem Zeitpunkt aus eine 
 
 ## Consequences
 
+- Der Durchgang der Queue fragt Postgres, sobald der Start der Instanz das Core-Schema migriert hat, auch wenn kein aktives Plugin einen Job deklariert. So verschwinden die abgeschlossenen Jobs eines Plugins, das nicht mehr aktiv ist, nach ihrer Frist; seine offenen Jobs bleiben liegen.
 - Ein Cron-Job, der zu einer Ortszeit laufen soll, verschiebt sich mit der Sommerzeit um eine Stunde. Eine Zeitzone je Zeitplan ist ein Zusatz, sobald ein Plugin sie braucht.
 - Verstreichen zwischen zwei Durchgängen mehr als zehn Fälligkeiten eines Cron-Jobs, entfallen die älteren, und das Log warnt mit `cron due times skipped`; „für jede Fälligkeit genau einmal“ gilt nur bis zu dieser Grenze. Laufen zwei Prozesse zugleich in die Lücke, kann die Warnung zweimal im Log stehen. Ein Cron-Job, der nichts auslassen darf, rechnet selbst von `dueAt` aus nach, was fehlt.
 - Nach einem Stillstand laufen je Cron-Job bis zu elf Jobs hintereinander an, bevor die Queue wieder im Takt ist.
