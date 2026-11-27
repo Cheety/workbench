@@ -237,6 +237,7 @@ curl -X POST "http://127.0.0.1:3000/api/workspaces/$WORKSPACE/operations/referen
 | `unauthenticated`    | 401    | Kein gültiges API-Token.                                                      |
 | `invalid_input`      | 400    | Der Body ist kein JSON, oder die Eingabe passt nicht zum Eingabe-Schema.      |
 | `route_not_found`    | 404    | Weder Methode noch Pfad passen zu einer Route.                                |
+| `malformed_path`     | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                            |
 | `instance_not_ready` | 503    | Die Instanz startet noch; die Operationen der Plugins stehen noch nicht fest. |
 | `internal_error`     | 500    | Die Anfrage scheiterte aus einem internen Grund.                              |
 

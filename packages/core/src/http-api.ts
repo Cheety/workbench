@@ -39,6 +39,13 @@ const UNAUTHENTICATED: Problem = {
 	issues: [],
 };
 
+const MALFORMED_PATH: Problem = {
+	code: "malformed_path",
+	kind: "invalid_input",
+	detail: "the path of the request is not valid percent-encoding",
+	issues: [],
+};
+
 const BODY_NOT_JSON: Problem = {
 	code: "invalid_input",
 	kind: "invalid_input",
@@ -66,19 +73,32 @@ export async function answerApiRequest(
 	const route = OPERATION_PATH.exec(path);
 	if (request.method !== "POST" || route === null)
 		return problemResponse(ROUTE_NOT_FOUND, correlationId);
-	const [, workspace = "", operation = ""] = route;
+	const [, encodedWorkspace = "", encodedOperation = ""] = route;
+	const workspace = decodedSegment(encodedWorkspace);
+	const operation = decodedSegment(encodedOperation);
+	if (workspace === undefined || operation === undefined)
+		return problemResponse(MALFORMED_PATH, correlationId);
 	const input = await jsonBody(request);
 	if (!input.parsed) return problemResponse(BODY_NOT_JSON, correlationId);
 	const result = await api.pipeline.invoke({
-		operation: decodeURIComponent(operation),
+		operation,
 		actor: authentication.actor,
-		workspace: decodeURIComponent(workspace),
+		workspace,
 		input: input.value,
 		correlationId,
 	});
 	return result.ok
 		? Response.json(result.output)
 		: problemResponse(result.failure, correlationId);
+}
+
+function decodedSegment(segment: string): string | undefined {
+	try {
+		return decodeURIComponent(segment);
+	} catch (error) {
+		if (error instanceof URIError) return undefined;
+		throw error;
+	}
 }
 
 function bearerToken(request: Request): string | undefined {

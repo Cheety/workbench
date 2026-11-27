@@ -349,6 +349,35 @@ describe("a failing call over HTTP", () => {
 		});
 	});
 
+	test.each([
+		{
+			case: "operation",
+			path: `/api/workspaces/${WORKSPACE}/operations/ledger.%E0`,
+		},
+		{
+			case: "workspace",
+			path: "/api/workspaces/%E0/operations/ledger.addEntry",
+		},
+	])(
+		"answers 400 problem details when the $case in the path is not valid percent-encoding",
+		async ({ path }) => {
+			const api = await startApiInstance();
+			const token = await api.issueToken(IN_A_MONTH);
+
+			const response = await api.post(
+				path,
+				JSON.stringify({ amount: 42 }),
+				bearer(token),
+			);
+
+			expect(response.status).toBe(400);
+			expect(await response.json()).toMatchObject({
+				code: "malformed_path",
+				detail: "the path of the request is not valid percent-encoding",
+			});
+		},
+	);
+
 	test("answers 404 problem details for an operation no plugin registered", async () => {
 		const api = await startApiInstance();
 		const token = await api.issueToken(IN_A_MONTH);
