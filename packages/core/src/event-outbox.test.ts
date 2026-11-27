@@ -259,6 +259,20 @@ function manualTimer() {
 	};
 }
 
+function adjustableClock(start: Date) {
+	let current = start;
+	return {
+		now: () => current,
+		advanceBy: (ms: number) => {
+			current = new Date(current.getTime() + ms);
+		},
+	};
+}
+
+const ONE_HOUR_MS = 3_600_000;
+
+const JUST_UNDER_THE_LONGEST_WAIT_MS = 299_700;
+
 function deferred() {
 	let resolve: () => void = () => {};
 	const promise = new Promise<void>((settle) => {
@@ -350,6 +364,58 @@ describe("event delivery", () => {
 		expect(attempts).toBe(2);
 	});
 
+	test("never waits longer for a retry than five minutes, however often the handler has failed", async () => {
+		const database = await migratedDatabase();
+		const clock = adjustableClock(NOW);
+		let attempts = 0;
+		const events = registryOf(
+			subscription("search", async () => {
+				attempts += 1;
+				throw new Error("the index is locked");
+			}),
+		);
+		await publishLabelRenamed(database.sql, events, EVENT);
+		const { delivery, entries } = deliveryOf({
+			sql: database.sql,
+			events,
+			now: clock.now,
+			random: () => 0.999,
+		});
+
+		for (let failed = 0; failed < 10; failed += 1) {
+			await delivery.deliverDue(NOT_STOPPED);
+			clock.advanceBy(ONE_HOUR_MS);
+		}
+		await delivery.deliverDue(NOT_STOPPED);
+		clock.advanceBy(JUST_UNDER_THE_LONGEST_WAIT_MS - 1);
+		await delivery.deliverDue(NOT_STOPPED);
+		const attemptsBeforeTheWaitIsOver = attempts;
+		clock.advanceBy(1);
+		await delivery.deliverDue(NOT_STOPPED);
+
+		expect(
+			failuresIn(entries).map(({ attempt, retryInMs }) => ({
+				attempt,
+				retryInMs,
+			})),
+		).toEqual([
+			{ attempt: 1, retryInMs: 999 },
+			{ attempt: 2, retryInMs: 1_998 },
+			{ attempt: 3, retryInMs: 3_996 },
+			{ attempt: 4, retryInMs: 7_992 },
+			{ attempt: 5, retryInMs: 15_984 },
+			{ attempt: 6, retryInMs: 31_968 },
+			{ attempt: 7, retryInMs: 63_936 },
+			{ attempt: 8, retryInMs: 127_872 },
+			{ attempt: 9, retryInMs: 255_744 },
+			{ attempt: 10, retryInMs: JUST_UNDER_THE_LONGEST_WAIT_MS },
+			{ attempt: 11, retryInMs: JUST_UNDER_THE_LONGEST_WAIT_MS },
+			{ attempt: 12, retryInMs: JUST_UNDER_THE_LONGEST_WAIT_MS },
+		]);
+		expect(attemptsBeforeTheWaitIsOver).toBe(11);
+		expect(attempts).toBe(12);
+	});
+
 	test("keeps an event for a subscribing plugin that is not active and delivers it once the plugin is active again", async () => {
 		const database = await migratedDatabase();
 		const handled: string[] = [];
@@ -376,14 +442,12 @@ describe("event delivery", () => {
 
 	test("asks Postgres for nothing while no plugin subscribes to an event, so it may run before the core schema exists", async () => {
 		const database = await freshDatabase();
-		const { delivery, entries } = deliveryOf({
+		const { delivery } = deliveryOf({
 			sql: database.sql,
 			events: registerEvents({ active: [], notActive: [] }),
 		});
 
-		await delivery.deliverDue(NOT_STOPPED);
-
-		expect(entries).toEqual([]);
+		await expect(delivery.deliverDue(NOT_STOPPED)).resolves.toBeUndefined();
 	});
 
 	test("hands an event to its handler once when two deliveries run at the same time", async () => {
@@ -578,10 +642,10 @@ describe("a handler that timed out", () => {
 		const delivering = delivery.deliverDue(NOT_STOPPED);
 		await timerSet;
 		timer.expire();
-		timeIsUp.resolve();
 		await delivering;
-		await lateWrite.promise;
+		timeIsUp.resolve();
 
+		expect(await lateWrite.promise).toBe("refused");
 		expect(await indexedLabels(database.sql)).toEqual([]);
 		expect(failuresIn(entries)).toEqual([
 			expect.objectContaining({ reason: "handler_timed_out", attempt: 1 }),
