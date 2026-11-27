@@ -1,14 +1,22 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { defineEvent } from "@workbench/sdk";
+import {
+	defineEvent,
+	defineEventSubscription,
+	type EventDefinition,
+	type EventSubscription,
+	eventSubscriptionCapability,
+	type SchemaResult,
+} from "@workbench/sdk";
 import { SQL } from "bun";
 import { z } from "zod";
 import { Secret } from "./config.ts";
 import { startEventDeliveryLoop } from "./event-delivery-loop.ts";
 import { createEventDelivery, recordEvent } from "./event-outbox.ts";
 import {
+	type EventParticipant,
 	type EventRegistry,
-	type RegisteredEvent,
-	type RegisteredSubscription,
+	readEvents,
+	readSubscriptions,
 	registerEvents,
 } from "./event-registry.ts";
 import {
@@ -41,29 +49,52 @@ const labelRenamed = defineEvent({
 	payload: z.object({ labelId: z.string() }),
 });
 
-const LABEL_RENAMED: RegisteredEvent = {
-	name: "board.LabelRenamed",
-	version: 1,
-	validatePayload: async (value) => ({ valid: true, value }),
-};
+type LabelRenamedHandler = EventSubscription<{ labelId: string }>["handle"];
 
-function subscription(
+function subscribing(
 	subscriber: string,
-	handle: RegisteredSubscription["handle"],
-): RegisteredSubscription {
+	event: EventDefinition<{ labelId: string }>,
+	handle: LabelRenamedHandler,
+): EventParticipant {
 	return {
-		subscriber,
-		event: LABEL_RENAMED.name,
-		validatePayload: LABEL_RENAMED.validatePayload,
-		handle,
+		events: [],
+		subscriptions: readSubscriptions(
+			subscriber,
+			[defineEventSubscription({ event, handle })],
+			[eventSubscriptionCapability(event)],
+		).value,
 	};
 }
 
-function registryOf(
-	...subscriptions: readonly RegisteredSubscription[]
-): EventRegistry {
-	return registerEvents([{ events: [LABEL_RENAMED], subscriptions }]);
+function subscription(
+	subscriber: string,
+	handle: LabelRenamedHandler,
+): EventParticipant {
+	return subscribing(subscriber, labelRenamed, handle);
 }
+
+function registryOf(
+	...subscribers: readonly EventParticipant[]
+): EventRegistry {
+	const board: EventParticipant = {
+		events: readEvents("board", [labelRenamed]).value,
+		subscriptions: [],
+	};
+	return registerEvents([board, ...subscribers]);
+}
+
+const labelRenamedWithBrokenSchema = defineEvent({
+	...labelRenamed,
+	payload: {
+		"~standard": {
+			version: 1,
+			vendor: "broken",
+			validate: (): SchemaResult<{ labelId: string }> => {
+				throw new Error("the schema is broken");
+			},
+		},
+	},
+});
 
 const cleanups: (() => Promise<void>)[] = [];
 
@@ -365,14 +396,11 @@ describe("a delivery that fails outside its handler", () => {
 	test("is not blamed on the handler when the payload schema of the subscribing plugin throws", async () => {
 		const database = await migratedDatabase();
 		const handled: string[] = [];
-		const events = registryOf({
-			...subscription("search", async (event) => {
+		const events = registryOf(
+			subscribing("search", labelRenamedWithBrokenSchema, async (event) => {
 				handled.push(event.id);
 			}),
-			validatePayload: async () => {
-				throw new Error("the schema is broken");
-			},
-		});
+		);
 		await publishLabelRenamed(database.sql, events, EVENT);
 		const { delivery, entries } = deliveryOf({ sql: database.sql, events });
 
@@ -431,28 +459,29 @@ describe("a handler that timed out", () => {
 describe("the event delivery loop on the outbox", () => {
 	test("delivers an event when it is woken, without waiting for its poll interval", async () => {
 		const database = await migratedDatabase();
-		const handled = deferred();
+		const handled: string[] = [];
+		const firstHandled = deferred();
 		const events = registryOf(
-			subscription("search", async () => {
-				handled.resolve();
+			subscription("search", async (event) => {
+				handled.push(event.id);
+				firstHandled.resolve();
 			}),
 		);
 		await publishLabelRenamed(database.sql, events, EVENT);
-		const { logger } = recordingLogger();
+		const { delivery } = deliveryOf({ sql: database.sql, events });
 		const loop = startEventDeliveryLoop({
-			delivery: deliveryOf({ sql: database.sql, events }).delivery,
+			delivery,
 			pollIntervalMs: 1_000,
 			setTimer: () => () => {},
-			logger,
+			logger: recordingLogger().logger,
 		});
 		cleanups.push(() => loop.stop());
 
 		loop.wake();
-		await handled.promise;
+		await firstHandled.promise;
 		await loop.stop();
+		await delivery.deliverDue(NOT_STOPPED);
 
-		const [delivery] =
-			await database.sql`SELECT delivered_at FROM core.event_deliveries WHERE event_id = ${EVENT}`;
-		expect(delivery).toEqual({ delivered_at: NOW });
+		expect(handled).toEqual([EVENT]);
 	});
 });
