@@ -1,9 +1,12 @@
 import {
 	DATABASE_CAPABILITY,
 	type DatabaseCapability,
+	type EventSubscriptionCapability,
 	type PluginContext,
+	subscribedEventOf,
 } from "@workbench/sdk";
 import { CORE_OPERATIONS } from "./core-operations.ts";
+import { type EventRegistry, registerEvents } from "./event-registry.ts";
 import {
 	describeThrown,
 	summarize,
@@ -63,6 +66,7 @@ export type RunningPlugins = {
 	readonly active: readonly string[];
 	readonly failures: readonly LoadFailure[];
 	readonly operations: OperationRegistry;
+	readonly events: EventRegistry;
 	deactivate(): Promise<DeactivationOutcome>;
 };
 
@@ -97,6 +101,7 @@ export async function startPlugins(
 			...CORE_OPERATIONS,
 			...active.flatMap((plugin) => plugin.operations),
 		]),
+		events: registerEvents(active),
 		deactivate: () => {
 			deactivation ??= deactivate(active, options);
 			return deactivation;
@@ -325,6 +330,11 @@ function provide(
 	if (capability === DATABASE_CAPABILITY) {
 		const database: DatabaseCapability = { schema: pluginSchemaName(plugin) };
 		return database;
+	}
+	const event = subscribedEventOf(capability);
+	if (event !== undefined) {
+		const subscription: EventSubscriptionCapability = { event };
+		return subscription;
 	}
 	return providers[capability]?.();
 }

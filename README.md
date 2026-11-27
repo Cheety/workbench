@@ -78,7 +78,7 @@ export default definePlugin({
 
 - `name` ist der Name, unter dem die Instanz-Config und andere Plugins das Plugin ansprechen: Kleinbuchstaben, Ziffern und Bindestriche, beginnend mit einem Buchstaben, höchstens 56 Zeichen, damit der Name seines Schemas (`plugin_<name>`) in die 63 Zeichen passt, die Postgres für Namen vorsieht. Er muss dem Namen in der `package.json` gleichen. `core` ist vergeben: Unter `core.<name>` bietet der Core eigene Operationen an, und ein Plugin dieses Namens ist ungültig (`invalid_manifest`). Die Version ist die `version` der `package.json`.
 - `requires` nennt vorausgesetzte Plugins mit SemVer-Range (`^`, `~`, Vergleichsoperatoren, `x`/`*`, mit Leerzeichen oder `||` kombiniert).
-- `capabilities` nennt die Capabilities, die das Plugin braucht. `ctx.capability(name)` liefert nur deklarierte und wirft sonst einen Fehler. Der Core bietet bisher nur `database` an (`DATABASE_CAPABILITY` aus `@workbench/sdk`); ein Manifest, das eine unbekannte deklariert, ist ungültig.
+- `capabilities` nennt die Capabilities, die das Plugin braucht. `ctx.capability(name)` liefert nur deklarierte und wirft sonst einen Fehler. Der Core bietet `database` an (`DATABASE_CAPABILITY` aus `@workbench/sdk`) und je Event ein Event-Abo, `event:<plugin>.<Event>` (siehe [Events](#events)); ein Manifest, das eine unbekannte deklariert, ist ungültig.
 
 Beim Start entdeckt der Kernel die Plugin-Pakete, lädt die Einstiege der in `PLUGINS` genannten Plugins, löst ihre `requires` auf und aktiviert sie, vorausgesetzte zuerst. Von einem Plugin, das nicht in `PLUGINS` steht, läuft kein Code, und seine Mängel sind kein Ladefehler. Beim Shutdown (`SIGTERM`, `SIGINT`) stoppt erst der Server, dann werden die Plugins in umgekehrter Reihenfolge deaktiviert. Änderungen an `PLUGINS` wirken nach einem Neustart.
 
@@ -88,20 +88,20 @@ Ein Paket, dessen `package.json` nicht lesbar ist oder `workbench.plugin` in and
 
 Kann ein Plugin nicht geladen werden, startet die Instanz trotzdem. Das Log nennt jeden Ladefehler als Eintrag `plugin not loaded` mit `plugin`, `reason` und einer ausformulierten Meldung in `detail`; der Eintrag `plugins started` fasst aktive (`active`) und nicht geladene (`notLoaded`) Plugins zusammen. Hat Code des Plugins oder der Core beim Bereitstellen einer Capability einen Fehler geworfen, steht er mit Name, Meldung und Stacktrace in `error`, ebenso im Eintrag `plugin failed to deactivate`. Fehlermeldungen eines Plugins stehen damit im Log und dürfen keine Secrets enthalten.
 
-| `reason`                 | Bedeutung                                                                                             |
-| ------------------------ | ----------------------------------------------------------------------------------------------------- |
-| `invalid_manifest`       | Manifest, Operationen oder Paketversion ungültig, Einstieg nicht ladbar, Name anders als im Paket.    |
-| `load_timed_out`         | Der Einstieg des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` geladen.                  |
-| `unknown_plugin`         | In `PLUGINS` genannt, aber kein Plugin-Paket stellt das Plugin bereit.                                |
-| `duplicate_plugin`       | Mehrere Plugin-Pakete deklarieren denselben Plugin-Namen; keines davon wird geladen.                  |
-| `missing_dependency`     | Kein Plugin-Paket stellt ein vorausgesetztes Plugin bereit, oder es ist nicht in `PLUGINS` aktiviert. |
-| `version_mismatch`       | Die Version eines vorausgesetzten Plugins erfüllt die Range nicht.                                    |
-| `dependency_not_loaded`  | Ein vorausgesetztes Plugin wurde selbst nicht geladen; `detail` nennt dessen Ursache.                 |
-| `dependency_cycle`       | Plugins setzen einander im Kreis voraus; jedes Plugin des Kreises erhält diesen Grund.                |
-| `capability_unavailable` | Der Core konnte eine deklarierte Capability nicht bereitstellen; `activate` wurde nicht aufgerufen.   |
-| `migration_failed`       | Das Schema des Plugins konnte nicht migriert werden; `detail` nennt die Migration und den Fehler.     |
-| `activation_failed`      | `activate` des Plugins ist fehlgeschlagen.                                                            |
-| `activation_timed_out`   | `activate` des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` fertig.                     |
+| `reason`                 | Bedeutung                                                                                                              |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `invalid_manifest`       | Manifest, Operationen, Events, Event-Abos oder Paketversion ungültig, Einstieg nicht ladbar, Name anders als im Paket. |
+| `load_timed_out`         | Der Einstieg des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` geladen.                                   |
+| `unknown_plugin`         | In `PLUGINS` genannt, aber kein Plugin-Paket stellt das Plugin bereit.                                                 |
+| `duplicate_plugin`       | Mehrere Plugin-Pakete deklarieren denselben Plugin-Namen; keines davon wird geladen.                                   |
+| `missing_dependency`     | Kein Plugin-Paket stellt ein vorausgesetztes Plugin bereit, oder es ist nicht in `PLUGINS` aktiviert.                  |
+| `version_mismatch`       | Die Version eines vorausgesetzten Plugins erfüllt die Range nicht.                                                     |
+| `dependency_not_loaded`  | Ein vorausgesetztes Plugin wurde selbst nicht geladen; `detail` nennt dessen Ursache.                                  |
+| `dependency_cycle`       | Plugins setzen einander im Kreis voraus; jedes Plugin des Kreises erhält diesen Grund.                                 |
+| `capability_unavailable` | Der Core konnte eine deklarierte Capability nicht bereitstellen; `activate` wurde nicht aufgerufen.                    |
+| `migration_failed`       | Das Schema des Plugins konnte nicht migriert werden; `detail` nennt die Migration und den Fehler.                      |
+| `activation_failed`      | `activate` des Plugins ist fehlgeschlagen.                                                                             |
+| `activation_timed_out`   | `activate` des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` fertig.                                      |
 
 ### Migrationen
 
@@ -219,6 +219,51 @@ Die Query `core.listAuditEntries` liefert die Einträge des Workspaces im Pfad, 
 - `occurredAt` ist der Zeitpunkt in UTC, auf Millisekunden genau, `workspace` das Ziel der Mutation, `result` bisher immer `succeeded`.
 - `nextCursor` ist `null`, wenn keine älteren Einträge folgen. Ein Cursor ist undurchsichtig und gilt nur als Ganzes, Zeichen für Zeichen so, wie eine Seite ihn nennt; einen, der keine Position im Audit nennt, lehnt die Operation mit `core.invalid_cursor` ab (Art `rejected`, per HTTP 422). Einträge desselben Zeitpunkts ordnet ihre ID, sodass keine Seite einen Eintrag wiederholt oder auslässt, auch wenn inzwischen neue entstehen.
 - Die Operation verweist auf das Recht `core.audit.read`, das für den Instanz-Admin gedacht ist. Solange Rechte nicht durchgesetzt werden (siehe [Operationen](#operationen)), darf jeder Akteur mit gültigem Token das Audit jedes Workspaces lesen.
+
+### Events
+
+Ein Plugin publiziert Events und abonniert die Events anderer Plugins. Ein Event ist ein Fakt in Vergangenheitsform. Seine Definition liegt im [Contract](#contract) des publizierenden Plugins, mit `defineEvent()` aus `@workbench/sdk`:
+
+```ts
+export const labelRenamed = defineEvent({
+	plugin: "board",
+	name: "LabelRenamed",
+	version: 1,
+	payload: z.object({ labelId: z.string() }),
+});
+```
+
+- `plugin` ist der Name des publizierenden Plugins, `name` der Fakt in PascalCase. Das Event heißt `<plugin>.<name>`, hier `board.LabelRenamed`.
+- `version` ist eine ganze Zahl ab 1, `payload` ein Schema nach Standard Schema (ADR-0010). Die Payload nennt IDs, keine Objekte: Wer mehr braucht, fragt das publizierende Plugin.
+
+Das publizierende Plugin nennt seine Events in `definePlugin({ manifest, events })`. Ein abonnierendes Plugin importiert die Definition aus dem Contract, deklariert für jedes Event die Capability `event:<plugin>.<name>` (`eventSubscriptionCapability(labelRenamed)`) und registriert seinen Event-Handler ausdrücklich in `subscriptions`:
+
+```ts
+import { labelRenamed } from "@workbench/plugin-board/contract";
+
+export default definePlugin({
+	manifest: {
+		name: "search",
+		capabilities: [eventSubscriptionCapability(labelRenamed)],
+	},
+	subscriptions: [
+		defineEventSubscription({
+			event: labelRenamed,
+			handle: async (event, ctx) => {},
+		}),
+	],
+});
+```
+
+Ein Abo setzt kein `requires` voraus: Ist das publizierende Plugin nicht aktiv, kommt das Event nie. `ctx.capability("event:board.LabelRenamed")` liefert `{ event: "board.LabelRenamed" }`.
+
+Ein Plugin wird nicht geladen (`invalid_manifest`, `detail` nennt jeden Mangel), wenn
+
+- es ein Event abonniert, ohne die Capability dieses Events zu deklarieren,
+- es ein Event unter dem Namen eines anderen Plugins deklariert, mit einem Namen, der nicht PascalCase ist, ohne Version ab 1, ohne Payload-Schema oder mehrfach,
+- ein Abo keine Event-Definition oder keinen Handler nennt oder dasselbe Event mehrfach abonniert.
+
+Bisher werden Events und Event-Abos nur beim Laden geprüft; publiziert und zugestellt wird noch nichts.
 
 ### Test-Harness
 

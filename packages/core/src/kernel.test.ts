@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+	defineEvent,
+	defineEventSubscription,
 	defineOperation,
 	definePlugin,
+	eventSubscriptionCapability,
 	type PluginContext,
 	type PluginDefinition,
 } from "@workbench/sdk";
@@ -2108,4 +2111,252 @@ describe("operations of plugins", () => {
 			expect(plugins.operations.find("board.createCard")).toBeUndefined();
 		},
 	);
+});
+
+const cardCreated = defineEvent({
+	plugin: "board",
+	name: "CardCreated",
+	version: 1,
+	payload: z.object({ cardId: z.string() }),
+});
+
+const countCard = defineEventSubscription({
+	event: cardCreated,
+	handle: async () => {},
+});
+
+const CARD_CREATED_CAPABILITY = "event:board.CardCreated";
+
+describe("events of plugins", () => {
+	test("are registered under the name of the publishing plugin, with the subscriptions of the plugins that declare the capability", async () => {
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					definePlugin({ manifest: { name: "board" }, events: [cardCreated] }),
+				),
+				packageOf(
+					definePlugin({
+						manifest: {
+							name: "statistics",
+							capabilities: [eventSubscriptionCapability(cardCreated)],
+						},
+						subscriptions: [countCard],
+					}),
+				),
+			],
+			enabledPlugins: ["board", "statistics"],
+		});
+
+		expect(plugins.failures).toEqual([]);
+		expect(plugins.events.findEvent("board.CardCreated")).toEqual(
+			expect.objectContaining({ name: "board.CardCreated", version: 1 }),
+		);
+		expect(plugins.events.findEvent("CardCreated")).toBeUndefined();
+		expect(
+			plugins.events
+				.subscriptions()
+				.map(({ subscriber, event }) => ({ subscriber, event })),
+		).toEqual([{ subscriber: "statistics", event: "board.CardCreated" }]);
+	});
+
+	test("does not load a plugin that subscribes to an event without declaring the capability for it", async () => {
+		const { plugins, entries } = await start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: { name: "statistics" },
+						subscriptions: [countCard],
+					}),
+				),
+			],
+			enabledPlugins: ["statistics"],
+		});
+
+		const failure: LoadFailure = {
+			plugin: "statistics",
+			reason: "invalid_manifest",
+			detail:
+				'plugin package "@workbench/plugin-statistics" has an invalid manifest: the subscription to event "board.CardCreated" requires the capability "event:board.CardCreated" in manifest.capabilities',
+		};
+		expect(plugins.active).toEqual([]);
+		expect(plugins.failures).toEqual([failure]);
+		expect(plugins.events.subscriptions()).toEqual([]);
+		expect(entries).toContainEqual(
+			expect.objectContaining({ message: "plugin not loaded", ...failure }),
+		);
+	});
+
+	test("does not let the capability for one event cover the subscription to another", async () => {
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: {
+							name: "statistics",
+							capabilities: ["event:board.CardArchived"],
+						},
+						subscriptions: [countCard],
+					}),
+				),
+			],
+			enabledPlugins: ["statistics"],
+		});
+
+		expect(plugins.failures).toEqual([
+			expect.objectContaining({
+				plugin: "statistics",
+				reason: "invalid_manifest",
+				detail: expect.stringContaining(
+					'requires the capability "event:board.CardCreated"',
+				),
+			}),
+		]);
+	});
+
+	test("hands a subscribing plugin the event its capability names", async () => {
+		const contexts: PluginContext[] = [];
+
+		await start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: {
+							name: "statistics",
+							capabilities: [CARD_CREATED_CAPABILITY],
+						},
+						subscriptions: [countCard],
+						activate: (ctx) => {
+							contexts.push(ctx);
+						},
+					}),
+				),
+			],
+			enabledPlugins: ["statistics"],
+		});
+
+		expect(contexts[0]?.capability(CARD_CREATED_CAPABILITY)).toEqual({
+			event: "board.CardCreated",
+		});
+	});
+
+	test("registers neither events nor subscriptions of a plugin that is not loaded", async () => {
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: {
+							name: "board",
+							requires: { missing: "^1.0.0" },
+							capabilities: [CARD_CREATED_CAPABILITY],
+						},
+						events: [cardCreated],
+						subscriptions: [countCard],
+					}),
+				),
+			],
+			enabledPlugins: ["board"],
+		});
+
+		expect(plugins.events.findEvent("board.CardCreated")).toBeUndefined();
+		expect(plugins.events.subscriptions()).toEqual([]);
+	});
+
+	test.each([
+		[
+			"an event under the name of another plugin",
+			{ events: [{ ...cardCreated, plugin: "chat" }] },
+			'events[0] must name "board" as its plugin, the plugin that publishes it',
+		],
+		[
+			"an event name that is not in PascalCase",
+			{ events: [{ ...cardCreated, name: "card-created" }] },
+			'events[0].name must be a fact in the past tense in PascalCase, such as "WorkspaceRenamed"',
+		],
+		[
+			"an event without a version",
+			{ events: [{ ...cardCreated, version: undefined }] },
+			'event "board.CardCreated" must have a version that is a positive integer',
+		],
+		[
+			"an event with a version below 1",
+			{ events: [{ ...cardCreated, version: 0 }] },
+			'event "board.CardCreated" must have a version that is a positive integer',
+		],
+		[
+			"an event without a payload schema",
+			{ events: [{ ...cardCreated, payload: { cardId: "string" } }] },
+			'event "board.CardCreated" must declare its payload as a schema',
+		],
+		[
+			"an event declared twice",
+			{ events: [cardCreated, { ...cardCreated, version: 2 }] },
+			'event "board.CardCreated" is declared more than once',
+		],
+		[
+			"events that are not a list",
+			{ events: { cardCreated } },
+			"events must be a list of event definitions",
+		],
+		[
+			"an event that is not an object",
+			{ events: ["CardCreated"] },
+			"events[0] must be an event definition",
+		],
+		[
+			"a subscription to something that is not an event definition",
+			{ subscriptions: [{ event: "board.CardCreated", handle: () => {} }] },
+			"subscriptions[0].event must be an event definition from the contract of the publishing plugin",
+		],
+		[
+			"a subscription without a handler",
+			{ subscriptions: [{ event: cardCreated }] },
+			'the subscription to event "board.CardCreated" must have a handle function',
+		],
+		[
+			"two subscriptions to the same event",
+			{ subscriptions: [countCard, countCard] },
+			'event "board.CardCreated" is subscribed to more than once',
+		],
+		[
+			"subscriptions that are not a list",
+			{ subscriptions: { countCard } },
+			"subscriptions must be a list of event subscriptions",
+		],
+		[
+			"a subscription that is not an object",
+			{ subscriptions: ["board.CardCreated"] },
+			"subscriptions[0] must be an event subscription",
+		],
+		[
+			"an event capability that names no event",
+			{ manifest: { name: "board", capabilities: ["event:board"] } },
+			'manifest.capabilities names "event:board", which this instance does not offer',
+		],
+	])("rejects a plugin with %s", async (_case, declared, problem) => {
+		const { plugins } = await start({
+			packages: [
+				{
+					packageName: "@workbench/plugin-board",
+					pluginName: "board",
+					version: "1.0.0",
+					loadDefinition: async () => ({
+						manifest: {
+							name: "board",
+							capabilities: [CARD_CREATED_CAPABILITY],
+						},
+						...declared,
+					}),
+				},
+			],
+			enabledPlugins: ["board"],
+		});
+
+		expect(plugins.failures).toEqual([
+			{
+				plugin: "board",
+				reason: "invalid_manifest",
+				detail: `plugin package "@workbench/plugin-board" has an invalid manifest: ${problem}`,
+			},
+		]);
+	});
 });

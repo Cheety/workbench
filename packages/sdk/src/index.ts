@@ -1,5 +1,7 @@
+import type { EventDefinition, EventSubscription } from "./event.ts";
 import type { OperationDefinition } from "./operation.ts";
 
+export * from "./event.ts";
 export * from "./operation.ts";
 
 export const DATABASE_CAPABILITY = "database";
@@ -21,6 +23,8 @@ export type PluginContext = {
 export type PluginDefinition = {
 	readonly manifest: PluginManifest;
 	readonly operations?: readonly OperationDefinition<unknown, unknown>[];
+	readonly events?: readonly EventDefinition<unknown>[];
+	readonly subscriptions?: readonly EventSubscription<unknown>[];
 	activate?(ctx: PluginContext): void | Promise<void>;
 	deactivate?(): void | Promise<void>;
 };

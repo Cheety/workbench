@@ -54,6 +54,18 @@ _Avoid_: Patch, Replacement
 Der öffentliche Teil eines Plugins (Service-Typen, Event-Definitionen, Schemas, Werte-Typen), den andere Plugins als einziges importieren dürfen.
 _Avoid_: Interface-Paket, API-Typen
 
+**Event**:
+Ein Fakt in Vergangenheitsform, den ein Plugin aus einer Mutation publiziert, z. B. `board.LabelRenamed`; unveränderlich, mit ID, Zeitpunkt, Version, Workspace und IDs statt Objekten.
+_Avoid_: Nachricht, Message, Signal
+
+**Event-Abo**:
+Die im Manifest als Capability deklarierte und in der Plugin-Definition registrierte Absicht eines Plugins, ein bestimmtes Event zu erhalten.
+_Avoid_: Subscription (außer als Bezeichner im Code), Listener, Hook
+
+**Event-Handler**:
+Die Funktion eines Plugins, die der Core für ein Event-Abo mit jedem Event aufruft.
+_Avoid_: Listener, Callback, Consumer
+
 ## Inhalte
 
 **Objekt**:

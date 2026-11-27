@@ -1,4 +1,11 @@
 import { DATABASE_CAPABILITY, type PluginContext } from "@workbench/sdk";
+import {
+	isEventSubscriptionCapability,
+	type RegisteredEvent,
+	type RegisteredSubscription,
+	readEvents,
+	readSubscriptions,
+} from "./event-registry.ts";
 import { isRecord } from "./is-record.ts";
 import {
 	CORE_OWNER_NAME,
@@ -33,6 +40,8 @@ export type ValidPlugin = {
 	readonly requires: ReadonlyMap<string, string>;
 	readonly capabilities: readonly string[];
 	readonly operations: readonly RegisteredOperation[];
+	readonly events: readonly RegisteredEvent[];
+	readonly subscriptions: readonly RegisteredSubscription[];
 	loadMigrations(): Promise<readonly Migration[]>;
 	activate(ctx: PluginContext): Promise<void>;
 	deactivate(): Promise<void>;
@@ -68,6 +77,12 @@ export function validatePlugin(
 		{ kind: "plugin", name: declaredName },
 		definition.operations,
 	);
+	const events = readEvents(declaredName, definition.events);
+	const subscriptions = readSubscriptions(
+		declaredName,
+		definition.subscriptions,
+		capabilities.value,
+	);
 	const problems = [
 		...nameProblems(definition.manifest, declaredName),
 		...requires.problems,
@@ -76,6 +91,8 @@ export function validatePlugin(
 		...hookProblems(definition, "activate"),
 		...hookProblems(definition, "deactivate"),
 		...operations.problems,
+		...events.problems,
+		...subscriptions.problems,
 	];
 	if (!isSemVerVersion(version))
 		problems.push("package.json version must be a SemVer version");
@@ -90,6 +107,8 @@ export function validatePlugin(
 			requires: requires.value,
 			capabilities: capabilities.value,
 			operations: operations.value,
+			events: events.value,
+			subscriptions: subscriptions.value,
 			loadMigrations: loadMigrations ?? (async () => []),
 			activate: async (ctx) => {
 				if (typeof definition.activate === "function")
@@ -179,7 +198,11 @@ function readCapabilities(
 	return {
 		value: declared,
 		problems: declared
-			.filter((capability) => !offered.includes(capability))
+			.filter(
+				(capability) =>
+					!offered.includes(capability) &&
+					!isEventSubscriptionCapability(capability),
+			)
 			.map(
 				(capability) =>
 					`manifest.capabilities names ${quote(capability)}, which this instance does not offer`,
