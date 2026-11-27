@@ -64,7 +64,7 @@ export type JobQueueOptions = {
 	readonly sql: SQL;
 	readonly jobs: JobRegistry;
 	readonly now: () => Date;
-	readonly newId: () => string;
+	readonly newIdForRun: () => string;
 	readonly newJobId: () => string;
 	readonly random: () => number;
 	readonly runTimeout: HookTimeout;
@@ -153,12 +153,12 @@ export function createJobQueue(options: JobQueueOptions): JobQueue {
 		...options,
 		retryDelayMs: fullJitterBackoff({ ...RETRY, random: options.random }),
 	};
-	const scheduleCronJobs = cronSchedulerOf(options);
+	const enqueueDueCronJobs = dueCronJobEnqueuerOf(options);
 	return {
 		runDue: async (stopSignal) => {
 			if (options.jobs.names().length === 0) return;
 			const dueBy = options.now();
-			await scheduleCronJobs(dueBy);
+			await enqueueDueCronJobs(dueBy);
 			while (!stopSignal.aborted) {
 				const claimed = await claimNext(options, dueBy);
 				if (claimed === undefined) return;
@@ -173,27 +173,27 @@ export function createJobQueue(options: JobQueueOptions): JobQueue {
 	};
 }
 
-function cronSchedulerOf({
+function dueCronJobEnqueuerOf({
 	sql,
 	jobs,
 	newJobId,
 }: Pick<JobQueueOptions, "sql" | "jobs" | "newJobId">): (
 	now: Date,
 ) => Promise<void> {
-	const scheduledDue = new Map<string, number>();
-	const isScheduledBeyond = (job: RegisteredCronJob, now: Date): boolean => {
-		const due = scheduledDue.get(job.name);
+	const enqueuedDue = new Map<string, number>();
+	const isEnqueuedBeyond = (job: RegisteredCronJob, now: Date): boolean => {
+		const due = enqueuedDue.get(job.name);
 		return due !== undefined && due > now.getTime();
 	};
 	return async (now) => {
 		for (const job of jobs.cronJobs()) {
-			if (isScheduledBeyond(job, now)) continue;
+			if (isEnqueuedBeyond(job, now)) continue;
 			const dueAt = job.schedule.nextAfter(now);
 			await sql`
 				INSERT INTO core.jobs (id, name, due_at, enqueued_at, next_attempt_at)
 				VALUES (${newJobId()}, ${job.name}, ${dueAt}, ${now}, ${dueAt})
 				ON CONFLICT (name, due_at) DO NOTHING`;
-			scheduledDue.set(job.name, dueAt.getTime());
+			enqueuedDue.set(job.name, dueAt.getTime());
 		}
 	};
 }
@@ -273,7 +273,10 @@ async function run(
 	transaction: SQL,
 	claimed: ClaimedJob,
 	job: RegisteredJob,
-	options: Pick<JobQueueOptions, "now" | "newId" | "random" | "runTimeout">,
+	options: Pick<
+		JobQueueOptions,
+		"now" | "newIdForRun" | "random" | "runTimeout"
+	>,
 ): Promise<void> {
 	const call = await callOf(job, claimed);
 	await transaction.unsafe(
@@ -437,22 +440,22 @@ function loggerOf(
 
 function report(
 	claimed: ClaimedJob,
-	outcome: AttemptOutcome,
+	settled: AttemptOutcome,
 	{ logger }: Pick<JobQueueOptions, "logger">,
 ): void {
 	const jobLogger = loggerOf(claimed, { logger });
-	switch (outcome.outcome) {
+	switch (settled.outcome) {
 		case "completed":
 			jobLogger.debug("job completed");
 			return;
 		case "postponed":
 			jobLogger.error("job failed", {
-				...outcome.failure,
-				retryInMs: outcome.retryInMs,
+				...settled.failure,
+				retryInMs: settled.retryInMs,
 			});
 			return;
 		case "dead_lettered":
-			jobLogger.error("job dead-lettered", outcome.failure);
+			jobLogger.error("job dead-lettered", settled.failure);
 			return;
 		case "settled_elsewhere":
 			return;
@@ -461,12 +464,12 @@ function report(
 
 function contextOf(
 	transaction: SQL,
-	sources: Pick<JobQueueOptions, "now" | "newId" | "random">,
+	sources: Pick<JobQueueOptions, "now" | "newIdForRun" | "random">,
 ): JobContext {
 	return {
 		sql: transaction,
 		now: sources.now,
-		newId: sources.newId,
+		newId: sources.newIdForRun,
 		random: sources.random,
 	};
 }

@@ -53,8 +53,8 @@ type JobRead =
 	| { readonly valid: true; readonly job: RegisteredJob }
 	| { readonly valid: false; readonly problem: string };
 
-type JobKind = {
-	readonly list: string;
+type JobListReader = {
+	readonly name: string;
 	readonly subject: string;
 	readonly exampleName: string;
 	read(
@@ -67,8 +67,8 @@ type CommonParts = Pick<RegisteredJob, "plugin" | "name" | "maxAttempts"> & {
 	run(job: unknown, ctx: JobContext): Promise<void>;
 };
 
-const ENQUEUED: JobKind = {
-	list: "jobs",
+const ENQUEUED_JOBS: JobListReader = {
+	name: "jobs",
 	subject: "job",
 	exampleName: "sendReminder",
 	read: (common, candidate) => {
@@ -88,8 +88,8 @@ const ENQUEUED: JobKind = {
 	},
 };
 
-const CRON: JobKind = {
-	list: "cronJobs",
+const CRON_JOBS: JobListReader = {
+	name: "cronJobs",
 	subject: "cron job",
 	exampleName: "sendDigest",
 	read: (common, candidate) => {
@@ -114,8 +114,8 @@ export function readJobs(plugin: string, declared: DeclaredJobs): JobsRead {
 	const problems: string[] = [];
 	const seen = new Set<string>();
 	for (const read of [
-		...readList(plugin, declared.jobs, ENQUEUED),
-		...readList(plugin, declared.cronJobs, CRON),
+		...readList(plugin, declared.jobs, ENQUEUED_JOBS),
+		...readList(plugin, declared.cronJobs, CRON_JOBS),
 	]) {
 		if (!read.valid) {
 			problems.push(read.problem);
@@ -134,15 +134,15 @@ export function readJobs(plugin: string, declared: DeclaredJobs): JobsRead {
 function readList(
 	plugin: string,
 	declared: unknown,
-	kind: JobKind,
+	list: JobListReader,
 ): readonly JobRead[] {
 	if (declared === undefined) return [];
 	if (!Array.isArray(declared))
 		return [
-			invalid(`${kind.list} must be a list of ${kind.subject} definitions`),
+			invalid(`${list.name} must be a list of ${list.subject} definitions`),
 		];
 	return declared.map((candidate, position) =>
-		readJob(plugin, position, candidate, kind),
+		readJob(plugin, position, candidate, list),
 	);
 }
 
@@ -150,16 +150,16 @@ function readJob(
 	plugin: string,
 	position: number,
 	candidate: unknown,
-	kind: JobKind,
+	list: JobListReader,
 ): JobRead {
 	if (!isRecord(candidate))
 		return invalid(
-			`${kind.list}[${position}] must be a ${kind.subject} definition`,
+			`${list.name}[${position}] must be a ${list.subject} definition`,
 		);
 	const { name, maxAttempts, run } = candidate;
 	if (typeof name !== "string" || !JOB_DEFINITION_NAME.test(name))
 		return invalid(
-			`${kind.list}[${position}].name must be in camelCase, such as ${quote(kind.exampleName)}`,
+			`${list.name}[${position}].name must be in camelCase, such as ${quote(list.exampleName)}`,
 		);
 	const fullName = jobName(plugin, { name });
 	if (
@@ -169,13 +169,13 @@ function readJob(
 		maxAttempts > MOST_ATTEMPTS
 	)
 		return invalid(
-			`${kind.subject} ${quote(fullName)} must have maxAttempts that is an integer from 1 to ${MOST_ATTEMPTS}`,
+			`${list.subject} ${quote(fullName)} must have maxAttempts that is an integer from 1 to ${MOST_ATTEMPTS}`,
 		);
 	if (typeof run !== "function")
 		return invalid(
-			`${kind.subject} ${quote(fullName)} must have a run function`,
+			`${list.subject} ${quote(fullName)} must have a run function`,
 		);
-	return kind.read(
+	return list.read(
 		{
 			plugin,
 			name: fullName,

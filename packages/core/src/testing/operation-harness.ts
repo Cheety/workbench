@@ -177,7 +177,7 @@ function harnessOf(
 		sql: database.sql,
 		jobs: plugins.jobs,
 		now,
-		newId,
+		newIdForRun: newId,
 		newJobId,
 		random,
 		runTimeout: { ms: HOOK_TIMEOUT_MS, setTimer: setSystemTimer },

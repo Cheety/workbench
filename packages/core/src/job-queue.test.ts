@@ -112,7 +112,7 @@ function queueOf(scenario: QueueScenario) {
 		sql: scenario.sql,
 		jobs: scenario.jobs,
 		now: scenario.now ?? (() => NOW),
-		newId: () => "00000000-0000-4000-8000-000000000001",
+		newIdForRun: () => "00000000-0000-4000-8000-000000000001",
 		random: scenario.random ?? (() => 0.5),
 		newJobId: scenario.newJobId ?? (() => crypto.randomUUID()),
 		runTimeout: scenario.runTimeout ?? NEVER_EXPIRING,
