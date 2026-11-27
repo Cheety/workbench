@@ -5,7 +5,6 @@ import type { Migration } from "./schema-migrations.ts";
 
 const SQL_FILE = ".sql";
 
-// Postgres enforces it as well, on core.migrations, so it must mean the same in both regex dialects.
 export const MIGRATION_FILE_NAME_PATTERN = "^[0-9]{4}_[a-z0-9_]+\\.sql$";
 
 const MIGRATION_FILE_NAME = new RegExp(MIGRATION_FILE_NAME_PATTERN);

@@ -60,10 +60,9 @@ export type MigrationRunner = {
 	readonly logger: Logger;
 };
 
-// Advisory locks share one key space per database, so the key is a fixed, unlikely value:
-// the ASCII bytes of "workbenc", as much of "workbench" as fits a bigint. It makes a
-// collision with other lock users of the same database improbable, not impossible.
-const MIGRATION_LOCK_KEY = 0x776f726b62656e63n;
+const MIGRATION_LOCK_KEY = BigInt(
+	`0x${Buffer.from("workbenc", "ascii").toString("hex")}`,
+);
 
 const STOPPED: MigrationRun = { stopped: true };
 
