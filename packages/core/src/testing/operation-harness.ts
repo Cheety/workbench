@@ -2,6 +2,7 @@ import type { Actor } from "@workbench/sdk";
 import { Secret } from "../config.ts";
 import { createEventDelivery } from "../event-outbox.ts";
 import { setSystemTimer } from "../hook-timeout.ts";
+import { createJobQueue } from "../job-queue.ts";
 import {
 	type PluginPackage,
 	type RunningPlugins,
@@ -52,6 +53,7 @@ export type OperationHarness = {
 	createWorkspace(name: string): Promise<string>;
 	call(call: HarnessCall): Promise<OperationResult>;
 	deliverEvents(): Promise<void>;
+	runJobs(): Promise<void>;
 	stop(): Promise<void>;
 };
 
@@ -71,6 +73,8 @@ const OPERATION_ID_GROUP = "8000";
 const AUDIT_ENTRY_ID_GROUP = "a000";
 
 const EVENT_ID_GROUP = "e000";
+
+const JOB_ID_GROUP = "b000";
 
 const NOT_STOPPED = new AbortController().signal;
 
@@ -153,6 +157,9 @@ function harnessOf(
 		newAuditEntryId: sequentialIds(AUDIT_ENTRY_ID_GROUP),
 		newEventId: sequentialIds(EVENT_ID_GROUP),
 		eventsCommitted: () => {},
+		jobs: plugins.jobs,
+		newJobId: sequentialIds(JOB_ID_GROUP),
+		jobsCommitted: () => {},
 		random,
 		logger,
 	});
@@ -163,6 +170,15 @@ function harnessOf(
 		newId,
 		random,
 		handlerTimeout: { ms: HOOK_TIMEOUT_MS, setTimer: setSystemTimer },
+		logger,
+	});
+	const jobQueue = createJobQueue({
+		sql: database.sql,
+		jobs: plugins.jobs,
+		now,
+		newId,
+		random,
+		runTimeout: { ms: HOOK_TIMEOUT_MS, setTimer: setSystemTimer },
 		logger,
 	});
 	const newCorrelationId =
@@ -181,6 +197,7 @@ function harnessOf(
 				correlationId: newCorrelationId(),
 			}),
 		deliverEvents: () => delivery.deliverDue(NOT_STOPPED),
+		runJobs: () => jobQueue.runDue(NOT_STOPPED),
 		stop: async () => {
 			try {
 				await plugins.deactivate();

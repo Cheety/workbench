@@ -14,6 +14,7 @@ import {
 	UNKNOWN_FAILURE_REASON,
 } from "./failure-reason.ts";
 import { type HookTimeout, runWithin } from "./hook-timeout.ts";
+import { type JobRegistry, registerJobs } from "./job-registry.ts";
 import { type LoadFailure, LoadFailures } from "./load-failures.ts";
 import type { Logger } from "./logger.ts";
 import {
@@ -67,6 +68,7 @@ export type RunningPlugins = {
 	readonly failures: readonly LoadFailure[];
 	readonly operations: OperationRegistry;
 	readonly events: EventRegistry;
+	readonly jobs: JobRegistry;
 	deactivate(): Promise<DeactivationOutcome>;
 };
 
@@ -108,6 +110,7 @@ export async function startPlugins(
 			...active.flatMap((plugin) => plugin.operations),
 		]),
 		events,
+		jobs: registerJobs(active.flatMap((plugin) => plugin.jobs)),
 		deactivate: () => {
 			deactivation ??= deactivate(active, options);
 			return deactivation;

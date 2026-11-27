@@ -11,6 +11,8 @@ import { startEventDeliveryLoop } from "./event-delivery-loop.ts";
 import { createEventDelivery } from "./event-outbox.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import { createInstanceStart } from "./instance-start.ts";
+import { startJobLoop } from "./job-loop.ts";
+import { createJobQueue } from "./job-queue.ts";
 import { startPlugins } from "./kernel.ts";
 import { createLogger } from "./logger.ts";
 import { createOperationPipeline } from "./operation-pipeline.ts";
@@ -49,6 +51,8 @@ const DATABASE_CLOSE_TIMEOUT_S = 5;
 const MIGRATION_LOCK_RETRY = { baseMs: 250, capMs: 2_000 } as const;
 
 const EVENT_DELIVERY_POLL_INTERVAL_MS = 1_000;
+
+const JOB_QUEUE_POLL_INTERVAL_MS = 1_000;
 
 const now = (): Date => new Date();
 
@@ -159,6 +163,23 @@ const eventDelivery = startEventDeliveryLoop({
 	setTimer: setSystemTimer,
 	logger,
 });
+const jobQueue = startJobLoop({
+	queue: createJobQueue({
+		sql,
+		jobs: instance.jobs,
+		now,
+		newId: () => crypto.randomUUID(),
+		random: Math.random,
+		runTimeout: {
+			ms: config.pluginHookTimeoutMs,
+			setTimer: setSystemTimer,
+		},
+		logger,
+	}),
+	pollIntervalMs: JOB_QUEUE_POLL_INTERVAL_MS,
+	setTimer: setSystemTimer,
+	logger,
+});
 const server = startServerOrExit({
 	port: config.port,
 	logger,
@@ -176,6 +197,9 @@ const server = startServerOrExit({
 			newAuditEntryId: () => crypto.randomUUID(),
 			newEventId: () => crypto.randomUUID(),
 			eventsCommitted: eventDelivery.wake,
+			jobs: instance.jobs,
+			newJobId: () => crypto.randomUUID(),
+			jobsCommitted: jobQueue.wake,
 			random: Math.random,
 			logger,
 		}),
@@ -193,6 +217,7 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 				stopStartingPlugins: instance.stop,
 				server,
 				eventDelivery,
+				jobQueue,
 				plugins,
 				database: {
 					close: () => sql.close({ timeout: DATABASE_CLOSE_TIMEOUT_S }),

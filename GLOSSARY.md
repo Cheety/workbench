@@ -68,11 +68,31 @@ _Avoid_: Listener, Callback, Consumer
 
 **Outbox**:
 Die Tabellen des Cores, in die eine Mutation ihre Events in ihrer eigenen Transaktion schreibt und aus denen der Core sie nach dem Festschreiben zustellt.
-_Avoid_: Queue, Event-Bus, Event-Store
+_Avoid_: Queue (die Job-Queue ist die der Jobs), Event-Bus, Event-Store
 
 **Zustellung**:
 Der Aufruf des Event-Handlers genau eines abonnierenden Plugins mit genau einem Event; sie gelingt mindestens einmal.
 _Avoid_: Dispatch, Auslieferung, Benachrichtigung
+
+**Job**:
+Hintergrundarbeit eines Plugins, die eine Mutation einreiht und die der Core nach dem Festschreiben außerhalb der Anfrage ausführt, mindestens einmal.
+_Avoid_: Task, Hintergrundaufgabe, Worker
+
+**Job-Queue**:
+Die Tabelle des Cores, in die eine Mutation ihre Jobs in ihrer eigenen Transaktion schreibt und aus der der Core sie ausführt, wiederholt und in den Dead-Letter legt.
+_Avoid_: Outbox (das ist die der Events), Warteschlange, Scheduler
+
+**Versuch**:
+Eine Ausführung eines Jobs; sie gelingt, scheitert oder überschreitet ihre Frist, und ein Job hat nur eine begrenzte Zahl davon.
+_Avoid_: Retry (das ist die Wiederholung, also jeder Versuch nach dem ersten), Run, Durchlauf
+
+**Dead-Letter**:
+Die Ablage der Jobs, deren letzter Versuch gescheitert ist; der Core führt sie nicht mehr aus, bis ein Betreiber sie wieder einreiht.
+_Avoid_: Fehlerliste, Papierkorb, Failed Jobs
+
+**Wiederzustellungsfrist**:
+Die Zeit, nach der der Core einen begonnenen Versuch, der weder gelang noch scheiterte, verloren gibt und den Job erneut ausführt; sie ist länger als die Frist eines Versuchs.
+_Avoid_: Lease, Lock-Timeout, Visibility-Timeout
 
 ## Inhalte
 

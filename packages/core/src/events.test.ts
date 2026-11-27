@@ -304,6 +304,9 @@ async function startLedgerPipeline(eventsCommitted: () => void) {
 		newAuditEntryId: () => crypto.randomUUID(),
 		newEventId: () => crypto.randomUUID(),
 		eventsCommitted,
+		jobs: plugins.jobs,
+		newJobId: () => crypto.randomUUID(),
+		jobsCommitted: () => {},
 		random: () => 0.5,
 		logger,
 	});
@@ -364,6 +367,9 @@ async function startInstanceOn(
 		newAuditEntryId: () => crypto.randomUUID(),
 		newEventId: () => crypto.randomUUID(),
 		eventsCommitted: () => {},
+		jobs: plugins.jobs,
+		newJobId: () => crypto.randomUUID(),
+		jobsCommitted: () => {},
 	});
 	const delivery = createEventDelivery({
 		...sources,

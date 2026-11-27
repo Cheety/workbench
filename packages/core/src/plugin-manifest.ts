@@ -7,6 +7,7 @@ import {
 	readSubscriptions,
 } from "./event-registry.ts";
 import { isRecord } from "./is-record.ts";
+import { type RegisteredJob, readJobs } from "./job-registry.ts";
 import {
 	CORE_OWNER_NAME,
 	type RegisteredOperation,
@@ -37,6 +38,7 @@ export type ValidPlugin = {
 	readonly operations: readonly RegisteredOperation[];
 	readonly events: readonly RegisteredEvent[];
 	readonly subscriptions: readonly RegisteredSubscription[];
+	readonly jobs: readonly RegisteredJob[];
 	loadMigrations(): Promise<readonly Migration[]>;
 	activate(ctx: PluginContext): Promise<void>;
 	deactivate(): Promise<void>;
@@ -78,6 +80,7 @@ export function validatePlugin(
 		definition.subscriptions,
 		capabilities.value,
 	);
+	const jobs = readJobs(declaredName, definition.jobs);
 	const problems = [
 		...nameProblems(definition.manifest, declaredName),
 		...requires.problems,
@@ -88,6 +91,7 @@ export function validatePlugin(
 		...operations.problems,
 		...events.problems,
 		...subscriptions.problems,
+		...jobs.problems,
 	];
 	if (!isSemVerVersion(version))
 		problems.push("package.json version must be a SemVer version");
@@ -104,6 +108,7 @@ export function validatePlugin(
 			operations: operations.value,
 			events: events.value,
 			subscriptions: subscriptions.value,
+			jobs: jobs.value,
 			loadMigrations: loadMigrations ?? (async () => []),
 			activate: async (ctx) => {
 				if (typeof definition.activate === "function")

@@ -10,6 +10,7 @@ import {
 	type InstanceStartSteps,
 	type StartedPlugins,
 } from "./instance-start.ts";
+import { type RegisteredJob, registerJobs } from "./job-registry.ts";
 import type { LoadFailure } from "./kernel.ts";
 import {
 	type RegisteredOperation,
@@ -23,6 +24,7 @@ function pluginsWith(...failures: LoadFailure[]): StartedPlugins {
 		failures,
 		operations: registerOperations([]),
 		events: registerEvents({ active: [], notActive: [] }),
+		jobs: registerJobs([]),
 		deactivate: async () => "clean",
 	};
 }
@@ -301,5 +303,44 @@ describe("events of an instance", () => {
 
 		expect(instance.events.findEvent("board.LabelRenamed")).toBe(labelRenamed);
 		expect(instance.events.subscriptions()).toEqual([indexLabel]);
+	});
+});
+
+describe("jobs of an instance", () => {
+	const archiveLabels: RegisteredJob = {
+		plugin: "board",
+		name: "board.archiveLabels",
+		maxAttempts: 3,
+		validatePayload: async (value) => ({ valid: true, value }),
+		run: async () => {},
+	};
+
+	test("are none while the plugins are still starting", () => {
+		const instance = createInstanceStart(
+			steps({ startPlugins: () => new Promise(() => {}) }),
+			recordingLogger().logger,
+		);
+
+		void instance.run();
+
+		expect(instance.jobs.find("board.archiveLabels")).toBeUndefined();
+		expect(instance.jobs.names()).toEqual([]);
+	});
+
+	test("are those of the started plugins once they started", async () => {
+		const instance = createInstanceStart(
+			steps({
+				startPlugins: async () => ({
+					...pluginsWith(),
+					jobs: registerJobs([archiveLabels]),
+				}),
+			}),
+			recordingLogger().logger,
+		);
+
+		await instance.run();
+
+		expect(instance.jobs.find("board.archiveLabels")).toBe(archiveLabels);
+		expect(instance.jobs.names()).toEqual(["board.archiveLabels"]);
 	});
 });

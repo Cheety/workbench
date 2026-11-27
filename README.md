@@ -80,28 +80,28 @@ export default definePlugin({
 - `requires` nennt vorausgesetzte Plugins mit SemVer-Range (`^`, `~`, Vergleichsoperatoren, `x`/`*`, mit Leerzeichen oder `||` kombiniert).
 - `capabilities` nennt die Capabilities, die das Plugin braucht. `ctx.capability(name)` liefert nur deklarierte und wirft sonst einen Fehler. Der Core bietet `database` an (`DATABASE_CAPABILITY` aus `@workbench/sdk`) und je Event ein Event-Abo, `event:<plugin>.<Event>` (siehe [Events](#events)); ein Manifest, das eine unbekannte deklariert, ist ungültig.
 
-Beim Start entdeckt der Kernel die Plugin-Pakete, lädt die Einstiege der in `PLUGINS` genannten Plugins, löst ihre `requires` auf und aktiviert sie, vorausgesetzte zuerst. Von einem Plugin, das nicht in `PLUGINS` steht, läuft kein Code, und seine Mängel sind kein Ladefehler. Beim Shutdown (`SIGTERM`, `SIGINT`) stoppt erst der Server, dann endet die Zustellung der [Events](#events): Ein laufender Handler wird abgewartet, höchstens seine Frist, weitere Zustellungen beginnen nicht und bleiben für den nächsten Start liegen. Danach werden die Plugins in umgekehrter Reihenfolge deaktiviert. Änderungen an `PLUGINS` wirken nach einem Neustart.
+Beim Start entdeckt der Kernel die Plugin-Pakete, lädt die Einstiege der in `PLUGINS` genannten Plugins, löst ihre `requires` auf und aktiviert sie, vorausgesetzte zuerst. Von einem Plugin, das nicht in `PLUGINS` steht, läuft kein Code, und seine Mängel sind kein Ladefehler. Beim Shutdown (`SIGTERM`, `SIGINT`) stoppt erst der Server, dann endet die Zustellung der [Events](#events): Ein laufender Handler wird abgewartet, höchstens seine Frist, weitere Zustellungen beginnen nicht und bleiben für den nächsten Start liegen. Ebenso endet danach die Job-Queue (siehe [Jobs](#jobs)): Ein laufender Job wird abgewartet, höchstens seine Frist, weitere beginnen nicht. Danach werden die Plugins in umgekehrter Reihenfolge deaktiviert. Änderungen an `PLUGINS` wirken nach einem Neustart.
 
-Jedes Plugin hat für das Laden seines Einstiegs, für `activate` und für `deactivate` je die Frist `PLUGIN_HOOK_TIMEOUT_MS`. Wird der Einstieg nicht rechtzeitig geladen, gilt das Plugin als nicht geladen (`load_timed_out`). Wird `activate` nicht rechtzeitig fertig, gilt das Plugin als nicht geladen (`activation_timed_out`) und der Start geht mit den übrigen weiter. Für ein Plugin, dessen `activate` fehlschlägt oder die Frist überschreitet, ruft der Kernel `deactivate` nicht auf; es muss selbst freigeben, was es bis dahin belegt hat. Wird `deactivate` nicht rechtzeitig fertig oder schlägt es fehl, nennt das Log das Plugin (`plugin deactivation timed out`, `plugin failed to deactivate`), die übrigen werden trotzdem deaktiviert, und die Instanz endet mit Exit-Code 1. Endet die Zustellung der Events nicht sauber, nennt das Log den Fehler im Eintrag `event delivery failed to stop`, und die Instanz endet mit Exit-Code 1. Lassen sich danach die Datenbankverbindungen nicht schließen, nennt das Log den Fehler im Eintrag `database connections failed to close`, und die Instanz endet ebenfalls mit Exit-Code 1. Ein Signal während des Starts beendet den Start der Plugins: Der Kernel aktiviert kein weiteres Plugin (Log-Eintrag `plugin start stopped` mit den nicht aktivierten in `notActivated`), wartet auf ein gerade laufendes `activate` höchstens die Frist und deaktiviert dann die bereits aktiven Plugins. Lädt der Kernel beim Signal noch Einstiege, lädt er die der übrigen aktivierten Plugins zu Ende, je Plugin höchstens die Frist, und aktiviert danach keines.
+Jedes Plugin hat für das Laden seines Einstiegs, für `activate` und für `deactivate` je die Frist `PLUGIN_HOOK_TIMEOUT_MS`. Wird der Einstieg nicht rechtzeitig geladen, gilt das Plugin als nicht geladen (`load_timed_out`). Wird `activate` nicht rechtzeitig fertig, gilt das Plugin als nicht geladen (`activation_timed_out`) und der Start geht mit den übrigen weiter. Für ein Plugin, dessen `activate` fehlschlägt oder die Frist überschreitet, ruft der Kernel `deactivate` nicht auf; es muss selbst freigeben, was es bis dahin belegt hat. Wird `deactivate` nicht rechtzeitig fertig oder schlägt es fehl, nennt das Log das Plugin (`plugin deactivation timed out`, `plugin failed to deactivate`), die übrigen werden trotzdem deaktiviert, und die Instanz endet mit Exit-Code 1. Endet die Zustellung der Events nicht sauber, nennt das Log den Fehler im Eintrag `event delivery failed to stop`, und die Instanz endet mit Exit-Code 1; für die Job-Queue heißt der Eintrag `job queue failed to stop`. Lassen sich danach die Datenbankverbindungen nicht schließen, nennt das Log den Fehler im Eintrag `database connections failed to close`, und die Instanz endet ebenfalls mit Exit-Code 1. Ein Signal während des Starts beendet den Start der Plugins: Der Kernel aktiviert kein weiteres Plugin (Log-Eintrag `plugin start stopped` mit den nicht aktivierten in `notActivated`), wartet auf ein gerade laufendes `activate` höchstens die Frist und deaktiviert dann die bereits aktiven Plugins. Lädt der Kernel beim Signal noch Einstiege, lädt er die der übrigen aktivierten Plugins zu Ende, je Plugin höchstens die Frist, und aktiviert danach keines.
 
 Ein Paket, dessen `package.json` nicht lesbar ist oder `workbench.plugin` in anderer Form angibt, überspringt der Kernel; das Log nennt es als Eintrag `plugin package ignored` mit Verzeichnis (`directory`) und Grund (`problem`). Die übrigen Plugin-Pakete sind davon nicht betroffen.
 
 Kann ein Plugin nicht geladen werden, startet die Instanz trotzdem. Das Log nennt jeden Ladefehler als Eintrag `plugin not loaded` mit `plugin`, `reason` und einer ausformulierten Meldung in `detail`; der Eintrag `plugins started` fasst aktive (`active`) und nicht geladene (`notLoaded`) Plugins zusammen. Hat Code des Plugins oder der Core beim Bereitstellen einer Capability einen Fehler geworfen, steht er mit Name, Meldung und Stacktrace in `error`, ebenso im Eintrag `plugin failed to deactivate`. Fehlermeldungen eines Plugins stehen damit im Log und dürfen keine Secrets enthalten.
 
-| `reason`                 | Bedeutung                                                                                                              |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| `invalid_manifest`       | Manifest, Operationen, Events, Event-Abos oder Paketversion ungültig, Einstieg nicht ladbar, Name anders als im Paket. |
-| `load_timed_out`         | Der Einstieg des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` geladen.                                   |
-| `unknown_plugin`         | In `PLUGINS` genannt, aber kein Plugin-Paket stellt das Plugin bereit.                                                 |
-| `duplicate_plugin`       | Mehrere Plugin-Pakete deklarieren denselben Plugin-Namen; keines davon wird geladen.                                   |
-| `missing_dependency`     | Kein Plugin-Paket stellt ein vorausgesetztes Plugin bereit, oder es ist nicht in `PLUGINS` aktiviert.                  |
-| `version_mismatch`       | Die Version eines vorausgesetzten Plugins erfüllt die Range nicht.                                                     |
-| `dependency_not_loaded`  | Ein vorausgesetztes Plugin wurde selbst nicht geladen; `detail` nennt dessen Ursache.                                  |
-| `dependency_cycle`       | Plugins setzen einander im Kreis voraus; jedes Plugin des Kreises erhält diesen Grund.                                 |
-| `capability_unavailable` | Der Core konnte eine deklarierte Capability nicht bereitstellen; `activate` wurde nicht aufgerufen.                    |
-| `migration_failed`       | Das Schema des Plugins konnte nicht migriert werden; `detail` nennt die Migration und den Fehler.                      |
-| `activation_failed`      | `activate` des Plugins ist fehlgeschlagen.                                                                             |
-| `activation_timed_out`   | `activate` des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` fertig.                                      |
+| `reason`                 | Bedeutung                                                                                                                    |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `invalid_manifest`       | Manifest, Operationen, Events, Event-Abos, Jobs oder Paketversion ungültig, Einstieg nicht ladbar, Name anders als im Paket. |
+| `load_timed_out`         | Der Einstieg des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` geladen.                                         |
+| `unknown_plugin`         | In `PLUGINS` genannt, aber kein Plugin-Paket stellt das Plugin bereit.                                                       |
+| `duplicate_plugin`       | Mehrere Plugin-Pakete deklarieren denselben Plugin-Namen; keines davon wird geladen.                                         |
+| `missing_dependency`     | Kein Plugin-Paket stellt ein vorausgesetztes Plugin bereit, oder es ist nicht in `PLUGINS` aktiviert.                        |
+| `version_mismatch`       | Die Version eines vorausgesetzten Plugins erfüllt die Range nicht.                                                           |
+| `dependency_not_loaded`  | Ein vorausgesetztes Plugin wurde selbst nicht geladen; `detail` nennt dessen Ursache.                                        |
+| `dependency_cycle`       | Plugins setzen einander im Kreis voraus; jedes Plugin des Kreises erhält diesen Grund.                                       |
+| `capability_unavailable` | Der Core konnte eine deklarierte Capability nicht bereitstellen; `activate` wurde nicht aufgerufen.                          |
+| `migration_failed`       | Das Schema des Plugins konnte nicht migriert werden; `detail` nennt die Migration und den Fehler.                            |
+| `activation_failed`      | `activate` des Plugins ist fehlgeschlagen.                                                                                   |
+| `activation_timed_out`   | `activate` des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` fertig.                                            |
 
 ### Migrationen
 
@@ -124,7 +124,7 @@ Seine SQL-Migrationen liegen in einem Verzeichnis des Plugin-Pakets, das die `pa
 - Jede Datei mit der Endung `.sql` ist eine Migration. Ihr Name besteht aus vier Ziffern, einem Unterstrich und Kleinbuchstaben, Ziffern oder Unterstrichen, z. B. `0001_create_notes.sql`; die Migrationen laufen in der Reihenfolge ihrer Namen. Andere Dateien bleiben unbeachtet.
 - Jede Migration läuft in einer eigenen Transaktion mit dem Schema des Plugins als `search_path`; Tabellen werden daher ohne Schema angelegt.
 - Angewandte Migrationen hält die Tabelle `core.migrations` fest (Schema, Dateiname, Zeitpunkt); ein erneuter Start wendet nur neue Migrationen an. Eine angewandte Migration wird nie geändert, sondern durch eine neue ergänzt.
-- Die Migrationen des Schemas `core` liegen in `packages/core/migrations` und laufen genauso, mit `core` als `search_path`. Sie legen `core.workspaces` an, die Tabelle der Workspaces (ADR-0002), `core.service_accounts` und `core.api_tokens` für die Service-Accounts und ihre API-Tokens (siehe [HTTP-API](#http-api)) `core.audit_entries` für das [Audit](#audit) sowie `core.events` und `core.event_deliveries`, die Outbox der [Events](#events). Schlägt eine davon fehl, meldet das Log `instance failed to start` mit `reason` `core_schema_not_migrated`, und die Instanz lädt keine Plugins.
+- Die Migrationen des Schemas `core` liegen in `packages/core/migrations` und laufen genauso, mit `core` als `search_path`. Sie legen `core.workspaces` an, die Tabelle der Workspaces (ADR-0002), `core.service_accounts` und `core.api_tokens` für die Service-Accounts und ihre API-Tokens (siehe [HTTP-API](#http-api)) `core.audit_entries` für das [Audit](#audit) sowie `core.events` und `core.event_deliveries`, die Outbox der [Events](#events), und `core.jobs`, die Job-Queue der [Jobs](#jobs). Schlägt eine davon fehl, meldet das Log `instance failed to start` mit `reason` `core_schema_not_migrated`, und die Instanz lädt keine Plugins.
 - Jeder Migrationslauf (erst `core`, dann die Schemas der Plugins) hält dieselbe Postgres-Advisory-Lock. Starten zwei Prozesse gleichzeitig, wartet der zweite (Log-Eintrag `migration lock held by another run, waiting`) und wendet nichts doppelt an. Ein Signal beendet das Warten; eine laufende Migration läuft zu Ende, weitere beginnen nicht. Jede Anweisung eines Laufs darf höchstens 60 s dauern, das Warten auf Tabellensperren eingeschlossen; dauert sie länger, schlägt die Migration fehl (`migration failed`) und der Lauf gibt die Lock frei (Begründung in ADR-0008).
 - Schlägt eine Migration fehl, wird sie zurückgerollt; die folgenden Migrationen desselben Schemas laufen nicht, die anderer Schemas schon. Das Log nennt Schema, Migration und Fehler (`migration failed`), das Plugin wird nicht geladen (`migration_failed`), und die Instanz meldet nicht „bereit“.
 - Nennt die `package.json` Migrationen, deklariert das Manifest aber nicht `database`, ist das Manifest ungültig.
@@ -160,11 +160,11 @@ Ein Akteur ruft eine Operation mit ihrem Namen, einem Workspace und einer Eingab
 2. prüft die Eingabe gegen das Eingabe-Schema,
 3. öffnet eine Transaktion, für eine `query` nur lesend, mit dem Schema des Plugins als `search_path` (für eine Operation des Cores `core`),
 4. prüft, dass der Workspace in `core.workspaces` existiert,
-5. führt `execute(input, ctx)` aus; `ctx` nennt `actor`, `workspace`, `sql` (die Transaktion als Tagged Template), `now()`, `newId()`, `random()` und `publish()` (siehe [Events](#events)),
+5. führt `execute(input, ctx)` aus; `ctx` nennt `actor`, `workspace`, `sql` (die Transaktion als Tagged Template), `now()`, `newId()`, `random()`, `publish()` (siehe [Events](#events)) und `enqueue()` (siehe [Jobs](#jobs)),
 6. bildet den Rückgabewert über das Ausgabe-Schema ab,
 7. schreibt für eine `mutation` einen Audit-Eintrag in dieselbe Transaktion (siehe [Audit](#audit)) und schreibt die Transaktion fest.
 
-Wirft `execute`, passt die Ausgabe nicht zum Schema oder lässt sich der Audit-Eintrag nicht schreiben, wird die Transaktion zurückgerollt, samt der Events, die die Mutation publiziert hat. Ein fachlicher Fehler ist ein `OperationError` aus `@workbench/sdk` mit Art (`not_found`, `conflict`, `rejected`), Code (Kleinbuchstaben, Ziffern, Unterstriche) und einer Meldung für den Aufrufer; der Aufrufer erhält den Code als `<plugin>.<code>`, von einer Operation des Cores als `core.<code>`. Jeder andere Fehler erreicht den Aufrufer nur als `internal_error`.
+Wirft `execute`, passt die Ausgabe nicht zum Schema oder lässt sich der Audit-Eintrag nicht schreiben, wird die Transaktion zurückgerollt, samt der Events, die die Mutation publiziert, und der Jobs, die sie eingereiht hat. Ein fachlicher Fehler ist ein `OperationError` aus `@workbench/sdk` mit Art (`not_found`, `conflict`, `rejected`), Code (Kleinbuchstaben, Ziffern, Unterstriche) und einer Meldung für den Aufrufer; der Aufrufer erhält den Code als `<plugin>.<code>`, von einer Operation des Cores als `core.<code>`. Jeder andere Fehler erreicht den Aufrufer nur als `internal_error`.
 
 | Code                  | Art             | Bedeutung                                                                                                                                           |
 | --------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -307,6 +307,74 @@ Eine gelungene Zustellung steht nur mit `LOG_LEVEL=debug` im Log, als Eintrag `e
 
 Die Instanz stellt zu, sobald eine Mutation mit Events festgeschrieben ist, und sieht zusätzlich jede Sekunde nach fälligen Zustellungen: nach Wiederholungen und nach Events, die ein Absturz oder ein anderer Prozess liegen ließ. Sie versucht eine Zustellung nach der anderen. Scheitert ein solcher Durchgang als Ganzes, etwa weil Postgres nicht antwortet, nennt das Log den Fehler im Eintrag `event delivery failed`, und der nächste Durchgang folgt nach einer Sekunde.
 
+### Jobs
+
+Ein Job ist Hintergrundarbeit eines Plugins, die eine Mutation einreiht und die Instanz nach dem Festschreiben ausführt, außerhalb der Anfrage und mindestens einmal (ADR-0016). Ein Plugin definiert ihn mit `defineJob()` aus `@workbench/sdk` und nennt ihn in `definePlugin({ manifest, jobs })`:
+
+```ts
+export const sendReminder = defineJob({
+	name: "sendReminder",
+	payload: z.object({ cardId: z.string() }),
+	maxAttempts: 5,
+	run: async (job, ctx) => {},
+});
+```
+
+- `name` ist in camelCase; der Job heißt `<plugin>.<name>`, hier `board.sendReminder`.
+- `payload` ist ein Schema wie bei einer Operation.
+- `maxAttempts` ist die Zahl der Versuche, nach der der Job im Dead-Letter landet, 1 bis 25.
+
+Ein Plugin ist ungültig (`invalid_manifest`), wenn ein Job keinen Namen in camelCase, kein Payload-Schema, kein `maxAttempts` von 1 bis 25 oder keine Funktion `run` hat oder mehrfach deklariert ist.
+
+#### Einreihen
+
+Eine Mutation reiht einen Job in `execute` ein:
+
+```ts
+await ctx.enqueue(sendReminder, { cardId });
+```
+
+Der Core prüft die Payload gegen das Schema der Definition und schreibt den Job in die Job-Queue `core.jobs`, in der Transaktion der Mutation: ID, Name, Payload, Workspace und Zeitpunkt in UTC. Wird die Mutation zurückgerollt, gibt es den Job nicht, und er läuft nie.
+
+`enqueue` wirft, und die Operation scheitert mit `internal_error` (Log-Eintrag `operation failed`, `reason` `execute_threw`), wenn
+
+- das Plugin den Job nicht selbst in `jobs` deklariert (`UndeclaredJobError`),
+- die Payload nicht zum Schema passt (`InvalidJobPayloadError`),
+- eine Query einreiht (`JobEnqueuedByQueryError`).
+
+#### Ausführen
+
+Ein Job läuft erst nach dem Festschreiben seiner Mutation. `run` erhält den Job und einen Kontext:
+
+- `job` nennt `id`, `name` (`board.sendReminder`), `attempt` (ab 1), `enqueuedAt`, `workspace` und `payload`, erneut geprüft gegen das Schema der Definition.
+- `ctx` nennt `sql`, eine Transaktion mit dem Schema des Plugins als `search_path`, `now()`, `newId()` und `random()`.
+
+Der Core vermerkt den erledigten Job in der Transaktion von `run`. Was `run` über `ctx.sql` schreibt, gibt es deshalb nur zusammen mit dem erledigten Job. Ein Versuch scheitert, wenn `run` wirft, nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` fertig wird oder sich die Transaktion nicht festschreiben lässt; dann wird zurückgerollt, was er geschrieben hat, und ein Job, der seine Frist überschritten hat, kann danach nichts mehr schreiben. Der Core wiederholt den Job mit derselben `id` nach einer Wartezeit, die mit jedem Versuch exponentiell wächst und einen Zufallsanteil hat (Full Jitter: bis 5 s nach dem ersten, bis 10 s nach dem zweiten, höchstens 1 h). Scheitert der letzte Versuch (`maxAttempts`), landet der Job im Dead-Letter und läuft nicht mehr.
+
+Ein Job ist deshalb idempotent: Eine Wirkung außerhalb der eigenen Datenbank, etwa eine Mail, kann sich wiederholen, wenn der Job nach ihr scheitert. Die `id` des Jobs ist der Schlüssel, an dem er eine Wiederholung erkennt.
+
+Ein erledigter Job steht nur mit `LOG_LEVEL=debug` im Log, als Eintrag `job completed` mit `jobId`, `job` (dem Namen) und `attempt`. Jeder gescheiterte Versuch steht im Log als Eintrag `job failed` mit `jobId`, `job`, `attempt`, `retryInMs` und `reason`; der letzte als Eintrag `job dead-lettered`, ohne `retryInMs`:
+
+| `reason`          | Bedeutung                                                                                                                                                                              |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run_threw`       | `run` hat geworfen; der Fehler steht in `error`.                                                                                                                                       |
+| `run_timed_out`   | `run` wurde nicht innerhalb von `timeoutMs` fertig.                                                                                                                                    |
+| `invalid_payload` | Das Schema der Definition lehnt die gespeicherte Payload ab, etwa nach einer Änderung des Schemas; `issues` nennt die Mängel. Der Job landet sofort im Dead-Letter, ohne Wiederholung. |
+| `attempt_failed`  | Der Versuch scheiterte außerhalb von `run`, etwa beim Festschreiben (ein aufgeschobener Constraint) oder weil das Schema der Payload warf; der Fehler steht in `error`.                |
+
+Die Job-Queue `core.jobs` zeigt den Stand jedes Jobs: `state` ist `pending`, `completed` oder `dead`, dazu `attempts`, `next_attempt_at`, `settled_at` und `failure_reason`, der Grund des letzten gescheiterten Versuchs. Der Dead-Letter sind die Zeilen mit `state = 'dead'`. Ein Betreiber reiht einen solchen Job nach behobener Ursache von Hand wieder ein:
+
+```sql
+UPDATE core.jobs SET state = 'pending', settled_at = NULL, attempts = 0, next_attempt_at = now() WHERE id = '…';
+```
+
+- Beginnt ein Versuch, zählt der Core ihn sofort und stellt den Job für die Wiederzustellungsfrist zurück: die Frist eines Versuchs (`PLUGIN_HOOK_TIMEOUT_MS`) plus 60 s. Endet der Prozess mitten im Versuch, läuft der Job nach dieser Frist erneut, auch in einem anderen Prozess; der abgebrochene Versuch zählt mit. Weil die Frist länger ist als die eines Versuchs, laufen nie zwei Versuche desselben Jobs zugleich, solange `run` seine Frist einhält.
+- Die Reihenfolge ist nicht zugesichert: Ein Job, der scheitert, hält die übrigen nicht auf.
+- Ein Job eines Plugins, das gerade nicht aktiv ist, bleibt liegen, bis es wieder aktiv ist, ohne Frist.
+- Ein Job hat bisher keinen Akteur, publiziert keine Events und reiht selbst keine Jobs ein.
+
+Die Instanz führt Jobs aus, sobald eine Mutation mit Jobs festgeschrieben ist, und sieht zusätzlich jede Sekunde nach fälligen Jobs: nach Wiederholungen und nach Jobs, die ein Absturz oder ein anderer Prozess liegen ließ. Sie führt einen Job nach dem anderen aus. Scheitert ein solcher Durchgang als Ganzes, etwa weil Postgres nicht antwortet, nennt das Log den Fehler im Eintrag `job queue failed`, und der nächste Durchgang folgt nach einer Sekunde.
+
 ### Test-Harness
 
 Plugins testen ihre Operationen als „Akteur ruft Operation auf“ gegen ein echtes Postgres (ADR-0011). Das Harness aus `@workbench/core/testing` legt eine eigene Datenbank an, migriert `core` und die Schemas der Plugins, aktiviert die Plugins und ruft Operationen über dieselbe Pipeline auf wie die Instanz:
@@ -330,9 +398,11 @@ const result = await harness.call({
 await harness.stop();
 ```
 
-`result` ist `{ ok: true, output }` oder `{ ok: false, failure }` mit `code`, `kind`, `detail` und `issues`. Ohne Angabe gibt das Harness eine feste Uhr (`2026-11-26T08:00:00.000Z`), fortlaufende IDs im UUID-Format (`00000000-0000-4000-8000-000000000001`, …), den Audit-Einträgen fortlaufende IDs aus einer eigenen Folge (`00000000-0000-4000-a000-000000000001`, …), sodass eine Mutation die IDs der folgenden Operationen nicht verschiebt, den Events fortlaufende IDs aus einer dritten Folge (`00000000-0000-4000-e000-000000000001`, …), `random()` = `0.5` und jedem Aufruf eine fortlaufende Correlation-ID (`harness-call-1`, …), unter der die Pipeline loggt; `now`, `newId`, `random` und `newCorrelationId` lassen sich als Optionen übergeben. Lädt ein Plugin nicht, wirft `startOperationHarness` einen `HarnessStartError` mit dem Ladefehler. `harness.logEntries` enthält die Log-Einträge.
+`result` ist `{ ok: true, output }` oder `{ ok: false, failure }` mit `code`, `kind`, `detail` und `issues`. Ohne Angabe gibt das Harness eine feste Uhr (`2026-11-26T08:00:00.000Z`), fortlaufende IDs im UUID-Format (`00000000-0000-4000-8000-000000000001`, …), den Audit-Einträgen fortlaufende IDs aus einer eigenen Folge (`00000000-0000-4000-a000-000000000001`, …), sodass eine Mutation die IDs der folgenden Operationen nicht verschiebt, den Events fortlaufende IDs aus einer dritten Folge (`00000000-0000-4000-e000-000000000001`, …), den Jobs aus einer vierten (`00000000-0000-4000-b000-000000000001`, …), `random()` = `0.5` und jedem Aufruf eine fortlaufende Correlation-ID (`harness-call-1`, …), unter der die Pipeline loggt; `now`, `newId`, `random` und `newCorrelationId` lassen sich als Optionen übergeben. Lädt ein Plugin nicht, wirft `startOperationHarness` einen `HarnessStartError` mit dem Ladefehler. `harness.logEntries` enthält die Log-Einträge.
 
 Events stellt das Harness nicht von selbst zu: `await harness.deliverEvents()` ruft die Handler aller fälligen Zustellungen auf und kehrt zurück, wenn jede einmal versucht ist. Eine gescheiterte Zustellung wird erst wieder fällig, wenn die Uhr des Harness (`now`) weiter ist als ihre Wartezeit.
+
+Auch Jobs führt das Harness nicht von selbst aus: `await harness.runJobs()` versucht jeden fälligen Job einmal und kehrt dann zurück. Ein gescheiterter Job wird erst wieder fällig, wenn die Uhr des Harness (`now`) weiter ist als seine Wartezeit; ein Test stellt die Uhr vor, statt zu warten.
 
 Das Referenz-Plugin bietet so die Mutation `reference.createNote` (Eingabe `title`, 1 bis 200 Zeichen nach Entfernen von Leerraum am Rand) und die Query `reference.listNotes` (Eingabe `limit`, 1 bis 100; die neuesten zuerst), beide auf den Notizen eines Workspaces in `plugin_reference.notes`. `reference.createNote` publiziert das Event `reference.NoteCreated` (Version 1, Payload `noteId`), dessen Definition `noteCreated` im Contract des Plugins liegt (siehe [Events](#events)). Seine Tests in `packages/plugin-reference/src/operations.test.ts` zeigen das Harness im Einsatz.
 
@@ -427,14 +497,14 @@ Die Architekturtests in `packages/architecture` lassen `bun run check` scheitern
 
 Die Konfiguration kommt ausschließlich aus der Umgebung und wird beim Start geprüft. Fehlt eine Pflichtvariable oder ist ein Wert ungültig, endet der Start mit Exit-Code 1 und einer Meldung, die die Variable nennt, aber keinen Wert ausgibt. Leere Variablen gelten als nicht gesetzt. Zahlen sind ganze Dezimalzahlen ohne Vorzeichen, führende Nullen oder Leerraum; Schreibweisen wie `0x1F90` oder `1e3` werden abgelehnt.
 
-| Variable                 | Pflicht | Standard | Bedeutung                                                                                                                                                               |
-| ------------------------ | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`           | ja      | –        | Postgres-URL (`postgres://` oder `postgresql://`) mit Host. Secret.                                                                                                     |
-| `DATABASE_URL_FILE`      | –       | –        | Pfad einer Datei mit der Postgres-URL (Docker-Secret). Ersetzt `DATABASE_URL`; beide zugleich sind ein Fehler.                                                          |
-| `PORT`                   | nein    | `3000`   | HTTP-Port, 0 bis 65535 (0 wählt einen freien Port).                                                                                                                     |
-| `LOG_LEVEL`              | nein    | `info`   | `debug`, `info`, `warn` oder `error`.                                                                                                                                   |
-| `READINESS_TIMEOUT_MS`   | nein    | `2000`   | Frist der Datenbankprüfung im Readiness-Check in Millisekunden, 1 bis 60000.                                                                                            |
-| `PLUGIN_HOOK_TIMEOUT_MS` | nein    | `10000`  | Frist in Millisekunden, die ein Plugin je für das Laden seines Einstiegs, für `activate`, für `deactivate` und für jeden Aufruf eines Event-Handlers hat, 1 bis 600000. |
-| `PLUGINS`                | nein    | –        | Namen der Plugins, die die Instanz aktiviert, durch Komma getrennt. Ohne Angabe ist kein Plugin aktiv.                                                                  |
+| Variable                 | Pflicht | Standard | Bedeutung                                                                                                                                                                                             |
+| ------------------------ | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`           | ja      | –        | Postgres-URL (`postgres://` oder `postgresql://`) mit Host. Secret.                                                                                                                                   |
+| `DATABASE_URL_FILE`      | –       | –        | Pfad einer Datei mit der Postgres-URL (Docker-Secret). Ersetzt `DATABASE_URL`; beide zugleich sind ein Fehler.                                                                                        |
+| `PORT`                   | nein    | `3000`   | HTTP-Port, 0 bis 65535 (0 wählt einen freien Port).                                                                                                                                                   |
+| `LOG_LEVEL`              | nein    | `info`   | `debug`, `info`, `warn` oder `error`.                                                                                                                                                                 |
+| `READINESS_TIMEOUT_MS`   | nein    | `2000`   | Frist der Datenbankprüfung im Readiness-Check in Millisekunden, 1 bis 60000.                                                                                                                          |
+| `PLUGIN_HOOK_TIMEOUT_MS` | nein    | `10000`  | Frist in Millisekunden, die ein Plugin je für das Laden seines Einstiegs, für `activate`, für `deactivate`, für jeden Aufruf eines Event-Handlers und für jeden Versuch eines Jobs hat, 1 bis 600000. |
+| `PLUGINS`                | nein    | –        | Namen der Plugins, die die Instanz aktiviert, durch Komma getrennt. Ohne Angabe ist kein Plugin aktiv.                                                                                                |
 
 Für die Tests gilt zusätzlich `TEST_DATABASE_URL` (Standard: die Datenbank aus `compose.dev.yaml`).

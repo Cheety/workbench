@@ -10,6 +10,8 @@ import { type NewAuditEntry, recordAuditEntry } from "./audit.ts";
 import { recordEvent } from "./event-outbox.ts";
 import type { EventRegistry } from "./event-registry.ts";
 import { describeThrown } from "./failure-reason.ts";
+import { enqueueJob } from "./job-queue.ts";
+import type { JobRegistry } from "./job-registry.ts";
 import type { Logger } from "./logger.ts";
 import {
 	type OperationOwner,
@@ -57,6 +59,9 @@ export type OperationPipelineOptions = {
 	readonly newAuditEntryId: () => string;
 	readonly newEventId: () => string;
 	readonly eventsCommitted: () => void;
+	readonly jobs: JobRegistry;
+	readonly newJobId: () => string;
+	readonly jobsCommitted: () => void;
 	readonly random: () => number;
 	readonly logger: Logger;
 };
@@ -105,6 +110,15 @@ class EventPublishedByQueryError extends Error {
 	}
 }
 
+class JobEnqueuedByQueryError extends Error {
+	constructor(operation: string) {
+		super(
+			`the query ${quote(operation)} enqueued a job; only a mutation enqueues jobs`,
+		);
+		this.name = "JobEnqueuedByQueryError";
+	}
+}
+
 class ExecuteThrewError extends Error {
 	constructor(cause: unknown) {
 		super("the execute function of the operation threw", { cause });
@@ -144,6 +158,7 @@ async function invoke(
 				issues: input.issues,
 			});
 		const publisher = publisherOf(call, operation, options);
+		const enqueuer = enqueuerOf(call, operation, options);
 		const output = await inTransaction(
 			operation,
 			options.sql,
@@ -152,12 +167,10 @@ async function invoke(
 				const executed = await execute(
 					operation,
 					input.value,
-					contextOf(
-						call,
-						transaction,
-						options,
-						publisher.publishIn(transaction),
-					),
+					contextOf(call, transaction, options, {
+						publish: publisher.publishIn(transaction),
+						enqueue: enqueuer.enqueueIn(transaction),
+					}),
 				);
 				if (IS_AUDITED[operation.kind])
 					await recordAuditEntry(
@@ -168,6 +181,7 @@ async function invoke(
 			},
 		);
 		if (publisher.hasPublished()) options.eventsCommitted();
+		if (enqueuer.hasEnqueued()) options.jobsCommitted();
 		return { ok: true, output };
 	} catch (error) {
 		return failed(logAndMapFailure(error, logger, operation.owner));
@@ -188,6 +202,11 @@ const IS_AUDITED: Record<OperationKind, boolean> = {
 };
 
 const CAN_PUBLISH: Record<OperationKind, boolean> = {
+	query: false,
+	mutation: true,
+};
+
+const CAN_ENQUEUE: Record<OperationKind, boolean> = {
 	query: false,
 	mutation: true,
 };
@@ -226,7 +245,7 @@ function contextOf(
 	call: OperationCall,
 	transaction: SQL,
 	sources: Pick<OperationPipelineOptions, "now" | "newId" | "random">,
-	publish: OperationContext["publish"],
+	effects: Pick<OperationContext, "publish" | "enqueue">,
 ): OperationContext {
 	return {
 		actor: call.actor,
@@ -235,7 +254,8 @@ function contextOf(
 		now: sources.now,
 		newId: sources.newId,
 		random: sources.random,
-		publish,
+		publish: effects.publish,
+		enqueue: effects.enqueue,
 	};
 }
 
@@ -265,6 +285,35 @@ function publisherOf(
 			hasPublished = true;
 		},
 		hasPublished: () => hasPublished,
+	};
+}
+
+type Enqueuer = {
+	enqueueIn(transaction: SQL): OperationContext["enqueue"];
+	hasEnqueued(): boolean;
+};
+
+function enqueuerOf(
+	call: OperationCall,
+	operation: RegisteredOperation,
+	sources: Pick<OperationPipelineOptions, "jobs" | "now" | "newJobId">,
+): Enqueuer {
+	let hasEnqueued = false;
+	return {
+		enqueueIn: (transaction) => async (definition, payload) => {
+			if (!CAN_ENQUEUE[operation.kind])
+				throw new JobEnqueuedByQueryError(operation.name);
+			await enqueueJob(transaction, sources.jobs, {
+				id: sources.newJobId(),
+				plugin: ownerName(operation.owner),
+				definition,
+				payload,
+				enqueuedAt: sources.now(),
+				workspace: call.workspace,
+			});
+			hasEnqueued = true;
+		},
+		hasEnqueued: () => hasEnqueued,
 	};
 }
 
