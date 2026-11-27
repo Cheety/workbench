@@ -178,6 +178,22 @@ describe("imports between plugins", () => {
 		},
 	);
 
+	test("rejects each computed import of a file", async () => {
+		const packages = await packagesDirectoryWith(
+			boardPluginImporting(
+				[
+					"const notes = await import(specifier);",
+					"const path = require.resolve(specifier);",
+				].join("\n"),
+			),
+		);
+
+		expect(await findPluginBoundaryViolations(packages)).toEqual([
+			{ rule: "computed_import", file: "plugin-board/src/plugin.ts" },
+			{ rule: "computed_import", file: "plugin-board/src/plugin.ts" },
+		]);
+	});
+
 	test("allows a computed import in the tests of a plugin", async () => {
 		const packages = await packagesDirectoryWith({
 			...boardPluginImporting(""),
