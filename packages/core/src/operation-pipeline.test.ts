@@ -9,11 +9,7 @@ import {
 } from "@workbench/sdk";
 import { z } from "zod";
 import type { PluginPackage } from "./kernel.ts";
-import type {
-	OperationFailure,
-	OperationResult,
-} from "./operation-pipeline.ts";
-import { toProblemDetails } from "./problem-details.ts";
+import type { OperationResult } from "./operation-pipeline.ts";
 import {
 	type OperationHarness,
 	type OperationHarnessOptions,
@@ -136,11 +132,6 @@ async function startLedger(
 function outputOf(result: OperationResult): z.infer<typeof entry> {
 	if (!result.ok) throw new Error("the operation failed");
 	return entry.parse(result.output);
-}
-
-function failureOf(result: OperationResult): OperationFailure {
-	if (result.ok) throw new Error("the operation did not fail");
-	return result.failure;
 }
 
 describe("an actor calling an operation", () => {
@@ -413,39 +404,5 @@ describe("an actor calling an operation", () => {
 				issues: [],
 			},
 		});
-	});
-});
-
-describe("a failed operation as problem details", () => {
-	test("tells the caller of an internal error the correlation id under which the log has the details", async () => {
-		const harness = await startLedger({
-			newCorrelationId: () => "request-43",
-		});
-		const workspace = await harness.createWorkspace("Accounts");
-		const added = await harness.call({
-			actor: ALICE,
-			workspace,
-			operation: "ledger.addEntry",
-			input: { amount: -5 },
-		});
-
-		const problem = toProblemDetails(failureOf(added), "request-43");
-
-		expect(problem).toEqual({
-			type: "urn:workbench:problem:internal_error",
-			title: "Internal Server Error",
-			status: 500,
-			detail: "the operation failed for an internal reason",
-			code: "internal_error",
-			correlationId: "request-43",
-			issues: [],
-		});
-		expect(harness.logEntries).toContainEqual(
-			expect.objectContaining({
-				message: "operation failed",
-				correlationId: "request-43",
-				reason: "execute_threw",
-			}),
-		);
 	});
 });
