@@ -514,14 +514,18 @@ describe("an event whose handler fails", () => {
 		});
 	});
 
-	test("has its effect outside the database once when the handler names the event id as idempotency key", async () => {
+	test("has its effect outside its transaction once when the handler names the event id as idempotency key", async () => {
 		const clock = adjustableClock("2026-11-27T09:00:00.000Z");
-		const mailGateway = new Map<string, string>();
+		const mailGateway = await createFreshDatabase();
+		cleanups.push(() => mailGateway.drop());
+		await mailGateway.sql`CREATE TABLE sent_mails (idempotency_key uuid PRIMARY KEY, entry_id uuid NOT NULL)`;
 		let attempts = 0;
 		const notifier = subscriber("notifier", async (event) => {
 			attempts += 1;
-			if (!mailGateway.has(event.id))
-				mailGateway.set(event.id, `entry ${event.payload.entryId} was added`);
+			await mailGateway.sql`
+				INSERT INTO sent_mails (idempotency_key, entry_id)
+				VALUES (${event.id}, ${event.payload.entryId})
+				ON CONFLICT (idempotency_key) DO NOTHING`;
 			if (attempts === 1) throw new Error("crashed after sending");
 		});
 		const harness = await start([ledger, notifier], { now: clock.now });
@@ -532,12 +536,14 @@ describe("an event whose handler fails", () => {
 		clock.advanceBy(ONE_HOUR_MS);
 		await harness.deliverEvents();
 
+		const sentMails: unknown[] =
+			await mailGateway.sql`SELECT idempotency_key, entry_id FROM sent_mails`;
 		expect(attempts).toBe(2);
-		expect([...mailGateway]).toEqual([
-			[
-				"00000000-0000-4000-e000-000000000001",
-				"entry 00000000-0000-4000-8000-000000000002 was added",
-			],
+		expect([...sentMails]).toEqual([
+			{
+				idempotency_key: "00000000-0000-4000-e000-000000000001",
+				entry_id: "00000000-0000-4000-8000-000000000002",
+			},
 		]);
 	});
 
