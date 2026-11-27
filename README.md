@@ -138,13 +138,14 @@ Ein Plugin importiert aus einem anderen Plugin nur dessen Contract (ADR-0004). E
 }
 ```
 
-Andere Plugins importieren ihn als `@workbench/plugin-board/contract`; das Referenz-Plugin veröffentlicht so `@workbench/plugin-reference/contract`. Der Contract ist genau diese eine Datei und enthält nur Typen, Schemas, Event-Definitionen und Werte-Typen.
+Andere Plugins importieren ihn als `@workbench/plugin-board/contract`; das Referenz-Plugin veröffentlicht so `@workbench/plugin-reference/contract`. Der Contract ist das Verzeichnis dieser Datei, hier `src/contract/`, ohne die Tests darin. Er darf aus mehreren Dateien bestehen und enthält nur Typen, Schemas, Event-Definitionen und Werte-Typen.
 
 Die Architekturtests in `packages/architecture` lassen `bun run check` scheitern, wenn
 
 - ein Plugin aus einem anderen Plugin etwas anderes als `<Paket>/contract` importiert, auch als reinen Typ-Import oder über einen relativen Pfad in dessen Verzeichnis,
-- der Contract eine Datei seines eigenen Pakets importiert, etwa Server- oder Client-Code des Plugins; erlaubt sind andere Pakete und die Contracts fremder Plugins,
-- das Verzeichnis der Contract-Datei den Einstieg des Plugins enthält oder `./contract` keine einzelne Datei nennt,
+- eine Datei des Contracts eine Datei ihres eigenen Pakets außerhalb des Contracts importiert, etwa Server- oder Client-Code des Plugins oder einen Test; erlaubt sind die übrigen Dateien des Contracts, andere Pakete und die Contracts fremder Plugins,
+- die Datei, die `./contract` nennt, eine Datei des Contracts nicht über relative Importe erreicht; das Verzeichnis enthält dann Code, der kein Contract ist, etwa Client-Code neben `./src/contract.ts`,
+- das Verzeichnis des Contracts den Einstieg des Plugins enthält oder `./contract` keine einzelne Datei nennt,
 - der Core oder das SDK außerhalb ihrer Tests Begriffe der fachlichen Plugins enthält, etwa `kanban`, `issue tracker` oder `note`; die Liste steht in `packages/architecture/src/domain-language.ts`.
 
 ## Umgebungsvariablen
