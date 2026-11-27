@@ -15,7 +15,10 @@ import { z } from "zod";
 import { Secret } from "./config.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import { startPlugins } from "./kernel.ts";
-import { createOperationPipeline } from "./operation-pipeline.ts";
+import {
+	createOperationPipeline,
+	type OperationResult,
+} from "./operation-pipeline.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
 	type MigrationRunner,
@@ -251,6 +254,15 @@ function calling(workspace: string, operation: string, input: unknown) {
 	return { actor: ALICE, workspace, operation, input };
 }
 
+const sentInvoice = z.object({
+	ok: z.literal(true),
+	output: z.object({ id: z.string() }),
+});
+
+function invoiceIdOf(sent: OperationResult): string {
+	return sentInvoice.parse(sent).output.id;
+}
+
 const cleanups: (() => Promise<void>)[] = [];
 
 afterEach(async () => {
@@ -321,10 +333,6 @@ describe("a job a mutation enqueues", () => {
 		const runBeforeTheQueueRan = [...deliveries.run];
 		await harness.runJobs();
 
-		expect(sent).toEqual({
-			ok: true,
-			output: { id: "00000000-0000-4000-8000-000000000002" },
-		});
 		expect(runBeforeTheQueueRan).toEqual([]);
 		expect(deliveries.run).toEqual([
 			{
@@ -333,7 +341,7 @@ describe("a job a mutation enqueues", () => {
 				attempt: 1,
 				enqueuedAt: new Date("2026-11-26T08:00:00.000Z"),
 				workspace,
-				payload: { invoiceId: "00000000-0000-4000-8000-000000000002" },
+				payload: { invoiceId: invoiceIdOf(sent) },
 			},
 		]);
 		expect(harness.logEntries).toContainEqual({
@@ -371,14 +379,14 @@ describe("a job a mutation enqueues", () => {
 		]);
 		const workspace = await harness.createWorkspace("Alpha");
 
-		await harness.call(sendingInvoice(workspace, 5));
+		const sent = await harness.call(sendingInvoice(workspace, 5));
 		await harness.runJobs();
 
 		expect(
 			await harness.call(calling(workspace, "billing.listDelivered", {})),
 		).toEqual({
 			ok: true,
-			output: { invoiceIds: ["00000000-0000-4000-8000-000000000002"] },
+			output: { invoiceIds: [invoiceIdOf(sent)] },
 		});
 	});
 
@@ -499,12 +507,13 @@ describe("a job that fails", () => {
 
 	test("leaves nothing behind of what the failed run wrote, and does not hold up the other jobs", async () => {
 		const clock = adjustableClock("2026-11-27T09:00:00.000Z");
+		let failingOnce: string | undefined;
 		const harness = await start(
 			[
 				billing(
 					deliveringInvoices(async (job, ctx) => {
 						await ctx.sql`INSERT INTO delivered_invoices (invoice_id) VALUES (${job.payload.invoiceId})`;
-						if (job.id.endsWith("1") && job.attempt === 1)
+						if (job.payload.invoiceId === failingOnce && job.attempt === 1)
 							throw new Error("the mail server is down");
 					}),
 				),
@@ -512,8 +521,10 @@ describe("a job that fails", () => {
 			{ now: clock.now },
 		);
 		const workspace = await harness.createWorkspace("Alpha");
-		await harness.call(sendingInvoice(workspace, 5));
-		await harness.call(sendingInvoice(workspace, 6));
+		failingOnce = invoiceIdOf(await harness.call(sendingInvoice(workspace, 5)));
+		const delivered = invoiceIdOf(
+			await harness.call(sendingInvoice(workspace, 6)),
+		);
 
 		await harness.runJobs();
 		const deliveredBeforeTheRetry = await harness.call(
@@ -524,18 +535,13 @@ describe("a job that fails", () => {
 
 		expect(deliveredBeforeTheRetry).toEqual({
 			ok: true,
-			output: { invoiceIds: ["00000000-0000-4000-8000-000000000003"] },
+			output: { invoiceIds: [delivered] },
 		});
 		expect(
 			await harness.call(calling(workspace, "billing.listDelivered", {})),
 		).toEqual({
 			ok: true,
-			output: {
-				invoiceIds: [
-					"00000000-0000-4000-8000-000000000002",
-					"00000000-0000-4000-8000-000000000003",
-				],
-			},
+			output: { invoiceIds: [failingOnce, delivered].toSorted() },
 		});
 	});
 });
