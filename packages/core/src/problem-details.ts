@@ -1,7 +1,11 @@
 import type { FailureKind } from "./operation-pipeline.ts";
 import type { ValidationIssue } from "./schema-validation.ts";
 
-export type ProblemKind = FailureKind | "unauthenticated" | "not_ready";
+export type ProblemKind =
+	| FailureKind
+	| "unauthenticated"
+	| "too_large"
+	| "not_ready";
 
 export type Problem = {
 	readonly code: string;
@@ -39,6 +43,7 @@ const STATUS_OF: Record<
 	unauthenticated: { status: 401, title: "Unauthorized" },
 	not_found: { status: 404, title: "Not Found" },
 	conflict: { status: 409, title: "Conflict" },
+	too_large: { status: 413, title: "Content Too Large" },
 	rejected: { status: 422, title: "Unprocessable Content" },
 	internal: { status: 500, title: "Internal Server Error" },
 	not_ready: { status: 503, title: "Service Unavailable" },

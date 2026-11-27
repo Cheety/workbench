@@ -14,6 +14,8 @@ export const OPERATION_PATH_TEMPLATE =
 
 const OPERATION_PATH = /^\/api\/workspaces\/([^/]+)\/operations\/([^/]+)$/;
 
+export const MAX_BODY_BYTES = 1024 * 1024;
+
 const BEARER = /^Bearer ([^\s]+)$/;
 
 export type HttpApi = {
@@ -36,6 +38,13 @@ const UNAUTHENTICATED: Problem = {
 	code: "unauthenticated",
 	kind: "unauthenticated",
 	detail: "the request needs a valid API token as a bearer token",
+	issues: [],
+};
+
+const BODY_TOO_LARGE: Problem = {
+	code: "body_too_large",
+	kind: "too_large",
+	detail: `the request body exceeds ${MAX_BODY_BYTES} bytes`,
 	issues: [],
 };
 
@@ -78,7 +87,9 @@ export async function answerApiRequest(
 	const operation = decodedSegment(encodedOperation);
 	if (workspace === undefined || operation === undefined)
 		return problemResponse(MALFORMED_PATH, correlationId);
-	const input = await jsonBody(request);
+	const body = await limitedText(request);
+	if (body === undefined) return problemResponse(BODY_TOO_LARGE, correlationId);
+	const input = parsedJson(body);
 	if (!input.parsed) return problemResponse(BODY_NOT_JSON, correlationId);
 	const result = await api.pipeline.invoke({
 		operation,
@@ -111,8 +122,19 @@ type JsonBody =
 	| { readonly parsed: true; readonly value: unknown }
 	| { readonly parsed: false };
 
-async function jsonBody(request: Request): Promise<JsonBody> {
-	const text = await request.text();
+async function limitedText(request: Request): Promise<string | undefined> {
+	if (request.body === null) return "";
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	for await (const chunk of request.body) {
+		size += chunk.byteLength;
+		if (size > MAX_BODY_BYTES) return undefined;
+		chunks.push(chunk);
+	}
+	return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
+function parsedJson(text: string): JsonBody {
 	try {
 		const value: unknown = JSON.parse(text);
 		return { parsed: true, value };

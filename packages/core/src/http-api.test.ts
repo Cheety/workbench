@@ -349,6 +349,37 @@ describe("a failing call over HTTP", () => {
 		});
 	});
 
+	test("answers 413 problem details when the body exceeds 1 MiB", async () => {
+		const api = await startApiInstance();
+		const token = await api.issueToken(IN_A_MONTH);
+
+		const response = await api.post(
+			operationPath("ledger.addEntry"),
+			JSON.stringify({ amount: 42, padding: "x".repeat(1024 * 1024) }),
+			bearer(token),
+		);
+
+		expect(response.status).toBe(413);
+		expect(await response.json()).toMatchObject({
+			code: "body_too_large",
+			detail: "the request body exceeds 1048576 bytes",
+		});
+	});
+
+	test("accepts a body of exactly 1 MiB", async () => {
+		const api = await startApiInstance();
+		const token = await api.issueToken(IN_A_MONTH);
+		const body = JSON.stringify({ amount: 42, padding: "" });
+
+		const response = await api.post(
+			operationPath("ledger.addEntry"),
+			body.padEnd(1024 * 1024, " "),
+			bearer(token),
+		);
+
+		expect(response.status).toBe(200);
+	});
+
 	test.each([
 		{
 			case: "operation",

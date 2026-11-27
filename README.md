@@ -228,7 +228,7 @@ curl -X POST "http://127.0.0.1:3000/api/workspaces/$WORKSPACE/operations/referen
 	-d '{"title":"Plan"}'
 ```
 
-- Der Pfad ist `POST /api/workspaces/{workspace}/operations/{operation}`, auch für eine Query. Der Body ist die Eingabe als JSON; die Antwort 200 enthält die Ausgabe der Operation.
+- Der Pfad ist `POST /api/workspaces/{workspace}/operations/{operation}`, auch für eine Query. Der Body ist die Eingabe als JSON, höchstens 1 MiB (1048576 Bytes); die Antwort 200 enthält die Ausgabe der Operation.
 - Jeder Aufruf braucht ein API-Token als `Authorization: Bearer <token>`. Fehlt es, steht es in einem anderen Schema, ist es unbekannt oder abgelaufen, antwortet die API mit 401 und `WWW-Authenticate: Bearer`, als Problem Details mit `code` `unauthenticated`. Die Antwort sagt nicht, welcher Fall vorlag; das Log nennt ihn im Eintrag `request not authenticated` mit `reason` (`missing_token`, `unknown_token`, `expired_token`). Der Akteur des Aufrufs ist der Service-Account des Tokens.
 - Jedes Scheitern kommt als Problem Details mit `Content-Type: application/problem+json` und der Korrelations-ID in `correlationId`, mit dem Status nach der Art (siehe [Aufruf einer Operation](#aufruf-einer-operation)). Ein interner Fehler nennt nur `internal_error` und eine neutrale Meldung, nie Stacktrace, Pfad oder Query; die Details stehen unter derselben Korrelations-ID im Log.
 
@@ -239,6 +239,7 @@ curl -X POST "http://127.0.0.1:3000/api/workspaces/$WORKSPACE/operations/referen
 | `route_not_found`    | 404    | Weder Methode noch Pfad passen zu einer Route.                                |
 | `malformed_path`     | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                            |
 | `unknown_operation`  | 404    | Kein aktives Plugin hat eine Operation dieses Namens registriert.             |
+| `body_too_large`     | 413    | Der Body ist größer als 1 MiB.                                                |
 | `instance_not_ready` | 503    | Die Instanz startet noch; die Operationen der Plugins stehen noch nicht fest. |
 | `internal_error`     | 500    | Die Anfrage scheiterte aus einem internen Grund.                              |
 
