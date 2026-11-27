@@ -151,6 +151,7 @@ const server = startServerOrExit({
 			registry: instance.operations,
 			now,
 			newId: () => crypto.randomUUID(),
+			newAuditEntryId: () => crypto.randomUUID(),
 			random: Math.random,
 			logger,
 		}),

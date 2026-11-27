@@ -71,6 +71,7 @@ describe("creating a service account", () => {
 		).toEqual({
 			authenticated: true,
 			actor: { kind: "service_account", id: issued.serviceAccountId },
+			apiTokenId: expect.any(String),
 		});
 		expect(
 			await authenticateToken(

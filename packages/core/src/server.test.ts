@@ -63,6 +63,7 @@ async function startTestServer(startupStatus: StartupStatus = "started") {
 				registry: registerOperations([]),
 				now: () => NOW,
 				newId: () => "00000000-0000-4000-8000-000000000001",
+				newAuditEntryId: () => "00000000-0000-4000-a000-000000000001",
 				random: () => 0.5,
 				logger,
 			}),

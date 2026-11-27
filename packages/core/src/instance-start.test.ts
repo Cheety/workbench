@@ -213,7 +213,7 @@ describe("instance start", () => {
 describe("operations of an instance", () => {
 	const renameLabel: RegisteredOperation = {
 		name: "board.renameLabel",
-		plugin: "board",
+		owner: { kind: "plugin", name: "board" },
 		kind: "mutation",
 		target: "workspace",
 		right: "board.label.edit",

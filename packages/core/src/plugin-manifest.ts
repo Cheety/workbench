@@ -1,6 +1,7 @@
 import { DATABASE_CAPABILITY, type PluginContext } from "@workbench/sdk";
 import { isRecord } from "./is-record.ts";
 import {
+	CORE_OWNER_NAME,
 	type RegisteredOperation,
 	readOperations,
 } from "./operation-registry.ts";
@@ -63,7 +64,10 @@ export function validatePlugin(
 		definition.manifest,
 		offeredCapabilities,
 	);
-	const operations = readOperations(declaredName, definition.operations);
+	const operations = readOperations(
+		{ kind: "plugin", name: declaredName },
+		definition.operations,
+	);
 	const problems = [
 		...nameProblems(definition.manifest, declaredName),
 		...requires.problems,
@@ -109,6 +113,10 @@ function nameProblems(
 			"manifest.name must consist of lowercase letters, digits and hyphens and start with a letter",
 		];
 	}
+	if (manifest.name === CORE_OWNER_NAME)
+		return [
+			`manifest.name must not be ${quote(CORE_OWNER_NAME)}, the name under which the core offers its own operations`,
+		];
 	if (manifest.name.length > MAX_PLUGIN_NAME_LENGTH)
 		return [
 			`manifest.name must have at most ${MAX_PLUGIN_NAME_LENGTH} characters`,

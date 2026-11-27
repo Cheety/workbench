@@ -5,7 +5,7 @@ import {
 	definePlugin,
 } from "@workbench/sdk";
 import { z } from "zod";
-import { authenticateToken } from "./api-tokens.ts";
+import { apiTokenHash, authenticateToken } from "./api-tokens.ts";
 import { Secret } from "./config.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import { type PluginPackage, startPlugins } from "./kernel.ts";
@@ -151,6 +151,7 @@ async function startApiInstance(): Promise<ApiInstance> {
 				registry: plugins.operations,
 				now: () => clock,
 				newId,
+				newAuditEntryId: newId,
 				random: () => 0.5,
 				logger,
 			}),
@@ -328,6 +329,57 @@ describe("a call without a valid token", () => {
 		);
 
 		expect(await listed.json()).toEqual({ entries: [] });
+	});
+});
+
+describe("the audit read over HTTP", () => {
+	test("names the service account and the API token of a mutation by their ids, never the token or its hash", async () => {
+		const api = await startApiInstance();
+		const token = await api.issueToken();
+		const [issued] = z
+			.array(z.object({ id: z.string(), service_account_id: z.string() }))
+			.parse(
+				await api.database
+					.sql`SELECT id, service_account_id FROM core.api_tokens WHERE token_hash = ${apiTokenHash(token)}`,
+			);
+		await api.post(
+			operationPath("ledger.addEntry"),
+			JSON.stringify({ amount: 42 }),
+			bearer(token),
+		);
+
+		const response = await api.post(
+			operationPath("core.listAuditEntries"),
+			JSON.stringify({ limit: 10, cursor: null }),
+			bearer(token),
+		);
+
+		const body = await response.text();
+		const [stored] = z
+			.array(z.object({ entries: z.string() }))
+			.parse(
+				await api.database
+					.sql`SELECT coalesce(json_agg(audit_entries), '[]')::text AS entries FROM core.audit_entries`,
+			);
+		expect(response.status).toBe(200);
+		expect(JSON.parse(body)).toEqual({
+			entries: [
+				{
+					id: expect.any(String),
+					occurredAt: "2026-11-26T08:00:00.000Z",
+					actor: { kind: "service_account", id: issued?.service_account_id },
+					apiTokenId: issued?.id,
+					operation: "ledger.addEntry",
+					workspace: WORKSPACE,
+					result: "succeeded",
+				},
+			],
+			nextCursor: null,
+		});
+		expect(body).not.toContain(token);
+		expect(body).not.toContain(apiTokenHash(token));
+		expect(stored?.entries).not.toContain(token);
+		expect(stored?.entries).not.toContain(apiTokenHash(token));
 	});
 });
 
@@ -524,7 +576,7 @@ describe("a failing call over HTTP", () => {
 
 	test("answers an internal error neutrally when authentication itself fails", async () => {
 		const api = await startApiInstance();
-		await api.database.sql`DROP TABLE core.api_tokens`;
+		await api.database.sql`DROP TABLE core.api_tokens CASCADE`;
 
 		const response = await api.post(
 			operationPath("ledger.addEntry"),

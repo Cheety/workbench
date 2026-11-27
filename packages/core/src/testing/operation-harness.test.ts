@@ -34,13 +34,23 @@ const describeCall = defineOperation({
 	}),
 });
 
+const drawId = defineOperation({
+	name: "drawId",
+	kind: "mutation",
+	target: "workspace",
+	right: "ledger.entry.add",
+	input: z.object({}),
+	output: z.object({ id: z.string() }),
+	execute: async (_input, ctx) => ({ id: ctx.newId() }),
+});
+
 const ledger: PluginPackage = {
 	packageName: "@workbench/plugin-ledger",
 	pluginName: "ledger",
 	version: "1.0.0",
 	loadDefinition: async () => ({
 		...definePlugin({ manifest: { name: "ledger" } }),
-		operations: [describeCall],
+		operations: [describeCall, drawId],
 	}),
 };
 
@@ -156,6 +166,45 @@ describe("the operation harness", () => {
 					"33333333-3333-4333-8333-333333333333",
 				],
 				random: 0.25,
+			},
+		});
+	});
+
+	test("draws the ids of audit entries from a sequence of their own, so a mutation does not shift the ids of the next operation", async () => {
+		const harness = await startLedger();
+		const workspace = await harness.createWorkspace("Accounts");
+		const call = {
+			actor: ALICE,
+			workspace,
+			operation: "ledger.drawId",
+			input: {},
+		};
+
+		const first = await harness.call(call);
+		const second = await harness.call(call);
+		const audit = await harness.call({
+			actor: ALICE,
+			workspace,
+			operation: "core.listAuditEntries",
+			input: { limit: 10, cursor: null },
+		});
+
+		expect([first, second]).toEqual([
+			{ ok: true, output: { id: "00000000-0000-4000-8000-000000000002" } },
+			{ ok: true, output: { id: "00000000-0000-4000-8000-000000000003" } },
+		]);
+		expect(audit).toEqual({
+			ok: true,
+			output: {
+				entries: [
+					expect.objectContaining({
+						id: "00000000-0000-4000-a000-000000000002",
+					}),
+					expect.objectContaining({
+						id: "00000000-0000-4000-a000-000000000001",
+					}),
+				],
+				nextCursor: null,
 			},
 		});
 	});

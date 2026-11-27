@@ -263,6 +263,23 @@ describe("plugin kernel", () => {
 		);
 	});
 
+	test("does not load a plugin named core, whose operations would pass for those of the core", async () => {
+		const { plugins } = await start({
+			packages: [packageOf(definePlugin({ manifest: { name: "core" } }))],
+			enabledPlugins: ["core"],
+		});
+
+		expect(plugins.active).toEqual([]);
+		expect(plugins.failures).toEqual([
+			{
+				plugin: "core",
+				reason: "invalid_manifest",
+				detail:
+					'plugin package "@workbench/plugin-core" has an invalid manifest: manifest.name must not be "core", the name under which the core offers its own operations',
+			},
+		]);
+	});
+
 	test.each([
 		[
 			"a name that is not a plugin name",

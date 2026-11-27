@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { DATABASE_CAPABILITY } from "@workbench/sdk";
+import { CORE_OPERATIONS } from "./core-operations.ts";
 import type { SetTimer } from "./hook-timeout.ts";
 import { OPERATION_PATH_TEMPLATE } from "./http-api.ts";
 import type { JsonSchema } from "./json-schema.ts";
@@ -141,7 +142,7 @@ async function operationsOf(
 		ms: LOAD_TIMEOUT_MS,
 		setTimer,
 	});
-	const operations: RegisteredOperation[] = [];
+	const operations: RegisteredOperation[] = [...CORE_OPERATIONS];
 	for (const { pluginName } of packages) {
 		const load = await catalog.load(pluginName);
 		if (!load.loaded) throw new HttpApiDescriptionError(load.failure.detail);

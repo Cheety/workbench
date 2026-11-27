@@ -76,7 +76,7 @@ export default definePlugin({
 });
 ```
 
-- `name` ist der Name, unter dem die Instanz-Config und andere Plugins das Plugin ansprechen: Kleinbuchstaben, Ziffern und Bindestriche, beginnend mit einem Buchstaben, höchstens 56 Zeichen, damit der Name seines Schemas (`plugin_<name>`) in die 63 Zeichen passt, die Postgres für Namen vorsieht. Er muss dem Namen in der `package.json` gleichen. Die Version ist die `version` der `package.json`.
+- `name` ist der Name, unter dem die Instanz-Config und andere Plugins das Plugin ansprechen: Kleinbuchstaben, Ziffern und Bindestriche, beginnend mit einem Buchstaben, höchstens 56 Zeichen, damit der Name seines Schemas (`plugin_<name>`) in die 63 Zeichen passt, die Postgres für Namen vorsieht. Er muss dem Namen in der `package.json` gleichen. `core` ist vergeben: Unter `core.<name>` bietet der Core eigene Operationen an, und ein Plugin dieses Namens ist ungültig (`invalid_manifest`). Die Version ist die `version` der `package.json`.
 - `requires` nennt vorausgesetzte Plugins mit SemVer-Range (`^`, `~`, Vergleichsoperatoren, `x`/`*`, mit Leerzeichen oder `||` kombiniert).
 - `capabilities` nennt die Capabilities, die das Plugin braucht. `ctx.capability(name)` liefert nur deklarierte und wirft sonst einen Fehler. Der Core bietet bisher nur `database` an (`DATABASE_CAPABILITY` aus `@workbench/sdk`); ein Manifest, das eine unbekannte deklariert, ist ungültig.
 
@@ -124,7 +124,7 @@ Seine SQL-Migrationen liegen in einem Verzeichnis des Plugin-Pakets, das die `pa
 - Jede Datei mit der Endung `.sql` ist eine Migration. Ihr Name besteht aus vier Ziffern, einem Unterstrich und Kleinbuchstaben, Ziffern oder Unterstrichen, z. B. `0001_create_notes.sql`; die Migrationen laufen in der Reihenfolge ihrer Namen. Andere Dateien bleiben unbeachtet.
 - Jede Migration läuft in einer eigenen Transaktion mit dem Schema des Plugins als `search_path`; Tabellen werden daher ohne Schema angelegt.
 - Angewandte Migrationen hält die Tabelle `core.migrations` fest (Schema, Dateiname, Zeitpunkt); ein erneuter Start wendet nur neue Migrationen an. Eine angewandte Migration wird nie geändert, sondern durch eine neue ergänzt.
-- Die Migrationen des Schemas `core` liegen in `packages/core/migrations` und laufen genauso, mit `core` als `search_path`. Sie legen `core.workspaces` an, die Tabelle der Workspaces (ADR-0002), sowie `core.service_accounts` und `core.api_tokens` für die Service-Accounts und ihre API-Tokens (siehe [HTTP-API](#http-api)). Schlägt eine davon fehl, meldet das Log `instance failed to start` mit `reason` `core_schema_not_migrated`, und die Instanz lädt keine Plugins.
+- Die Migrationen des Schemas `core` liegen in `packages/core/migrations` und laufen genauso, mit `core` als `search_path`. Sie legen `core.workspaces` an, die Tabelle der Workspaces (ADR-0002), `core.service_accounts` und `core.api_tokens` für die Service-Accounts und ihre API-Tokens (siehe [HTTP-API](#http-api)) sowie `core.audit_entries` für das [Audit](#audit). Schlägt eine davon fehl, meldet das Log `instance failed to start` mit `reason` `core_schema_not_migrated`, und die Instanz lädt keine Plugins.
 - Jeder Migrationslauf (erst `core`, dann die Schemas der Plugins) hält dieselbe Postgres-Advisory-Lock. Starten zwei Prozesse gleichzeitig, wartet der zweite (Log-Eintrag `migration lock held by another run, waiting`) und wendet nichts doppelt an. Ein Signal beendet das Warten; eine laufende Migration läuft zu Ende, weitere beginnen nicht. Jede Anweisung eines Laufs darf höchstens 60 s dauern, das Warten auf Tabellensperren eingeschlossen; dauert sie länger, schlägt die Migration fehl (`migration failed`) und der Lauf gibt die Lock frei (Begründung in ADR-0008).
 - Schlägt eine Migration fehl, wird sie zurückgerollt; die folgenden Migrationen desselben Schemas laufen nicht, die anderer Schemas schon. Das Log nennt Schema, Migration und Fehler (`migration failed`), das Plugin wird nicht geladen (`migration_failed`), und die Instanz meldet nicht „bereit“.
 - Nennt die `package.json` Migrationen, deklariert das Manifest aber nicht `database`, ist das Manifest ungültig.
@@ -156,24 +156,25 @@ Eine Operation mit unbekannter Art oder unbekanntem Ziel, ohne Recht oder mit me
 
 Ein Akteur ruft eine Operation mit ihrem Namen, einem Workspace und einer Eingabe auf. Die Pipeline des Cores
 
-1. sucht die Operation unter den Operationen der aktiven Plugins,
+1. sucht die Operation unter den Operationen des Cores (`core.<name>`) und der aktiven Plugins,
 2. prüft die Eingabe gegen das Eingabe-Schema,
-3. öffnet eine Transaktion, für eine `query` nur lesend, mit dem Schema des Plugins als `search_path`,
+3. öffnet eine Transaktion, für eine `query` nur lesend, mit dem Schema des Plugins als `search_path` (für eine Operation des Cores `core`),
 4. prüft, dass der Workspace in `core.workspaces` existiert,
 5. führt `execute(input, ctx)` aus; `ctx` nennt `actor`, `workspace`, `sql` (die Transaktion als Tagged Template), `now()`, `newId()` und `random()`,
-6. bildet den Rückgabewert über das Ausgabe-Schema ab und schreibt die Transaktion fest.
+6. bildet den Rückgabewert über das Ausgabe-Schema ab,
+7. schreibt für eine `mutation` einen Audit-Eintrag in dieselbe Transaktion (siehe [Audit](#audit)) und schreibt die Transaktion fest.
 
-Wirft `execute` oder passt die Ausgabe nicht zum Schema, wird die Transaktion zurückgerollt. Ein fachlicher Fehler ist ein `OperationError` aus `@workbench/sdk` mit Art (`not_found`, `conflict`, `rejected`), Code (Kleinbuchstaben, Ziffern, Unterstriche) und einer Meldung für den Aufrufer; der Aufrufer erhält den Code als `<plugin>.<code>`. Jeder andere Fehler erreicht den Aufrufer nur als `internal_error`.
+Wirft `execute`, passt die Ausgabe nicht zum Schema oder lässt sich der Audit-Eintrag nicht schreiben, wird die Transaktion zurückgerollt. Ein fachlicher Fehler ist ein `OperationError` aus `@workbench/sdk` mit Art (`not_found`, `conflict`, `rejected`), Code (Kleinbuchstaben, Ziffern, Unterstriche) und einer Meldung für den Aufrufer; der Aufrufer erhält den Code als `<plugin>.<code>`, von einer Operation des Cores als `core.<code>`. Jeder andere Fehler erreicht den Aufrufer nur als `internal_error`.
 
 | Code                  | Art             | Bedeutung                                                                                                                                           |
 | --------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `invalid_input`       | `invalid_input` | Die Eingabe passt nicht zum Eingabe-Schema; `issues` nennt je Befund Pfad und Meldung.                                                              |
-| `unknown_operation`   | `not_found`     | Kein aktives Plugin hat eine Operation dieses Namens registriert.                                                                                   |
+| `unknown_operation`   | `not_found`     | Weder der Core noch ein aktives Plugin hat eine Operation dieses Namens.                                                                            |
 | `workspace_not_found` | `not_found`     | Der Workspace existiert nicht.                                                                                                                      |
 | `internal_error`      | `internal`      | `execute` warf einen anderen Fehler als `OperationError`, die Ausgabe passt nicht zum Schema, oder die Pipeline scheiterte außerhalb von `execute`. |
 | `<plugin>.<code>`     | aus dem Fehler  | `execute` warf einen `OperationError`.                                                                                                              |
 
-Ein `internal_error` steht mit `correlationId`, `operation` und `reason` im Log als Eintrag `operation failed`: `execute_threw`, wenn `execute` warf, mit dem Fehler in `error`; `invalid_output` mit den Befunden des Ausgabe-Schemas in `issues`; oder `pipeline_failed`, wenn die Pipeline außerhalb von `execute` scheiterte (etwa ein Schema, das wirft oder ein Ergebnis liefert, das nicht Standard Schema entspricht, ein unerreichbares Postgres beim Öffnen der Transaktion oder beim Prüfen des Workspace, ein gescheitertes Festschreiben), mit dem Fehler in `error`.
+Ein `internal_error` steht mit `correlationId`, `operation` und `reason` im Log als Eintrag `operation failed`: `execute_threw`, wenn `execute` warf, mit dem Fehler in `error`; `invalid_output` mit den Befunden des Ausgabe-Schemas in `issues`; oder `pipeline_failed`, wenn die Pipeline außerhalb von `execute` scheiterte (etwa ein Schema, das wirft oder ein Ergebnis liefert, das nicht Standard Schema entspricht, ein unerreichbares Postgres beim Öffnen der Transaktion oder beim Prüfen des Workspace, ein Audit-Eintrag, der sich nicht schreiben lässt, ein gescheitertes Festschreiben), mit dem Fehler in `error`.
 
 Jedes Scheitern lässt sich als Problem Details nach RFC 9457 abbilden (`toProblemDetails` in `packages/core/src/problem-details.ts`), mit `type` `urn:workbench:problem:<code>`, `title` und `status` nach der Art (`invalid_input` 400, `not_found` 404, `conflict` 409, `rejected` 422, `internal` 500), `detail`, `code`, `correlationId` und `issues`:
 
@@ -189,7 +190,35 @@ Jedes Scheitern lässt sich als Problem Details nach RFC 9457 abbilden (`toProbl
 }
 ```
 
-Die Pipeline prüft bisher weder Rechte noch Idempotency-Keys und schreibt kein Audit; das folgt mit Identität und Zugriff.
+Die Pipeline prüft bisher weder Rechte noch Idempotency-Keys; das folgt mit Identität und Zugriff.
+
+### Audit
+
+Jede Mutation, die gelingt, hinterlässt genau einen Audit-Eintrag in `core.audit_entries`, ohne Zutun des Plugins (ADR-0014). Die Pipeline schreibt ihn in der Transaktion der Mutation: Wird sie zurückgerollt, gibt es keinen Eintrag, und lässt sich der Eintrag nicht schreiben, gibt es keine Mutation. Eine Query hinterlässt keinen Eintrag, eine gescheiterte Mutation steht nur im Log (`operation failed`).
+
+Die Query `core.listAuditEntries` liefert die Einträge des Workspaces im Pfad, die neuesten zuerst, seitenweise. Die Eingabe nennt `limit` (1 bis 100) und `cursor`: `null` für die erste Seite, danach `nextCursor` der Seite davor.
+
+```json
+{
+	"entries": [
+		{
+			"id": "0b9f…",
+			"occurredAt": "2026-11-27T08:30:00.000Z",
+			"actor": { "kind": "service_account", "id": "7d4b…" },
+			"apiTokenId": "51c2…",
+			"operation": "reference.createNote",
+			"workspace": "3fa8…",
+			"result": "succeeded"
+		}
+	],
+	"nextCursor": "WyIyMDI2…"
+}
+```
+
+- `actor` nennt Art (`user`, `service_account`) und ID des Akteurs, `apiTokenId` die ID des API-Tokens, mit dem der Aufruf kam, oder `null` für einen Aufruf ohne Token (etwa über das Test-Harness). So lässt sich unterscheiden, ob ein Mensch oder ein Agent gehandelt hat. Ein Eintrag enthält nie ein Token, seinen Hash oder die Eingabe der Mutation.
+- `occurredAt` ist der Zeitpunkt in UTC, auf Millisekunden genau, `workspace` das Ziel der Mutation, `result` bisher immer `succeeded`.
+- `nextCursor` ist `null`, wenn keine älteren Einträge folgen. Ein Cursor ist undurchsichtig und gilt nur als Ganzes, Zeichen für Zeichen so, wie eine Seite ihn nennt; einen, der keine Position im Audit nennt, lehnt die Operation mit `core.invalid_cursor` ab (Art `rejected`, per HTTP 422). Einträge desselben Zeitpunkts ordnet ihre ID, sodass keine Seite einen Eintrag wiederholt oder auslässt, auch wenn inzwischen neue entstehen.
+- Die Operation verweist auf das Recht `core.audit.read`, das für den Instanz-Admin gedacht ist. Solange Rechte nicht durchgesetzt werden (siehe [Operationen](#operationen)), darf jeder Akteur mit gültigem Token das Audit jedes Workspaces lesen.
 
 ### Test-Harness
 
@@ -214,13 +243,13 @@ const result = await harness.call({
 await harness.stop();
 ```
 
-`result` ist `{ ok: true, output }` oder `{ ok: false, failure }` mit `code`, `kind`, `detail` und `issues`. Ohne Angabe gibt das Harness eine feste Uhr (`2026-11-26T08:00:00.000Z`), fortlaufende IDs im UUID-Format (`00000000-0000-4000-8000-000000000001`, …), `random()` = `0.5` und jedem Aufruf eine fortlaufende Correlation-ID (`harness-call-1`, …), unter der die Pipeline loggt; `now`, `newId`, `random` und `newCorrelationId` lassen sich als Optionen übergeben. Lädt ein Plugin nicht, wirft `startOperationHarness` einen `HarnessStartError` mit dem Ladefehler. `harness.logEntries` enthält die Log-Einträge.
+`result` ist `{ ok: true, output }` oder `{ ok: false, failure }` mit `code`, `kind`, `detail` und `issues`. Ohne Angabe gibt das Harness eine feste Uhr (`2026-11-26T08:00:00.000Z`), fortlaufende IDs im UUID-Format (`00000000-0000-4000-8000-000000000001`, …), den Audit-Einträgen fortlaufende IDs aus einer eigenen Folge (`00000000-0000-4000-a000-000000000001`, …), sodass eine Mutation die IDs der folgenden Operationen nicht verschiebt, `random()` = `0.5` und jedem Aufruf eine fortlaufende Correlation-ID (`harness-call-1`, …), unter der die Pipeline loggt; `now`, `newId`, `random` und `newCorrelationId` lassen sich als Optionen übergeben. Lädt ein Plugin nicht, wirft `startOperationHarness` einen `HarnessStartError` mit dem Ladefehler. `harness.logEntries` enthält die Log-Einträge.
 
 Das Referenz-Plugin bietet so die Mutation `reference.createNote` (Eingabe `title`, 1 bis 200 Zeichen nach Entfernen von Leerraum am Rand) und die Query `reference.listNotes` (Eingabe `limit`, 1 bis 100; die neuesten zuerst), beide auf den Notizen eines Workspaces in `plugin_reference.notes`. Seine Tests in `packages/plugin-reference/src/operations.test.ts` zeigen das Harness im Einsatz.
 
 ### HTTP-API
 
-Jede Operation der aktiven Plugins ist per HTTP erreichbar, als dünner Adapter auf dieselbe Pipeline (ADR-0013):
+Jede Operation des Cores und der aktiven Plugins ist per HTTP erreichbar, als dünner Adapter auf dieselbe Pipeline (ADR-0013):
 
 ```sh
 curl -X POST "http://127.0.0.1:3000/api/workspaces/$WORKSPACE/operations/reference.createNote" \
@@ -242,7 +271,7 @@ curl -X POST "http://127.0.0.1:3000/api/workspaces/$WORKSPACE/operations/referen
 | `malformed_path`       | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                       |
 | `invalid_workspace_id` | 400    | Der Workspace im Pfad ist keine UUID.                                    |
 | `workspace_not_found`  | 404    | Kein Workspace hat diese UUID.                                           |
-| `unknown_operation`    | 404    | Kein aktives Plugin hat eine Operation dieses Namens registriert.        |
+| `unknown_operation`    | 404    | Weder der Core noch ein aktives Plugin hat eine Operation dieses Namens. |
 | `body_too_large`       | 413    | Der Body ist größer als 1 MiB.                                           |
 | `instance_not_ready`   | 503    | Die Instanz startet noch oder ihr Start ist gescheitert.                 |
 | `internal_error`       | 500    | Die Anfrage scheiterte aus einem internen Grund.                         |
@@ -273,7 +302,7 @@ Scope (Operationen, Workspaces), Widerruf und Rechte folgen mit Identität und Z
 
 #### API-Vertrag
 
-`docs/openapi.json` beschreibt die HTTP-API als OpenAPI 3.1, erzeugt aus den Operationen aller Plugin-Pakete im Repository:
+`docs/openapi.json` beschreibt die HTTP-API als OpenAPI 3.1, erzeugt aus den Operationen des Cores und aller Plugin-Pakete im Repository:
 
 ```sh
 bun run openapi

@@ -29,6 +29,8 @@ export function schemaName(value: string): SchemaName {
 	return value as SchemaName;
 }
 
+export const CORE_SCHEMA = schemaName("core");
+
 export function pluginSchemaName(plugin: string): SchemaName {
 	return schemaName(`${PLUGIN_SCHEMA_PREFIX}${plugin.replaceAll("-", "_")}`);
 }

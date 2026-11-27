@@ -6,20 +6,28 @@ import {
 	type OperationKind,
 } from "@workbench/sdk";
 import type { SQL } from "bun";
+import { type NewAuditEntry, recordAuditEntry } from "./audit.ts";
 import { describeThrown } from "./failure-reason.ts";
 import type { Logger } from "./logger.ts";
-import type {
-	OperationRegistry,
-	RegisteredOperation,
+import {
+	type OperationOwner,
+	type OperationRegistry,
+	ownerName,
+	type RegisteredOperation,
 } from "./operation-registry.ts";
 import { quote } from "./quote.ts";
-import { pluginSchemaName } from "./schema-name.ts";
+import {
+	CORE_SCHEMA,
+	pluginSchemaName,
+	type SchemaName,
+} from "./schema-name.ts";
 import type { ValidationIssue } from "./schema-validation.ts";
 import { workspaceExists } from "./workspaces.ts";
 
 export type OperationCall = {
 	readonly operation: string;
 	readonly actor: Actor;
+	readonly apiTokenId: string | null;
 	readonly workspace: string;
 	readonly input: unknown;
 	readonly correlationId: string;
@@ -43,6 +51,7 @@ export type OperationPipelineOptions = {
 	readonly registry: OperationRegistry;
 	readonly now: () => Date;
 	readonly newId: () => string;
+	readonly newAuditEntryId: () => string;
 	readonly random: () => number;
 	readonly logger: Logger;
 };
@@ -125,16 +134,22 @@ async function invoke(
 			options.sql,
 			async (transaction) => {
 				await requireWorkspace(transaction, call.workspace);
-				return execute(
+				const executed = await execute(
 					operation,
 					input.value,
 					contextOf(call, transaction, options),
 				);
+				if (IS_AUDITED[operation.kind])
+					await recordAuditEntry(
+						transaction,
+						newAuditEntryOf(call, operation, options),
+					);
+				return executed;
 			},
 		);
 		return { ok: true, output };
 	} catch (error) {
-		return failed(logAndMapFailure(error, logger, operation.plugin));
+		return failed(logAndMapFailure(error, logger, operation.owner));
 	}
 }
 
@@ -146,17 +161,31 @@ const BEGIN_TRANSACTION: Record<
 	mutation: (sql, body) => sql.begin(body),
 };
 
+const IS_AUDITED: Record<OperationKind, boolean> = {
+	query: false,
+	mutation: true,
+};
+
 function inTransaction(
 	operation: RegisteredOperation,
 	sql: SQL,
 	run: (transaction: SQL) => Promise<unknown>,
 ): Promise<unknown> {
-	const schema = pluginSchemaName(operation.plugin);
+	const schema = schemaOf(operation.owner);
 	const body = async (transaction: SQL): Promise<unknown> => {
 		await transaction.unsafe(`SET LOCAL search_path TO "${schema}"`);
 		return run(transaction);
 	};
 	return BEGIN_TRANSACTION[operation.kind](sql, body);
+}
+
+function schemaOf(owner: OperationOwner): SchemaName {
+	switch (owner.kind) {
+		case "core":
+			return CORE_SCHEMA;
+		case "plugin":
+			return pluginSchemaName(owner.name);
+	}
 }
 
 async function requireWorkspace(
@@ -179,6 +208,21 @@ function contextOf(
 		now: sources.now,
 		newId: sources.newId,
 		random: sources.random,
+	};
+}
+
+function newAuditEntryOf(
+	call: OperationCall,
+	operation: RegisteredOperation,
+	sources: Pick<OperationPipelineOptions, "now" | "newAuditEntryId">,
+): NewAuditEntry {
+	return {
+		id: sources.newAuditEntryId(),
+		occurredAt: sources.now(),
+		actor: call.actor,
+		apiTokenId: call.apiTokenId,
+		operation: operation.name,
+		workspace: call.workspace,
 	};
 }
 
@@ -210,12 +254,12 @@ async function runExecute(
 function logAndMapFailure(
 	error: unknown,
 	logger: Logger,
-	plugin: string,
+	owner: OperationOwner,
 ): OperationFailure {
 	if (error instanceof WorkspaceNotFoundError) return WORKSPACE_NOT_FOUND;
 	if (error instanceof OperationError)
 		return {
-			code: `${plugin}.${error.code}`,
+			code: `${ownerName(owner)}.${error.code}`,
 			kind: error.kind,
 			detail: error.message,
 			issues: [],
