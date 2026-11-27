@@ -1,5 +1,5 @@
 import type { FailureKind, OperationFailure } from "./operation-pipeline.ts";
-import type { InputIssue } from "./schema-validation.ts";
+import type { ValidationIssue } from "./schema-validation.ts";
 
 export type ProblemDetails = {
 	readonly type: string;
@@ -8,7 +8,7 @@ export type ProblemDetails = {
 	readonly detail: string;
 	readonly code: string;
 	readonly correlationId: string;
-	readonly issues: readonly InputIssue[];
+	readonly issues: readonly ValidationIssue[];
 };
 
 const PROBLEM_TYPE_PREFIX = "urn:workbench:problem:";

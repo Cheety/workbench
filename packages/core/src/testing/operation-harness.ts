@@ -29,7 +29,7 @@ export type {
 	OperationFailure,
 	OperationResult,
 } from "../operation-pipeline.ts";
-export type { InputIssue } from "../schema-validation.ts";
+export type { ValidationIssue } from "../schema-validation.ts";
 
 export type OperationHarnessOptions = {
 	readonly plugins: readonly PluginPackage[];

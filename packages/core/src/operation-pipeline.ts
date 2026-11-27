@@ -14,7 +14,7 @@ import type {
 } from "./operation-registry.ts";
 import { quote } from "./quote.ts";
 import { pluginSchemaName } from "./schema-name.ts";
-import type { InputIssue } from "./schema-validation.ts";
+import type { ValidationIssue } from "./schema-validation.ts";
 import { workspaceExists } from "./workspaces.ts";
 
 export type OperationCall = {
@@ -31,7 +31,7 @@ export type OperationFailure = {
 	readonly code: string;
 	readonly kind: FailureKind;
 	readonly detail: string;
-	readonly issues: readonly InputIssue[];
+	readonly issues: readonly ValidationIssue[];
 };
 
 export type OperationResult =
@@ -73,19 +73,19 @@ class WorkspaceNotFoundError extends Error {
 }
 
 class InvalidOutputError extends Error {
-	readonly issues: readonly InputIssue[];
+	readonly issues: readonly ValidationIssue[];
 
-	constructor(issues: readonly InputIssue[]) {
+	constructor(issues: readonly ValidationIssue[]) {
 		super("the output does not match the output schema of the operation");
 		this.name = "InvalidOutputError";
 		this.issues = issues;
 	}
 }
 
-class UseCaseFailedError extends Error {
+class ExecuteThrewError extends Error {
 	constructor(cause: unknown) {
-		super("the use case of the operation failed", { cause });
-		this.name = "UseCaseFailedError";
+		super("the execute function of the operation threw", { cause });
+		this.name = "ExecuteThrewError";
 	}
 }
 
@@ -120,12 +120,21 @@ async function invoke(
 				detail: "the input does not match the input schema of the operation",
 				issues: input.issues,
 			});
-		const output = await inTransaction(operation, options, (sql) =>
-			execute(operation, input.value, call, { ...options, sql }),
+		const output = await inTransaction(
+			operation,
+			options.sql,
+			async (transaction) => {
+				await requireWorkspace(transaction, call.workspace);
+				return execute(
+					operation,
+					input.value,
+					contextOf(call, transaction, options),
+				);
+			},
 		);
 		return { ok: true, output };
 	} catch (error) {
-		return failed(failureOf(error, logger, operation.plugin));
+		return failed(logAndMapFailure(error, logger, operation.plugin));
 	}
 }
 
@@ -139,7 +148,7 @@ const BEGIN_TRANSACTION: Record<
 
 function inTransaction(
 	operation: RegisteredOperation,
-	{ sql }: OperationPipelineOptions,
+	sql: SQL,
 	run: (transaction: SQL) => Promise<unknown>,
 ): Promise<unknown> {
 	const schema = pluginSchemaName(operation.plugin);
@@ -150,30 +159,42 @@ function inTransaction(
 	return BEGIN_TRANSACTION[operation.kind](sql, body);
 }
 
+async function requireWorkspace(
+	transaction: SQL,
+	workspace: string,
+): Promise<void> {
+	if (!(await workspaceExists(transaction, workspace)))
+		throw new WorkspaceNotFoundError();
+}
+
+function contextOf(
+	call: OperationCall,
+	transaction: SQL,
+	sources: Pick<OperationPipelineOptions, "now" | "newId" | "random">,
+): OperationContext {
+	return {
+		actor: call.actor,
+		workspace: call.workspace,
+		sql: transaction,
+		now: sources.now,
+		newId: sources.newId,
+		random: sources.random,
+	};
+}
+
 async function execute(
 	operation: RegisteredOperation,
 	input: unknown,
-	call: OperationCall,
-	options: OperationPipelineOptions,
+	ctx: OperationContext,
 ): Promise<unknown> {
-	if (!(await workspaceExists(options.sql, call.workspace)))
-		throw new WorkspaceNotFoundError();
-	const ctx: OperationContext = {
-		actor: call.actor,
-		workspace: call.workspace,
-		sql: options.sql,
-		now: options.now,
-		newId: options.newId,
-		random: options.random,
-	};
 	const output = await operation.validateOutput(
-		await executeUseCase(operation, input, ctx),
+		await runExecute(operation, input, ctx),
 	);
 	if (!output.valid) throw new InvalidOutputError(output.issues);
 	return output.value;
 }
 
-async function executeUseCase(
+async function runExecute(
 	operation: RegisteredOperation,
 	input: unknown,
 	ctx: OperationContext,
@@ -182,11 +203,11 @@ async function executeUseCase(
 		return await operation.execute(input, ctx);
 	} catch (error) {
 		if (error instanceof OperationError) throw error;
-		throw new UseCaseFailedError(error);
+		throw new ExecuteThrewError(error);
 	}
 }
 
-function failureOf(
+function logAndMapFailure(
 	error: unknown,
 	logger: Logger,
 	plugin: string,
@@ -204,9 +225,9 @@ function failureOf(
 			reason: "invalid_output",
 			issues: error.issues,
 		});
-	else if (error instanceof UseCaseFailedError)
+	else if (error instanceof ExecuteThrewError)
 		logger.error("operation failed", {
-			reason: "use_case_failed",
+			reason: "execute_threw",
 			error: describeThrown(error.cause),
 		});
 	else

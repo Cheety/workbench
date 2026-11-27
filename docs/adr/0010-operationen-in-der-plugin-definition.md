@@ -9,4 +9,4 @@ Ein- und Ausgabe-Schema sind Werte nach der Schnittstelle [Standard Schema](http
 ## Consequences
 
 - Ein Plugin, das Operationen anbietet, bringt seinen Validator als eigene Abhängigkeit mit; das Referenz-Plugin nutzt zod in derselben Version wie der Core.
-- Die Ausgabe einer Operation ist, was ihr Ausgabe-Schema aus dem Rückgabewert des Use Cases macht; zod-Objekte lassen dabei unbekannte Felder weg. Das Schema ist damit die explizite Abbildung der Ausgabe.
+- Die Ausgabe einer Operation ist, was ihr Ausgabe-Schema aus dem Rückgabewert von `execute` macht; zod-Objekte lassen dabei unbekannte Felder weg. Das Schema ist damit die explizite Abbildung der Ausgabe.

@@ -1,13 +1,13 @@
 import { isRecord } from "./is-record.ts";
 
-export type InputIssue = {
+export type ValidationIssue = {
 	readonly path: readonly (string | number)[];
 	readonly message: string;
 };
 
 export type Validation =
 	| { readonly valid: true; readonly value: unknown }
-	| { readonly valid: false; readonly issues: readonly InputIssue[] };
+	| { readonly valid: false; readonly issues: readonly ValidationIssue[] };
 
 export type Validator = (value: unknown) => Promise<Validation>;
 
@@ -39,7 +39,7 @@ function readResult(result: unknown): Validation {
 	return { valid: false, issues: result.issues.map(readIssue) };
 }
 
-function readIssue(issue: unknown): InputIssue {
+function readIssue(issue: unknown): ValidationIssue {
 	if (!isRecord(issue)) return { path: [], message: UNNAMED_ISSUE };
 	return {
 		path: Array.isArray(issue.path) ? issue.path.map(readPathSegment) : [],

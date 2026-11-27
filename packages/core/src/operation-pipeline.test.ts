@@ -260,7 +260,7 @@ describe("an actor calling an operation", () => {
 		});
 	});
 
-	test("finds nothing written by a mutation whose use case failed", async () => {
+	test("finds nothing written by a mutation whose execute rejected the call", async () => {
 		const harness = await startLedger();
 		const workspace = await harness.createWorkspace("Accounts");
 
@@ -289,7 +289,7 @@ describe("an actor calling an operation", () => {
 		expect(listed).toEqual({ ok: true, output: { entries: [] } });
 	});
 
-	test("is told internal_error without internals when the use case throws unexpectedly, and the log has the details", async () => {
+	test("is told internal_error without internals when execute throws unexpectedly, and the log has the details", async () => {
 		const harness = await startLedger();
 		const workspace = await harness.createWorkspace("Accounts");
 
@@ -322,7 +322,7 @@ describe("an actor calling an operation", () => {
 				message: "operation failed",
 				correlationId: "harness-call-1",
 				operation: "ledger.addEntry",
-				reason: "use_case_failed",
+				reason: "execute_threw",
 				error: expect.objectContaining({
 					name: "Error",
 					message: "negative amount at /srv/ledger/entries",
@@ -331,7 +331,7 @@ describe("an actor calling an operation", () => {
 		);
 	});
 
-	test("is told internal_error when the pipeline fails outside the use case, and the log tells it apart from a failed use case", async () => {
+	test("is told internal_error when the pipeline fails outside execute, and the log tells it apart from a throwing execute", async () => {
 		const harness = await startLedger();
 		const workspace = await harness.createWorkspace("Accounts");
 
@@ -359,7 +359,7 @@ describe("an actor calling an operation", () => {
 		);
 	});
 
-	test("is told internal_error and finds nothing written when the use case returns an output the schema rejects", async () => {
+	test("is told internal_error and finds nothing written when execute returns an output the schema rejects", async () => {
 		const harness = await startLedger();
 		const workspace = await harness.createWorkspace("Accounts");
 
@@ -481,7 +481,7 @@ describe("the operation harness", () => {
 		expect(await countTestDatabases()).toBe(databases);
 	});
 
-	test("gives the use case a fixed clock, sequential ids and a fixed random number by default", async () => {
+	test("gives the operation a fixed clock, sequential ids and a fixed random number by default", async () => {
 		const harness = await startLedger();
 		const workspace = await harness.createWorkspace("Accounts");
 
@@ -508,7 +508,7 @@ describe("the operation harness", () => {
 		});
 	});
 
-	test("gives the use case the clock, ids and random numbers a test passes", async () => {
+	test("gives the operation the clock, ids and random numbers a test passes", async () => {
 		const ids = [
 			"11111111-1111-4111-8111-111111111111",
 			"22222222-2222-4222-8222-222222222222",
@@ -602,7 +602,7 @@ describe("a failed operation as problem details", () => {
 			expect.objectContaining({
 				message: "operation failed",
 				correlationId: "request-43",
-				reason: "use_case_failed",
+				reason: "execute_threw",
 			}),
 		);
 	});
