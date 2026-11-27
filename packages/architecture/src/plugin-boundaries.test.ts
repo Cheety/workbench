@@ -74,6 +74,7 @@ describe("imports between plugins", () => {
 		[`export type { Store } from "${STORE}";`, STORE],
 		[`type Store = import("${STORE}").Store;`, STORE],
 		[`const notes = await import("${STORE}");`, STORE],
+		[`const notes = await import(\`${STORE}\`);`, STORE],
 		[`import "${STORE}";`, STORE],
 		[`const notes = await import(/* lazy */ "${STORE}");`, STORE],
 		[`const notes = await import(\n\t// lazy\n\t"${STORE}"\n);`, STORE],
@@ -144,6 +145,37 @@ describe("imports between plugins", () => {
 				'import { Note } from "@fixture/plugin-notes/contract";',
 			),
 		);
+
+		expect(await findPluginBoundaryViolations(packages)).toEqual([]);
+	});
+
+	test.each([
+		[`const notes = await import(\`./\${name}.ts\`);`],
+		["const notes = await import(specifier);"],
+		['const notes = await import("@fixture/plugin-" + name);'],
+		['const notes = await import(\n\t"./notes" +\n\t\t".ts"\n);'],
+		["const notes = require(specifier);"],
+		[`const path = require.resolve(\`\${base}/store.ts\`);`],
+		["const url = import.meta.resolve(specifier);"],
+		["mock.module(specifier, () => ({}));"],
+	])(
+		"rejects an import whose module path is no plain string literal: %s",
+		async (source) => {
+			const packages = await packagesDirectoryWith(
+				boardPluginImporting(source),
+			);
+
+			expect(await findPluginBoundaryViolations(packages)).toEqual([
+				{ rule: "computed_import", file: "plugin-board/src/plugin.ts" },
+			]);
+		},
+	);
+
+	test("allows a computed import in the tests of a plugin", async () => {
+		const packages = await packagesDirectoryWith({
+			...boardPluginImporting(""),
+			"plugin-board/src/plugin.test.ts": `mock.module(\`./\${name}.ts\`, () => ({}));`,
+		});
 
 		expect(await findPluginBoundaryViolations(packages)).toEqual([]);
 	});

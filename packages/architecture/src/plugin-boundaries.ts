@@ -10,6 +10,7 @@ import {
 
 export type PluginBoundaryViolation =
 	| ImportViolation
+	| ComputedImportViolation
 	| ContractExportViolation
 	| ContractDirectoryViolation;
 
@@ -17,6 +18,11 @@ type ImportViolation = {
 	readonly rule: "foreign_plugin_internals" | "contract_imports_plugin_code";
 	readonly file: string;
 	readonly importPath: string;
+};
+
+type ComputedImportViolation = {
+	readonly rule: "computed_import";
+	readonly file: string;
 };
 
 type ContractExportViolation = {
@@ -56,6 +62,13 @@ const MODULE_SPECIFIER = new RegExp(
 	String.raw`(?<![\w$.])(?:import\.meta\.resolve|require\.resolve|mock\.module|from|import|require)${GAP}\(?${GAP}(["'\x60])([^"'\x60\r\n]+)\1`,
 	"g",
 );
+const MODULE_CALL = new RegExp(
+	String.raw`(?<![\w$.])(?:import\.meta\.resolve|require\.resolve|mock\.module|import|require)${GAP}\(${GAP}`,
+	"g",
+);
+const LITERAL_ARGUMENT = new RegExp(
+	String.raw`^(?:"[^"\r\n]*"|'[^'\r\n]*'|\x60(?:[^\x60$]|\$(?!\{))*\x60)${GAP}[,)]`,
+);
 const REFERENCE_DIRECTIVE =
 	/^[ \t]*\/\/\/[ \t]*<reference[ \t]+(path|types)[ \t]*=[ \t]*(["'])([^"'\r\n]+)\2/gm;
 
@@ -74,7 +87,14 @@ export async function findPluginBoundaryViolations(
 		for await (const path of SOURCE_FILES.scan(plugin.root)) {
 			if (isInstalledDependency(path)) continue;
 			const file = join(plugin.root, path);
-			const imports = importsIn(await Bun.file(file).text());
+			const source = await Bun.file(file).text();
+			const imports = importsIn(source);
+			if (!isTestFile(file))
+				for (let count = countComputedImports(source); count > 0; count--)
+					violations.push({
+						rule: "computed_import",
+						file: relative(packagesDirectory, file),
+					});
 			if (isContractFile(file, plugin.contract))
 				contractImports.set(
 					file,
@@ -217,6 +237,12 @@ export function importsIn(source: string): Omit<Import, "file">[] {
 			importPath === undefined ? [] : [{ importPath, isPath: kind === "path" }],
 	);
 	return [...modules, ...references];
+}
+
+function countComputedImports(source: string): number {
+	return Array.from(source.matchAll(MODULE_CALL)).filter(
+		(call) => !LITERAL_ARGUMENT.test(source.slice(call.index + call[0].length)),
+	).length;
 }
 
 function isContractFile(file: string, contract: ContractExport): boolean {
