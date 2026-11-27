@@ -30,9 +30,12 @@ describe("the contract of the reference plugin", () => {
 		);
 	});
 
+	// Bun reports a subpath that is not exported exactly like a missing package
+	// (ERR_MODULE_NOT_FOUND), so the test above, which resolves the contract
+	// from the same consumer, is what rules out a missing package here.
 	test("is the only export, so the inside of the plugin stays unreachable", () => {
 		expect(() =>
 			Bun.resolveSync(`${PACKAGE_NAME}/src/plugin.ts`, consumer),
-		).toThrow("Cannot find package '@workbench/plugin-reference'");
+		).toThrow(expect.objectContaining({ code: "ERR_MODULE_NOT_FOUND" }));
 	});
 });
