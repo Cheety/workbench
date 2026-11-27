@@ -27,8 +27,8 @@ const DOMAIN_TERMS: readonly DomainTerm[] = [
 	{ singular: "whiteboard", plural: "whiteboards" },
 ];
 
-const INSTALLED_DEPENDENCIES = "node_modules";
-const TEST_FILE = /\.test\.[cm]?[jt]sx?$/;
+export const INSTALLED_DEPENDENCIES = "node_modules";
+export const TEST_FILE = /\.test\.[cm]?[jt]sx?$/;
 const ALL_FILES = new Bun.Glob("**/*");
 const LETTERS = /[A-Za-z]+/g;
 const WORD_BOUNDARY = /(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/;
