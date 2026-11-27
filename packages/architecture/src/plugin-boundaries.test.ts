@@ -29,6 +29,7 @@ const NOTES_PLUGIN = {
 };
 
 const STORE = "@fixture/plugin-notes/src/store.ts";
+const CONTRACT = "@fixture/plugin-notes/contract";
 
 const BOARD_PACKAGE_JSON = JSON.stringify({
 	name: "@fixture/plugin-board",
@@ -89,6 +90,9 @@ describe("imports between plugins", () => {
 			'/// <reference path="../../plugin-notes/src/store.ts" />',
 			"../../plugin-notes/src/store.ts",
 		],
+		[`import "${CONTRACT}/../src/store.ts";`, `${CONTRACT}/../src/store.ts`],
+		[`import "${CONTRACT}ual";`, `${CONTRACT}ual`],
+		[`import "${CONTRACT}/index.ts";`, `${CONTRACT}/index.ts`],
 	])(
 		"rejects every form of import from the inside of a foreign plugin: %s",
 		async (source, importPath) => {
