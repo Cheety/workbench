@@ -8,6 +8,7 @@ import {
 	type SetTimer,
 } from "./hook-timeout.ts";
 import type { Logger } from "./logger.ts";
+import { statementsIn } from "./transaction-statements.ts";
 
 export type TransactionDeadline = {
 	readonly timeout: HookTimeout;
@@ -80,12 +81,10 @@ function statementsUntil(
 	transaction: SQL,
 	inFlight: Set<Promise<unknown>>,
 ): TransactionStatements {
+	const statements = statementsIn(transaction);
 	return async (strings, ...values) => {
 		if (expired.aborted) throw new StatementRefusedError();
-		const statement: Promise<readonly unknown[]> = transaction(
-			strings,
-			...values,
-		).execute();
+		const statement = statements(strings, ...values);
 		inFlight.add(statement);
 		try {
 			return await statement;
