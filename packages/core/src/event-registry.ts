@@ -30,6 +30,11 @@ export type RegisteredSubscription = {
 export type EventRegistry = {
 	findEvent(name: string): RegisteredEvent | undefined;
 	subscriptions(): readonly RegisteredSubscription[];
+	subscribersOf(event: string): readonly string[];
+	findSubscription(
+		subscriber: string,
+		event: string,
+	): RegisteredSubscription | undefined;
 };
 
 export type EventsRead = {
@@ -243,5 +248,15 @@ export function registerEvents(
 	return {
 		findEvent: (name) => byName.get(name),
 		subscriptions: () => subscriptions,
+		subscribersOf: (event) =>
+			subscriptions
+				.filter((subscription) => subscription.event === event)
+				.map((subscription) => subscription.subscriber),
+		findSubscription: (subscriber, event) =>
+			subscriptions.find(
+				(subscription) =>
+					subscription.subscriber === subscriber &&
+					subscription.event === event,
+			),
 	};
 }

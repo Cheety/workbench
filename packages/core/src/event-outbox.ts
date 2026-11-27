@@ -62,17 +62,13 @@ export async function recordEvent(
 		throw new UndeclaredEventError(publication.publisher, name);
 	const payload = await event.validatePayload(publication.payload);
 	if (!payload.valid) throw new InvalidEventPayloadError(name, payload.issues);
-	const subscribers = events
-		.subscriptions()
-		.filter((subscription) => subscription.event === name)
-		.map((subscription) => subscription.subscriber);
 	await transaction`
 		INSERT INTO core.events (id, name, version, occurred_at, workspace_id, payload)
 		VALUES (${publication.id}, ${name}, ${event.version}, ${publication.occurredAt}, ${publication.workspace}, ${payload.value})`;
 	await transaction`
 		INSERT INTO core.event_deliveries (event_id, subscriber, next_attempt_at)
 		SELECT ${publication.id}, subscriber, ${publication.occurredAt}
-		FROM unnest(${transaction.array(subscribers, "TEXT")}::text[]) AS subscriber`;
+		FROM unnest(${transaction.array([...events.subscribersOf(name)], "TEXT")}::text[]) AS subscriber`;
 }
 
 export type EventDeliveryOptions = {
@@ -191,7 +187,6 @@ async function attemptNext(
 			const failure = await handle(
 				transaction,
 				{ ...claimed, ...eventDetails.parse(row) },
-				subscriptions,
 				options,
 			);
 			if (failure === undefined) {
@@ -310,12 +305,11 @@ function reportFailure(
 async function handle(
 	transaction: TransactionSQL,
 	due: DueDelivery,
-	subscriptions: readonly RegisteredSubscription[],
 	options: AttemptOptions,
 ): Promise<DeliveryFailure | undefined> {
-	const subscription = subscriptions.find(
-		({ subscriber, event }) =>
-			subscriber === due.subscriber && event === due.name,
+	const subscription = options.events.findSubscription(
+		due.subscriber,
+		due.name,
 	);
 	if (subscription === undefined) throw new UnknownSubscriptionError(due);
 	const payload = await subscription.validatePayload(due.payload);

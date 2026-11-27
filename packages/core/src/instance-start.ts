@@ -93,6 +93,9 @@ export function createInstanceStart(
 		events: {
 			findEvent: (name) => events.findEvent(name),
 			subscriptions: () => events.subscriptions(),
+			subscribersOf: (event) => events.subscribersOf(event),
+			findSubscription: (subscriber, event) =>
+				events.findSubscription(subscriber, event),
 		},
 		run: () => {
 			running ??= start().catch((error: unknown) => {
