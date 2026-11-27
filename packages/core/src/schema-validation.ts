@@ -18,8 +18,6 @@ export class InvalidSchemaResultError extends Error {
 	}
 }
 
-const UNNAMED_ISSUE = "invalid value";
-
 export function validatorOf(schema: unknown): Validator | undefined {
 	if (!isRecord(schema)) return undefined;
 	const standard = schema["~standard"];
@@ -40,10 +38,11 @@ function readResult(result: unknown): Validation {
 }
 
 function readIssue(issue: unknown): ValidationIssue {
-	if (!isRecord(issue)) return { path: [], message: UNNAMED_ISSUE };
+	if (!isRecord(issue) || typeof issue.message !== "string")
+		throw new InvalidSchemaResultError();
 	return {
 		path: Array.isArray(issue.path) ? issue.path.map(readPathSegment) : [],
-		message: typeof issue.message === "string" ? issue.message : UNNAMED_ISSUE,
+		message: issue.message,
 	};
 }
 
