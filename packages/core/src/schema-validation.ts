@@ -1,3 +1,5 @@
+import { isRecord } from "./is-record.ts";
+
 export type InputIssue = {
 	readonly path: readonly (string | number)[];
 	readonly message: string;
@@ -48,8 +50,4 @@ function readIssue(issue: unknown): InputIssue {
 function readPathSegment(segment: unknown): string | number {
 	const key = isRecord(segment) ? segment.key : segment;
 	return typeof key === "number" ? key : String(key);
-}
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

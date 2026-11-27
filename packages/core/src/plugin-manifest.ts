@@ -1,4 +1,5 @@
 import { DATABASE_CAPABILITY, type PluginContext } from "@workbench/sdk";
+import { isRecord } from "./is-record.ts";
 import {
 	type RegisteredOperation,
 	readOperations,
@@ -210,8 +211,4 @@ function isSemVerRange(value: unknown): value is string {
 
 function isSemVerVersion(value: unknown): value is string {
 	return typeof value === "string" && SEMVER_VERSION.test(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

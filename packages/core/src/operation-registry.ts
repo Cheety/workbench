@@ -5,8 +5,9 @@ import {
 	type OperationKind,
 	type OperationTarget,
 } from "@workbench/sdk";
+import { isRecord } from "./is-record.ts";
 import { quote } from "./quote.ts";
-import { isRecord, type Validator, validatorOf } from "./schema-validation.ts";
+import { type Validator, validatorOf } from "./schema-validation.ts";
 
 export type RegisteredOperation = {
 	readonly name: string;
