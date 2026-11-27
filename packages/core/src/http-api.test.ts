@@ -376,10 +376,10 @@ describe("the audit read over HTTP", () => {
 			],
 			nextCursor: null,
 		});
-		for (const text of [body, stored?.entries]) {
-			expect(text).not.toContain(token);
-			expect(text).not.toContain(apiTokenHash(token));
-		}
+		expect(body).not.toContain(token);
+		expect(body).not.toContain(apiTokenHash(token));
+		expect(stored?.entries).not.toContain(token);
+		expect(stored?.entries).not.toContain(apiTokenHash(token));
 	});
 });
 

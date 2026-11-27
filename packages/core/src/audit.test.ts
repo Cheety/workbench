@@ -120,9 +120,19 @@ async function startLedger(
 	return harness;
 }
 
-function everyMinuteFrom(start: string): () => Date {
-	let minutes = 0;
-	return () => new Date(Date.parse(start) + 60_000 * minutes++);
+type SettableClock = {
+	now(): Date;
+	set(time: string): void;
+};
+
+function clockAt(start: string): SettableClock {
+	let current = new Date(start);
+	return {
+		now: () => current,
+		set: (time) => {
+			current = new Date(time);
+		},
+	};
 }
 
 type AuditPage = {
@@ -135,7 +145,7 @@ const FIRST_TEN: AuditPage = { limit: 10, cursor: null };
 function listAuditEntries(
 	harness: OperationHarness,
 	workspace: string,
-	page: AuditPage = FIRST_TEN,
+	page: AuditPage,
 ): Promise<OperationResult> {
 	return harness.call({
 		actor: AUDITOR,
@@ -186,7 +196,7 @@ describe("the audit of a workspace", () => {
 			input: { amount: 42 },
 		});
 
-		const listed = await listAuditEntries(harness, workspace);
+		const listed = await listAuditEntries(harness, workspace, FIRST_TEN);
 
 		expect(listed).toEqual({
 			ok: true,
@@ -208,16 +218,17 @@ describe("the audit of a workspace", () => {
 	});
 
 	test("holds one entry for each mutation that succeeded, the newest first", async () => {
-		const harness = await startLedger({
-			now: everyMinuteFrom("2026-11-27T08:00:00.000Z"),
-		});
+		const clock = clockAt("2026-11-27T08:00:00.000Z");
+		const harness = await startLedger({ now: clock.now });
 		const workspace = await harness.createWorkspace("Accounts");
+		clock.set("2026-11-27T08:01:00.000Z");
 		await harness.call({
 			actor: ALICE,
 			workspace,
 			operation: "ledger.addEntry",
 			input: { amount: 42 },
 		});
+		clock.set("2026-11-27T08:02:00.000Z");
 		await harness.call({
 			actor: { kind: "service_account", id: "agent" },
 			workspace,
@@ -225,7 +236,7 @@ describe("the audit of a workspace", () => {
 			input: {},
 		});
 
-		const listed = await listAuditEntries(harness, workspace);
+		const listed = await listAuditEntries(harness, workspace, FIRST_TEN);
 
 		expect(listed).toEqual({
 			ok: true,
@@ -256,9 +267,9 @@ describe("the audit of a workspace", () => {
 			operation: "ledger.listEntries",
 			input: {},
 		});
-		await listAuditEntries(harness, workspace);
+		await listAuditEntries(harness, workspace, FIRST_TEN);
 
-		const listed = await listAuditEntries(harness, workspace);
+		const listed = await listAuditEntries(harness, workspace, FIRST_TEN);
 
 		expect(listed).toEqual({
 			ok: true,
@@ -285,7 +296,7 @@ describe("the audit of a workspace", () => {
 			input,
 		});
 
-		const listed = await listAuditEntries(harness, workspace);
+		const listed = await listAuditEntries(harness, workspace, FIRST_TEN);
 
 		expect(called.ok).toBe(false);
 		expect(listed).toEqual({
@@ -305,7 +316,7 @@ describe("the audit of a workspace", () => {
 			input: { amount: 42 },
 		});
 
-		const listed = await listAuditEntries(harness, archive);
+		const listed = await listAuditEntries(harness, archive, FIRST_TEN);
 
 		expect(listed).toEqual({
 			ok: true,
@@ -316,11 +327,15 @@ describe("the audit of a workspace", () => {
 
 describe("a page of the audit", () => {
 	test("holds at most the limit and continues after the cursor of the page before", async () => {
-		const harness = await startLedger({
-			now: everyMinuteFrom("2026-11-27T08:00:00.000Z"),
-		});
+		const clock = clockAt("2026-11-27T08:00:00.000Z");
+		const harness = await startLedger({ now: clock.now });
 		const workspace = await harness.createWorkspace("Accounts");
-		await addEntries(harness, workspace, 3);
+		clock.set("2026-11-27T08:01:00.000Z");
+		await addEntries(harness, workspace, 1);
+		clock.set("2026-11-27T08:02:00.000Z");
+		await addEntries(harness, workspace, 1);
+		clock.set("2026-11-27T08:03:00.000Z");
+		await addEntries(harness, workspace, 1);
 
 		const first = pageOf(
 			await listAuditEntries(harness, workspace, { limit: 2, cursor: null }),
