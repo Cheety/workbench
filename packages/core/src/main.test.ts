@@ -101,6 +101,13 @@ function readLog(stream: ReadableStream<Uint8Array>) {
 	};
 }
 
+function serverStarted(entries: readonly LogEntry[]): LogEntry {
+	const entry = entries.find(({ message }) => message === "server started");
+	if (entry === undefined)
+		throw new Error(`no "server started" in ${JSON.stringify(entries)}`);
+	return entry;
+}
+
 describe("instance start", () => {
 	test("aborts and names the variable when a required one is missing", async () => {
 		const instance = spawnInstance({});
@@ -168,13 +175,13 @@ describe("instance start", () => {
 			PORT: "0",
 		});
 		const log = readLog(instance.stdout);
-		const [started] = await log.until("instance started");
+		const started = serverStarted(await log.until("instance started"));
 
-		const ready = await fetch(`http://127.0.0.1:${started?.port}/health/ready`);
+		const ready = await fetch(`http://127.0.0.1:${started.port}/health/ready`);
 		instance.kill("SIGTERM");
 		const exitCode = await instance.exited;
 
-		expect(started).toMatchObject({ level: "info", message: "server started" });
+		expect(started).toMatchObject({ level: "info", port: expect.any(Number) });
 		expect(ready.status).toBe(200);
 		expect(ready.headers.get("X-Correlation-ID")).toMatch(
 			/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
@@ -249,7 +256,7 @@ describe("plugins of an instance", () => {
 
 		const startup = await readLog(instance.stdout).until("plugins started");
 		const live = await fetch(
-			`http://127.0.0.1:${startup[0]?.port}/health/live`,
+			`http://127.0.0.1:${serverStarted(startup).port}/health/live`,
 		);
 
 		expect(startup).toContainEqual(
@@ -281,7 +288,7 @@ describe("migrations at start", () => {
 
 		const startup = await readLog(instance.stdout).until("instance started");
 		const ready = await fetch(
-			`http://127.0.0.1:${startup[0]?.port}/health/ready`,
+			`http://127.0.0.1:${serverStarted(startup).port}/health/ready`,
 		);
 
 		expect(startup).toContainEqual(
@@ -364,13 +371,13 @@ describe("migrations at start", () => {
 		const log = readLog(instance.stdout);
 		const waiting = await log.until("database unreachable, retrying");
 		const whileWaiting = await fetch(
-			`http://127.0.0.1:${waiting[0]?.port}/health/ready`,
+			`http://127.0.0.1:${serverStarted(waiting).port}/health/ready`,
 		);
 		gate.forward();
 
 		await log.until("instance started");
 		const ready = await fetch(
-			`http://127.0.0.1:${waiting[0]?.port}/health/ready`,
+			`http://127.0.0.1:${serverStarted(waiting).port}/health/ready`,
 		);
 
 		expect(whileWaiting.status).toBe(503);
@@ -392,7 +399,7 @@ describe("migrations at start", () => {
 			"instance failed to start",
 		);
 		const ready = await fetch(
-			`http://127.0.0.1:${startup[0]?.port}/health/ready`,
+			`http://127.0.0.1:${serverStarted(startup).port}/health/ready`,
 		);
 
 		expect(startup).toContainEqual(
@@ -448,11 +455,10 @@ describe("HTTP API of an instance", () => {
 			PLUGINS: "reference",
 		});
 		const log = readLog(instance.stdout);
-		const [started] = await log.until("server started");
-		await log.until("instance started");
+		const started = serverStarted(await log.until("instance started"));
 		const call = (operation: string, input: unknown) =>
 			fetch(
-				`http://127.0.0.1:${started?.port}/api/workspaces/${workspace}/operations/${operation}`,
+				`http://127.0.0.1:${started.port}/api/workspaces/${workspace}/operations/${operation}`,
 				{
 					method: "POST",
 					headers: { Authorization: `Bearer ${token}` },
