@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { DATABASE_CAPABILITY } from "@workbench/sdk";
-import { setSystemTimer } from "./hook-timeout.ts";
+import type { SetTimer } from "./hook-timeout.ts";
 import { OPERATION_PATH_TEMPLATE } from "./http-api.ts";
 import type { JsonSchema } from "./json-schema.ts";
 import type { PluginPackage } from "./kernel.ts";
@@ -96,8 +96,9 @@ const PROBLEM_CONTENT: Content = {
 
 export async function describeHttpApi(
 	packages: readonly PluginPackage[],
+	setTimer: SetTimer,
 ): Promise<OpenApiDocument> {
-	const operations = await operationsOf(packages);
+	const operations = await operationsOf(packages, setTimer);
 	return {
 		openapi: OPENAPI_VERSION,
 		info: { title: "Workbench HTTP API", version: API_VERSION },
@@ -119,10 +120,11 @@ export async function describeHttpApi(
 
 async function operationsOf(
 	packages: readonly PluginPackage[],
+	setTimer: SetTimer,
 ): Promise<readonly RegisteredOperation[]> {
 	const catalog = catalogPlugins(packages, [DATABASE_CAPABILITY], {
 		ms: LOAD_TIMEOUT_MS,
-		setTimer: setSystemTimer,
+		setTimer,
 	});
 	const operations: RegisteredOperation[] = [];
 	for (const { pluginName } of packages) {

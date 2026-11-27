@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { defineOperation, definePlugin } from "@workbench/sdk";
 import { z } from "zod";
+import { setSystemTimer } from "./hook-timeout.ts";
 import type { PluginPackage } from "./kernel.ts";
 import { describeHttpApi, OPENAPI_DOCUMENT_PATH } from "./openapi.ts";
 import { discoverPluginPackages } from "./plugin-discovery.ts";
@@ -47,7 +48,7 @@ const board: PluginPackage = {
 
 describe("the OpenAPI document of the HTTP API", () => {
 	test("describes each operation as a POST with its schemas, the bearer token and problem details", async () => {
-		const document = await describeHttpApi([board]);
+		const document = await describeHttpApi([board], setSystemTimer);
 
 		expect(document).toMatchObject({
 			openapi: "3.1.1",
@@ -112,7 +113,7 @@ describe("the OpenAPI document of the HTTP API", () => {
 	});
 
 	test("admits any JSON for a schema that cannot describe itself as JSON Schema", async () => {
-		const document = await describeHttpApi([board]);
+		const document = await describeHttpApi([board], setSystemTimer);
 
 		expect(
 			document.paths["/api/workspaces/{workspace}/operations/board.countLabels"]
@@ -122,7 +123,7 @@ describe("the OpenAPI document of the HTTP API", () => {
 
 	test("in the repository matches the operations of all plugin packages", async () => {
 		const { packages } = await discoverPluginPackages(PACKAGES_DIRECTORY)();
-		const expected = await describeHttpApi(packages);
+		const expected = await describeHttpApi(packages, setSystemTimer);
 
 		const committed: unknown = await Bun.file(OPENAPI_DOCUMENT_PATH).json();
 
