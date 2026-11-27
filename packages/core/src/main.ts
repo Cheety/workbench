@@ -40,6 +40,10 @@ const MIGRATION_STATEMENT_TIMEOUT_MS = 60_000;
 
 const OPERATION_CONNECTION_TIMEOUT_S = 10;
 
+const OPERATION_STATEMENT_TIMEOUT_MS = 60_000;
+
+const DATABASE_CLOSE_TIMEOUT_S = 5;
+
 const MIGRATION_LOCK_RETRY = { baseMs: 250, capMs: 2_000 } as const;
 
 const now = (): Date => new Date();
@@ -132,6 +136,7 @@ const instance = createInstanceStart(
 );
 const sql = new SQL(config.databaseUrl.reveal(), {
 	connectionTimeout: OPERATION_CONNECTION_TIMEOUT_S,
+	connection: { statement_timeout: OPERATION_STATEMENT_TIMEOUT_MS },
 });
 const server = startServerOrExit({
 	port: config.port,
@@ -159,7 +164,14 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 	process.once(signal, () => {
 		logger.info("shutting down", { signal });
 		void shutDownInstance(
-			{ stopStartingPlugins: instance.stop, server, plugins },
+			{
+				stopStartingPlugins: instance.stop,
+				server,
+				plugins,
+				database: {
+					close: () => sql.close({ timeout: DATABASE_CLOSE_TIMEOUT_S }),
+				},
+			},
 			logger,
 		).then((exitCode) => process.exit(exitCode));
 	});
