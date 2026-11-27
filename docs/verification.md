@@ -72,6 +72,24 @@ docker compose -f compose.dev.yaml exec -T postgres psql -U workbench -d workben
 
 `core.migrations` hat die Spalten `schema_name`, `migration` und `applied_at`; dort stehen `core | 0001_create_workspaces.sql` und für das Referenz-Plugin `plugin_reference | 0001_create_notes.sql` und `plugin_reference | 0002_add_workspace_to_notes.sql`, und `\dt` zeigt dessen Tabelle `notes`.
 
+## Ein Event in der Outbox ansehen
+
+Den Server wie oben mit `PLUGINS=reference` starten. Dann einen Workspace und ein API-Token anlegen, das Token liegt danach in `/tmp/workbench-verify.token`:
+
+```sh
+docker compose -f compose.dev.yaml exec -T postgres psql -U workbench -d workbench_verify -c "INSERT INTO core.workspaces (id, name, created_at) VALUES ('00000000-0000-4000-8000-00000000aaaa', 'Verify', now())"
+DATABASE_URL=postgres://workbench:workbench@127.0.0.1:54329/workbench_verify bun packages/core/src/create-service-account.ts --name verify --valid-days 1 | sed -E 's/.*"token":"([^"]+)".*/\1/' > /tmp/workbench-verify.token
+```
+
+Eine Mutation aufrufen, die ein Event publiziert, und die Outbox ansehen:
+
+```sh
+curl -s -X POST http://127.0.0.1:3123/api/workspaces/00000000-0000-4000-8000-00000000aaaa/operations/reference.createNote -H "Authorization: Bearer $(cat /tmp/workbench-verify.token)" -d '{"title":"Plan"}'
+docker compose -f compose.dev.yaml exec -T postgres psql -U workbench -d workbench_verify -c 'SELECT name, version, payload FROM core.events' -c 'TABLE core.event_deliveries'
+```
+
+`core.events` nennt `reference.NoteCreated` in Version 1 mit der `noteId` der Antwort. `core.event_deliveries` bleibt leer, solange kein aktives Plugin das Event abonniert; mit einem abonnierenden Plugin steht dort je Plugin eine Zeile mit `attempts` und `delivered_at`, und mit `LOG_LEVEL=debug` meldet das Log `event delivered`, sonst nur `event not delivered` mit `reason`. Wie ein Handler ein Event erhält und eine gescheiterte Zustellung wiederholt wird, zeigen die Tests in `packages/core/src/events.test.ts`.
+
 ## Einen Ladefehler auslösen
 
 Ein Plugin in `PLUGINS`, das kein Plugin-Paket bereitstellt, ist der schnellste Ladefehler. Den Server wie oben starten, aber mit `PLUGINS=reference,missing`, dann:

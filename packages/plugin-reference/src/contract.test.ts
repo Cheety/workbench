@@ -41,4 +41,20 @@ describe("the contract of the reference plugin", () => {
 			),
 		).toThrow(expect.objectContaining({ code: "ERR_MODULE_NOT_FOUND" }));
 	});
+
+	test("defines the event NoteCreated, so another plugin can subscribe to it", async () => {
+		const contract: unknown = await import(
+			Bun.resolveSync(`${PACKAGE_NAME}/contract`, consumerOutsideThePlugin)
+		);
+
+		expect(contract).toEqual(
+			expect.objectContaining({
+				noteCreated: expect.objectContaining({
+					plugin: "reference",
+					name: "NoteCreated",
+					version: 1,
+				}),
+			}),
+		);
+	});
 });

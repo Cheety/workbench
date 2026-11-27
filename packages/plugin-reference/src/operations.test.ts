@@ -2,10 +2,18 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import {
 	type OperationHarness,
+	type PluginPackage,
 	pluginPackageAt,
 	startOperationHarness,
 } from "@workbench/core/testing";
-import type { Actor } from "@workbench/sdk";
+import {
+	type Actor,
+	defineEventSubscription,
+	definePlugin,
+	eventSubscriptionCapability,
+	type PublishedEvent,
+} from "@workbench/sdk";
+import { noteCreated } from "./contract/index.ts";
 
 const ALICE: Actor = { kind: "user", id: "alice" };
 
@@ -25,11 +33,36 @@ function issuing(...ids: readonly string[]): () => string {
 	};
 }
 
-async function startReference(): Promise<OperationHarness> {
+async function startReference(
+	...others: readonly PluginPackage[]
+): Promise<OperationHarness> {
 	harness = await startOperationHarness({
-		plugins: [await pluginPackageAt(join(import.meta.dir, ".."))],
+		plugins: [await pluginPackageAt(join(import.meta.dir, "..")), ...others],
 	});
 	return harness;
+}
+
+function searchIndexing(received: PublishedEvent<{ noteId: string }>[]) {
+	return {
+		packageName: "@workbench/plugin-search",
+		pluginName: "search",
+		version: "1.0.0",
+		loadDefinition: async () =>
+			definePlugin({
+				manifest: {
+					name: "search",
+					capabilities: [eventSubscriptionCapability(noteCreated)],
+				},
+				subscriptions: [
+					defineEventSubscription({
+						event: noteCreated,
+						handle: async (event) => {
+							received.push(event);
+						},
+					}),
+				],
+			}),
+	} satisfies PluginPackage;
 }
 
 describe("the notes of the reference plugin", () => {
@@ -147,5 +180,46 @@ describe("the notes of the reference plugin", () => {
 			ok: false,
 			failure: expect.objectContaining({ code: "invalid_input" }),
 		});
+	});
+
+	test("tell a plugin that subscribed to NoteCreated which note the mutation created", async () => {
+		const received: PublishedEvent<{ noteId: string }>[] = [];
+		const reference = await startReference(searchIndexing(received));
+		const workspace = await reference.createWorkspace("Alpha");
+
+		await reference.call({
+			actor: ALICE,
+			workspace,
+			operation: "reference.createNote",
+			input: { title: "First thoughts" },
+		});
+		await reference.deliverEvents();
+
+		expect(received).toEqual([
+			{
+				id: "00000000-0000-4000-e000-000000000001",
+				name: "reference.NoteCreated",
+				version: 1,
+				occurredAt: new Date("2026-11-26T08:00:00.000Z"),
+				workspace,
+				payload: { noteId: "00000000-0000-4000-8000-000000000002" },
+			},
+		]);
+	});
+
+	test("tell nobody about a note that was not created", async () => {
+		const received: PublishedEvent<{ noteId: string }>[] = [];
+		const reference = await startReference(searchIndexing(received));
+		const workspace = await reference.createWorkspace("Alpha");
+
+		await reference.call({
+			actor: ALICE,
+			workspace,
+			operation: "reference.createNote",
+			input: { title: "   " },
+		});
+		await reference.deliverEvents();
+
+		expect(received).toEqual([]);
 	});
 });
