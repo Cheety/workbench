@@ -62,12 +62,7 @@ export function defineOperation<Input, Output>(
 	return definition;
 }
 
-export const OPERATION_ERROR_KINDS = [
-	"not_found",
-	"conflict",
-	"rejected",
-] as const;
-export type OperationErrorKind = (typeof OPERATION_ERROR_KINDS)[number];
+export type OperationErrorKind = "not_found" | "conflict" | "rejected";
 
 const ERROR_CODE = /^[a-z][a-z0-9_]*$/;
 

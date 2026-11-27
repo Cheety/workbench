@@ -1964,10 +1964,11 @@ describe("operations of plugins", () => {
 			enabledPlugins: ["board"],
 		});
 
-		expect(plugins.operations.names).toEqual([
-			"board.createCard",
-			"board.listCards",
-		]);
+		expect([
+			plugins.operations.find("board.createCard")?.name,
+			plugins.operations.find("board.listCards")?.name,
+			plugins.operations.find("createCard"),
+		]).toEqual(["board.createCard", "board.listCards", undefined]);
 	});
 
 	test("are not registered for a plugin that is not loaded", async () => {
@@ -1983,7 +1984,7 @@ describe("operations of plugins", () => {
 			enabledPlugins: ["board"],
 		});
 
-		expect(plugins.operations.names).toEqual([]);
+		expect(plugins.operations.find("board.createCard")).toBeUndefined();
 	});
 
 	test.each([
@@ -2070,6 +2071,6 @@ describe("operations of plugins", () => {
 				detail: `plugin package "@workbench/plugin-board" has an invalid manifest: ${problem}`,
 			},
 		]);
-		expect(plugins.operations.names).toEqual([]);
+		expect(plugins.operations.find("board.createCard")).toBeUndefined();
 	});
 });
