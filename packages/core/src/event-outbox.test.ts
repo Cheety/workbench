@@ -1021,6 +1021,209 @@ describe("the payload of an event", () => {
 	});
 });
 
+const DAY_MS = 86_400_000;
+
+function removalsIn(entries: readonly LogEntry[]): LogEntry[] {
+	return entries.filter((entry) => entry.message === "settled events removed");
+}
+
+async function countRows(sql: SQL): Promise<unknown> {
+	const [row]: unknown[] = await sql`
+		SELECT
+			(SELECT count(*)::integer FROM core.events) AS events,
+			(SELECT count(*)::integer FROM core.event_deliveries) AS deliveries`;
+	return row;
+}
+
+async function insertLabelRenamedDeliveredAt(
+	sql: SQL,
+	deliveredAt: Date,
+	count: number,
+): Promise<void> {
+	await sql`
+		WITH recorded AS (
+			INSERT INTO core.events (id, name, version, occurred_at, workspace_id, payload)
+			SELECT gen_random_uuid(), 'board.LabelRenamed', 1, ${deliveredAt}, ${WORKSPACE}, '{"labelId": "label-1"}'::jsonb
+			FROM generate_series(1, ${count})
+			RETURNING id, sequence
+		)
+		INSERT INTO core.event_deliveries (event_id, event_sequence, subscriber, next_attempt_at, delivered_at)
+		SELECT id, sequence, 'search', ${deliveredAt}, ${deliveredAt}
+		FROM recorded`;
+}
+
+function searchSubscribing(): EventRegistry {
+	return registryOf(subscription("search", async () => {}));
+}
+
+describe("a settled event", () => {
+	test("is removed from the outbox with its deliveries 7 days after its last delivery, and not before", async () => {
+		const database = await migratedDatabase();
+		const events = searchSubscribing();
+		await publishLabelRenamed(database.sql, events, EVENT);
+		const at = (now: Date) =>
+			deliveryOf({
+				sql: database.sql,
+				cancellation: database.cancellation,
+				events,
+				now: () => now,
+			});
+		await at(LATER).delivery.deliverDue(NOT_STOPPED);
+		const justBefore = at(new Date(LATER.getTime() + 7 * DAY_MS - 1));
+		const onTheDay = at(new Date(LATER.getTime() + 7 * DAY_MS));
+
+		await justBefore.delivery.deliverDue(NOT_STOPPED);
+		const rowsJustBefore = await countRows(database.sql);
+		await onTheDay.delivery.deliverDue(NOT_STOPPED);
+
+		expect(rowsJustBefore).toEqual({ events: 1, deliveries: 1 });
+		expect(await countRows(database.sql)).toEqual({ events: 0, deliveries: 0 });
+		expect(removalsIn(justBefore.entries)).toEqual([]);
+		expect(removalsIn(onTheDay.entries)).toEqual([
+			expect.objectContaining({ level: "debug", removed: 1 }),
+		]);
+	});
+
+	test("is removed 7 days after it occurred when no plugin subscribed to it, and not before", async () => {
+		const database = await migratedDatabase();
+		const events = registryOfBoardPublishing(
+			labelRenamed,
+			subscribing("search", boardEvent(z.unknown()), async () => {}),
+		);
+		await publishLabelRenamed(database.sql, events, EVENT);
+		const at = (now: Date) =>
+			deliveryOf({
+				sql: database.sql,
+				cancellation: database.cancellation,
+				events,
+				now: () => now,
+			});
+
+		await at(new Date(NOW.getTime() + 7 * DAY_MS - 1)).delivery.deliverDue(
+			NOT_STOPPED,
+		);
+		const rowsJustBefore = await countRows(database.sql);
+		await at(new Date(NOW.getTime() + 7 * DAY_MS)).delivery.deliverDue(
+			NOT_STOPPED,
+		);
+
+		expect(rowsJustBefore).toEqual({ events: 1, deliveries: 0 });
+		expect(await countRows(database.sql)).toEqual({ events: 0, deliveries: 0 });
+	});
+});
+
+describe("an event with a delivery that is still open", () => {
+	test("stays in the outbox with all its deliveries, however long ago the others were delivered", async () => {
+		const database = await migratedDatabase();
+		const archive = subscription("archive", async () => {});
+		const search = subscription("search", async () => {});
+		await publishLabelRenamed(database.sql, registryOf(search, archive), EVENT);
+		const whileArchiveIsNotActive = (now: Date) =>
+			deliveryOf({
+				sql: database.sql,
+				cancellation: database.cancellation,
+				events: registryOf(search),
+				now: () => now,
+			});
+		await whileArchiveIsNotActive(NOW).delivery.deliverDue(NOT_STOPPED);
+
+		await whileArchiveIsNotActive(
+			new Date(NOW.getTime() + 365 * DAY_MS),
+		).delivery.deliverDue(NOT_STOPPED);
+
+		const deliveries: unknown[] = await database.sql`
+			SELECT subscriber, delivered_at FROM core.event_deliveries
+			WHERE event_id = ${EVENT}
+			ORDER BY subscriber`;
+		expect([...deliveries]).toEqual([
+			{ subscriber: "archive", delivered_at: null },
+			{ subscriber: "search", delivered_at: NOW },
+		]);
+	});
+});
+
+describe("settled events past their retention", () => {
+	test("are removed a thousand in a run of the delivery, and the rest in the next run", async () => {
+		const database = await migratedDatabase();
+		await insertLabelRenamedDeliveredAt(
+			database.sql,
+			new Date(NOW.getTime() - 8 * DAY_MS),
+			1_001,
+		);
+		const { delivery } = deliveryOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			events: searchSubscribing(),
+		});
+
+		await delivery.deliverDue(NOT_STOPPED);
+		const leftAfterTheFirstRun = await countRows(database.sql);
+		await delivery.deliverDue(NOT_STOPPED);
+
+		expect(leftAfterTheFirstRun).toEqual({ events: 1, deliveries: 1 });
+		expect(await countRows(database.sql)).toEqual({ events: 0, deliveries: 0 });
+	});
+
+	test("are not looked for again by a process until an hour after it removed all there were", async () => {
+		const database = await migratedDatabase();
+		let now = NOW;
+		const { delivery } = deliveryOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			events: searchSubscribing(),
+			now: () => now,
+		});
+		await delivery.deliverDue(NOT_STOPPED);
+		await insertLabelRenamedDeliveredAt(
+			database.sql,
+			new Date(NOW.getTime() - 8 * DAY_MS),
+			1,
+		);
+
+		now = new Date(NOW.getTime() + ONE_HOUR_MS - 1);
+		await delivery.deliverDue(NOT_STOPPED);
+		const leftWithinTheHour = await countRows(database.sql);
+		now = new Date(NOW.getTime() + ONE_HOUR_MS);
+		await delivery.deliverDue(NOT_STOPPED);
+
+		expect(leftWithinTheHour).toEqual({ events: 1, deliveries: 1 });
+		expect(await countRows(database.sql)).toEqual({ events: 0, deliveries: 0 });
+	});
+
+	test("are left to the process that is already removing them, without waiting for it", async () => {
+		const database = await migratedDatabase();
+		await insertLabelRenamedDeliveredAt(
+			database.sql,
+			new Date(NOW.getTime() - 8 * DAY_MS),
+			2,
+		);
+		const other = new SQL(database.url, { max: 1 });
+		cleanups.push(() => other.close());
+		const locked = deferred();
+		const release = deferred();
+		const otherProcess = other.begin(async (transaction) => {
+			await transaction`
+				SELECT FROM core.events
+				WHERE sequence = (SELECT min(sequence) FROM core.events)
+				FOR UPDATE`;
+			locked.resolve();
+			await release.promise;
+		});
+		await locked.promise;
+
+		await deliveryOf({
+			sql: database.sql,
+			cancellation: database.cancellation,
+			events: searchSubscribing(),
+		}).delivery.deliverDue(NOT_STOPPED);
+		const leftWhileLocked = await countRows(database.sql);
+		release.resolve();
+		await otherProcess;
+
+		expect(leftWhileLocked).toEqual({ events: 1, deliveries: 1 });
+	});
+});
+
 describe("the event delivery loop on the outbox", () => {
 	test("delivers an event when it is woken, without waiting for its poll interval", async () => {
 		const database = await migratedDatabase();

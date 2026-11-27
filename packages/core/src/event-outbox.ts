@@ -95,6 +95,12 @@ export type EventDelivery = {
 
 const RETRY = { baseMs: 1_000, capMs: 300_000 } as const;
 
+const RETENTION_MS = 7 * 86_400_000;
+
+const MOST_REMOVED_PER_RUN = 1_000;
+
+const REMOVAL_INTERVAL_MS = 3_600_000;
+
 const dueDelivery = z.object({
 	id: z.string(),
 	sequence: z.string(),
@@ -144,14 +150,57 @@ export function createEventDelivery(
 		...options,
 		retryDelayMs: fullJitterBackoff({ ...RETRY, random: options.random }),
 	};
+	const removeExpiredEvents = expiredEventRemoverOf(options);
 	return {
 		deliverDue: async (stopSignal) => {
 			if (options.events.subscriptions().length === 0) return;
 			let position: Position | undefined = BEFORE_ALL;
 			while (position !== undefined && !stopSignal.aborted)
 				position = await attemptNext(position, attemptOptions);
+			if (position === undefined) await removeExpiredEvents(options.now());
 		},
 	};
+}
+
+function expiredEventRemoverOf({
+	sql,
+	logger,
+}: Pick<EventDeliveryOptions, "sql" | "logger">): (now: Date) => Promise<void> {
+	let restsUntil = Number.NEGATIVE_INFINITY;
+	return async (now) => {
+		if (now.getTime() < restsUntil) return;
+		const removed = await removeSettled(
+			sql,
+			new Date(now.getTime() - RETENTION_MS),
+		);
+		if (removed < MOST_REMOVED_PER_RUN)
+			restsUntil = now.getTime() + REMOVAL_INTERVAL_MS;
+		if (removed > 0) logger.debug("settled events removed", { removed });
+	};
+}
+
+async function removeSettled(sql: SQL, settledBy: Date): Promise<number> {
+	const removed: unknown[] = await sql`
+		WITH expired AS (
+			SELECT e.id FROM core.events e
+			WHERE e.occurred_at <= ${settledBy}
+				AND NOT EXISTS (
+					SELECT FROM core.event_deliveries d
+					WHERE d.event_id = e.id
+						AND (d.delivered_at IS NULL OR d.delivered_at > ${settledBy})
+				)
+			ORDER BY e.occurred_at
+			LIMIT ${MOST_REMOVED_PER_RUN}
+			FOR UPDATE OF e SKIP LOCKED
+		),
+		removed_deliveries AS (
+			DELETE FROM core.event_deliveries
+			WHERE event_id IN (SELECT id FROM expired)
+		)
+		DELETE FROM core.events
+		WHERE id IN (SELECT id FROM expired)
+		RETURNING id`;
+	return removed.length;
 }
 
 type AttemptOptions = EventDeliveryOptions & {
