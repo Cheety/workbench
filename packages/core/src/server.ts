@@ -1,10 +1,16 @@
-import { UNKNOWN_FAILURE_REASON } from "./failure-reason.ts";
+import { describeThrown } from "./failure-reason.ts";
+import { API_PATH_PREFIX, answerApiRequest, type HttpApi } from "./http-api.ts";
 import type { Logger } from "./logger.ts";
 import type { DatabaseCheck } from "./postgres.ts";
+import {
+	problemResponse,
+	REQUEST_PROBLEMS,
+	type UnreadyStartupStatus,
+} from "./problem-details.ts";
 
 export const CORRELATION_ID_HEADER = "X-Correlation-ID";
 
-const VALID_CORRELATION_ID = /^[A-Za-z0-9._-]{1,128}$/;
+export const VALID_CORRELATION_ID = /^[A-Za-z0-9._-]{1,128}$/;
 const HEALTH_PATH_PREFIX = "/health/";
 const LIVENESS_PATH = "/health/live";
 const READINESS_PATH = "/health/ready";
@@ -15,7 +21,14 @@ const HEALTH_STATUS = {
 	notReady: "not_ready",
 } as const;
 
-export type StartupStatus = "starting" | "started" | "failed";
+export type StartupStatus = "started" | UnreadyStartupStatus;
+
+type IncomingRequest = {
+	readonly request: Request;
+	readonly path: string;
+	readonly correlationId: string;
+	readonly logger: Logger;
+};
 
 export type ServerOptions = {
 	readonly port: number;
@@ -23,6 +36,7 @@ export type ServerOptions = {
 	readonly checkDatabase: DatabaseCheck;
 	readonly newCorrelationId: () => string;
 	readonly startupStatus: () => StartupStatus;
+	readonly api: HttpApi;
 };
 
 export type RunningServer = {
@@ -49,21 +63,18 @@ async function handleRequest(
 		acceptCorrelationId(request) ?? options.newCorrelationId();
 	const logger = options.logger.with({ correlationId });
 	const path = new URL(request.url).pathname;
-	const response = await route(request.method, path, options, logger).catch(
-		(error: unknown) => {
-			logger.error("request failed", { error: errorName(error) });
-			return problem(500, "Internal Server Error");
-		},
-	);
+	const response = await route(
+		{ request, path, correlationId, logger },
+		options,
+	).catch((error: unknown) => {
+		logger.error("request failed", { error: describeThrown(error) });
+		return problemResponse(REQUEST_PROBLEMS.internal_error, correlationId);
+	});
 	response.headers.set(CORRELATION_ID_HEADER, correlationId);
 	const entry = { method: request.method, path, status: response.status };
 	const level = path.startsWith(HEALTH_PATH_PREFIX) ? "debug" : "info";
 	logger[level]("request completed", entry);
 	return response;
-}
-
-function errorName(error: unknown): string {
-	return error instanceof Error ? error.name : UNKNOWN_FAILURE_REASON;
 }
 
 function acceptCorrelationId(request: Request): string | undefined {
@@ -74,16 +85,24 @@ function acceptCorrelationId(request: Request): string | undefined {
 }
 
 async function route(
-	method: string,
-	path: string,
+	incoming: IncomingRequest,
 	options: ServerOptions,
-	logger: Logger,
 ): Promise<Response> {
-	if (method === "GET" && path === LIVENESS_PATH)
+	const { request, path, correlationId, logger } = incoming;
+	if (request.method === "GET" && path === LIVENESS_PATH)
 		return Response.json({ status: HEALTH_STATUS.alive });
-	if (method === "GET" && path === READINESS_PATH)
+	if (request.method === "GET" && path === READINESS_PATH)
 		return readiness(options, logger);
-	return problem(404, "Not Found");
+	if (path.startsWith(API_PATH_PREFIX)) {
+		const startup = options.startupStatus();
+		if (startup !== "started")
+			return problemResponse(
+				REQUEST_PROBLEMS.instance_not_ready[startup],
+				correlationId,
+			);
+		return answerApiRequest(options.api, incoming);
+	}
+	return problemResponse(REQUEST_PROBLEMS.route_not_found, correlationId);
 }
 
 async function readiness(
@@ -107,11 +126,4 @@ async function readiness(
 
 function notReady(): Response {
 	return Response.json({ status: HEALTH_STATUS.notReady }, { status: 503 });
-}
-
-function problem(status: number, title: string): Response {
-	return Response.json(
-		{ type: "about:blank", title, status },
-		{ status, headers: { "Content-Type": "application/problem+json" } },
-	);
 }

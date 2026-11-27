@@ -6,6 +6,7 @@ import {
 	type OperationTarget,
 } from "@workbench/sdk";
 import { isRecord } from "./is-record.ts";
+import { type JsonSchema, jsonSchemaReaderOf } from "./json-schema.ts";
 import { quote } from "./quote.ts";
 import { type Validator, validatorOf } from "./schema-validation.ts";
 
@@ -17,6 +18,8 @@ export type RegisteredOperation = {
 	readonly right: string;
 	readonly validateInput: Validator;
 	readonly validateOutput: Validator;
+	describeInput(): JsonSchema;
+	describeOutput(): JsonSchema;
 	execute(input: unknown, ctx: OperationContext): Promise<unknown>;
 };
 
@@ -136,6 +139,8 @@ function readOperation(
 			right: validRight,
 			validateInput,
 			validateOutput,
+			describeInput: jsonSchemaReaderOf(input, "input"),
+			describeOutput: jsonSchemaReaderOf(output, "output"),
 			execute: async (value, ctx) => {
 				const result: unknown = await validExecute.call(candidate, value, ctx);
 				return result;

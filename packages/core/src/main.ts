@@ -1,4 +1,6 @@
 import { fileURLToPath } from "node:url";
+import { SQL } from "bun";
+import { authenticateToken } from "./api-tokens.ts";
 import {
 	type Config,
 	InvalidConfigError,
@@ -9,6 +11,7 @@ import { setSystemTimer } from "./hook-timeout.ts";
 import { createInstanceStart } from "./instance-start.ts";
 import { startPlugins } from "./kernel.ts";
 import { createLogger } from "./logger.ts";
+import { createOperationPipeline } from "./operation-pipeline.ts";
 import { discoverPluginPackages } from "./plugin-discovery.ts";
 import { createPostgresCheck } from "./postgres.ts";
 import {
@@ -34,6 +37,12 @@ const DATABASE_RETRY = { baseMs: 250, capMs: 10_000 } as const;
 const MIGRATION_CONNECTION_TIMEOUT_MS = 10_000;
 
 const MIGRATION_STATEMENT_TIMEOUT_MS = 60_000;
+
+const OPERATION_CONNECTION_TIMEOUT_S = 10;
+
+const OPERATION_STATEMENT_TIMEOUT_MS = 60_000;
+
+const DATABASE_CLOSE_TIMEOUT_S = 5;
 
 const MIGRATION_LOCK_RETRY = { baseMs: 250, capMs: 2_000 } as const;
 
@@ -125,12 +134,27 @@ const instance = createInstanceStart(
 	},
 	logger,
 );
+const sql = new SQL(config.databaseUrl.reveal(), {
+	connectionTimeout: OPERATION_CONNECTION_TIMEOUT_S,
+	connection: { statement_timeout: OPERATION_STATEMENT_TIMEOUT_MS },
+});
 const server = startServerOrExit({
 	port: config.port,
 	logger,
 	checkDatabase,
 	newCorrelationId: () => crypto.randomUUID(),
 	startupStatus: instance.status,
+	api: {
+		authenticate: (token) => authenticateToken(sql, token, now()),
+		pipeline: createOperationPipeline({
+			sql,
+			registry: instance.operations,
+			now,
+			newId: () => crypto.randomUUID(),
+			random: Math.random,
+			logger,
+		}),
+	},
 });
 logger.info("server started", { port: server.port });
 
@@ -140,7 +164,14 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 	process.once(signal, () => {
 		logger.info("shutting down", { signal });
 		void shutDownInstance(
-			{ stopStartingPlugins: instance.stop, server, plugins },
+			{
+				stopStartingPlugins: instance.stop,
+				server,
+				plugins,
+				database: {
+					close: () => sql.close({ timeout: DATABASE_CLOSE_TIMEOUT_S }),
+				},
+			},
 			logger,
 		).then((exitCode) => process.exit(exitCode));
 	});

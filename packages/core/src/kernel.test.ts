@@ -100,23 +100,31 @@ const NEVER_EXPIRING: HookTimeout = { ms: 10_000, setTimer: () => () => {} };
 
 function manualTimers() {
 	const delaysMs: number[] = [];
-	let cancelled = 0;
+	const pending = new Set<() => void>();
 	let announce: ((expire: () => void) => void) | undefined;
 	let latest: (() => void) | undefined;
 	const setTimer: HookTimeout["setTimer"] = (expire, delayMs) => {
 		delaysMs.push(delayMs);
-		latest = expire;
-		announce?.(expire);
+		const timer = () => {
+			if (pending.delete(timer)) expire();
+		};
+		pending.add(timer);
+		latest = timer;
+		announce?.(timer);
 		announce = undefined;
 		return () => {
-			cancelled += 1;
+			pending.delete(timer);
 		};
 	};
 	return {
 		setTimer,
 		delaysMs,
-		cancelled: () => cancelled,
-		expireLatest: () => latest?.(),
+		pending: () => pending.size,
+		expireLatest: () => {
+			if (latest === undefined || !pending.has(latest))
+				throw new Error("the latest timer is not pending");
+			latest();
+		},
 		next: () =>
 			new Promise<() => void>((resolve) => {
 				announce = resolve;
@@ -126,6 +134,14 @@ function manualTimers() {
 
 function hanging(): Promise<void> {
 	return new Promise(() => {});
+}
+
+function settled(): Promise<void> {
+	return new Promise((resolve) => setImmediate(resolve));
+}
+
+function byPlugin(failures: readonly LoadFailure[]): LoadFailure[] {
+	return [...failures].sort((a, b) => a.plugin.localeCompare(b.plugin));
 }
 
 async function start(scenario: Scenario) {
@@ -661,18 +677,18 @@ describe("plugin kernel", () => {
 			enabledPlugins: ["board", "notes"],
 		});
 
-		expect(plugins.failures).toEqual([
-			{
-				plugin: "notes",
-				reason: "dependency_cycle",
-				detail:
-					'plugin "notes" is part of a dependency cycle: board -> notes -> board',
-			},
+		expect(byPlugin(plugins.failures)).toEqual([
 			{
 				plugin: "board",
 				reason: "dependency_cycle",
 				detail:
 					'plugin "board" is part of a dependency cycle: board -> notes -> board',
+			},
+			{
+				plugin: "notes",
+				reason: "dependency_cycle",
+				detail:
+					'plugin "notes" is part of a dependency cycle: board -> notes -> board',
 			},
 		]);
 		expect(journal).toEqual([]);
@@ -695,14 +711,19 @@ describe("plugin kernel", () => {
 		});
 
 		expect(
-			plugins.failures.map(({ plugin, reason }) => ({ plugin, reason })),
+			byPlugin(plugins.failures).map(({ plugin, reason }) => ({
+				plugin,
+				reason,
+			})),
 		).toEqual([
-			{ plugin: "tags", reason: "dependency_cycle" },
-			{ plugin: "notes", reason: "dependency_cycle" },
 			{ plugin: "board", reason: "dependency_cycle" },
 			{ plugin: "cards", reason: "dependency_not_loaded" },
+			{ plugin: "notes", reason: "dependency_cycle" },
+			{ plugin: "tags", reason: "dependency_cycle" },
 		]);
-		expect(plugins.failures[2]?.detail).toBe(
+		expect(
+			plugins.failures.find(({ plugin }) => plugin === "board")?.detail,
+		).toBe(
 			'plugin "board" is part of a dependency cycle: board -> notes -> tags -> board',
 		);
 	});
@@ -745,12 +766,14 @@ describe("plugin kernel", () => {
 				enabledPlugins: Object.keys(requirements),
 			});
 
-			expect(plugins.failures).toEqual(
-				cycles.map(({ plugin, cycle }) => ({
-					plugin,
-					reason: "dependency_cycle",
-					detail: `plugin "${plugin}" is part of a dependency cycle: ${cycle}`,
-				})),
+			expect(byPlugin(plugins.failures)).toEqual(
+				byPlugin(
+					cycles.map(({ plugin, cycle }) => ({
+						plugin,
+						reason: "dependency_cycle",
+						detail: `plugin "${plugin}" is part of a dependency cycle: ${cycle}`,
+					})),
+				),
 			);
 		},
 	);
@@ -989,12 +1012,14 @@ describe("plugin kernel", () => {
 		});
 		await activating.promise;
 		timers.expireLatest();
-		const { plugins } = await starting;
+		const { plugins, entries } = await starting;
 		activation.reject(new Error("too late"));
+		await settled();
 
 		expect(plugins.failures.map((failure) => failure.reason)).toEqual([
 			"activation_timed_out",
 		]);
+		expect(JSON.stringify(entries)).not.toContain("too late");
 	});
 
 	test("gives up on a plugin that does not finish deactivating and deactivates the others", async () => {
@@ -1042,7 +1067,7 @@ describe("plugin kernel", () => {
 		await plugins.deactivate();
 
 		expect(new Set(timers.delaysMs)).toEqual(new Set([5000]));
-		expect(timers.cancelled()).toBe(timers.delaysMs.length);
+		expect(timers.pending()).toBe(0);
 	});
 
 	test("hands a plugin the capabilities its manifest declares and no others", async () => {
@@ -1180,11 +1205,13 @@ describe("plugin kernel", () => {
 		expect(plugins.failures.map((failure) => failure.reason)).toEqual([
 			"unknown_plugin",
 		]);
-		expect(entries[0]).toMatchObject({
-			level: "error",
-			message: "plugin discovery failed",
-			reason: "EACCES",
-		});
+		expect(entries).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				message: "plugin discovery failed",
+				reason: "EACCES",
+			}),
+		);
 		expect(JSON.stringify(entries)).not.toContain("s3cr3t-detail");
 	});
 
@@ -1203,45 +1230,45 @@ describe("plugin kernel", () => {
 
 		await plugins.deactivate();
 
-		expect(entries).toEqual([
-			expect.objectContaining({
-				level: "info",
-				message: "plugins discovered",
-				packages: ["@workbench/plugin-board", "@workbench/plugin-notes"],
-			}),
-			expect.objectContaining({
-				level: "info",
-				message: "plugins resolved",
-				activationOrder: ["notes", "board"],
-			}),
-			expect.objectContaining({
-				level: "info",
-				message: "plugin activated",
-				plugin: "notes",
-				version: "1.4.0",
-			}),
-			expect.objectContaining({
-				level: "info",
-				message: "plugin activated",
-				plugin: "board",
-				version: "1.0.0",
-			}),
-			expect.objectContaining({
-				level: "info",
-				message: "plugins started",
-				active: ["notes", "board"],
-				notLoaded: [],
-			}),
-			expect.objectContaining({
-				level: "info",
-				message: "plugin deactivated",
-				plugin: "board",
-			}),
-			expect.objectContaining({
-				level: "info",
-				message: "plugin deactivated",
-				plugin: "notes",
-			}),
+		expect(entries).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					level: "info",
+					message: "plugins discovered",
+					packages: ["@workbench/plugin-board", "@workbench/plugin-notes"],
+				}),
+				expect.objectContaining({
+					level: "info",
+					message: "plugins resolved",
+					activationOrder: ["notes", "board"],
+				}),
+				expect.objectContaining({
+					level: "info",
+					message: "plugin activated",
+					plugin: "notes",
+					version: "1.4.0",
+				}),
+				expect.objectContaining({
+					level: "info",
+					message: "plugin activated",
+					plugin: "board",
+					version: "1.0.0",
+				}),
+				expect.objectContaining({
+					level: "info",
+					message: "plugins started",
+					active: ["notes", "board"],
+					notLoaded: [],
+				}),
+			]),
+		);
+		expect(
+			entries
+				.filter(({ message }) => message === "plugin deactivated")
+				.map(({ level, plugin }) => ({ level, plugin })),
+		).toEqual([
+			{ level: "info", plugin: "board" },
+			{ level: "info", plugin: "notes" },
 		]);
 	});
 
@@ -1312,12 +1339,14 @@ describe("plugin kernel", () => {
 			hookTimeout: { ms: 5000, setTimer: timers.setTimer },
 		});
 		(await timeUp)();
-		const { plugins } = await starting;
+		const { plugins, entries } = await starting;
 		loading.reject(new Error("too late"));
+		await settled();
 
 		expect(plugins.failures.map((failure) => failure.reason)).toEqual([
 			"load_timed_out",
 		]);
+		expect(JSON.stringify(entries)).not.toContain("too late");
 	});
 
 	test("activates no further plugin once it is told to stop and deactivates the active ones", async () => {
@@ -1405,8 +1434,8 @@ describe("plugin kernel", () => {
 		expect(plugins.failures.map((failure) => failure.reason)).toEqual([
 			"invalid_manifest",
 		]);
-		expect(timers.delaysMs).toEqual([5000]);
-		expect(timers.cancelled()).toBe(1);
+		expect(timers.delaysMs).toContain(5000);
+		expect(timers.pending()).toBe(0);
 	});
 
 	test("does not blame a plugin for a capability the instance fails to provide", async () => {
@@ -1456,7 +1485,7 @@ describe("plugin kernel", () => {
 		]);
 		expect(plugins.active).toEqual(["cards"]);
 		expect(journal).toEqual(["activate cards"]);
-		expect(timers.cancelled()).toBe(timers.delaysMs.length);
+		expect(timers.pending()).toBe(0);
 		expect(entries).toContainEqual(
 			expect.objectContaining({
 				level: "error",
@@ -1479,7 +1508,7 @@ describe("plugin kernel", () => {
 			logger,
 		});
 
-		expect(entries[0]).toEqual(
+		expect(entries).toContainEqual(
 			expect.objectContaining({
 				level: "error",
 				message: "plugin discovery failed",

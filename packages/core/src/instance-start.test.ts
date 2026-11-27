@@ -6,11 +6,19 @@ import {
 	type StartedPlugins,
 } from "./instance-start.ts";
 import type { LoadFailure } from "./kernel.ts";
+import {
+	type RegisteredOperation,
+	registerOperations,
+} from "./operation-registry.ts";
 import type { CoreSchemaMigration } from "./schema-migrations.ts";
 import { type LogEntry, recordingLogger } from "./testing/recording-logger.ts";
 
 function pluginsWith(...failures: LoadFailure[]): StartedPlugins {
-	return { failures, deactivate: async () => "clean" };
+	return {
+		failures,
+		operations: registerOperations([]),
+		deactivate: async () => "clean",
+	};
 }
 
 const MIGRATION_FAILED: LoadFailure = {
@@ -199,5 +207,47 @@ describe("instance start", () => {
 		expect(started).toBe(false);
 		expect(await plugins.deactivate()).toBe("clean");
 		expect(instance.status()).toBe("starting");
+	});
+});
+
+describe("operations of an instance", () => {
+	const renameLabel: RegisteredOperation = {
+		name: "board.renameLabel",
+		plugin: "board",
+		kind: "mutation",
+		target: "workspace",
+		right: "board.label.edit",
+		validateInput: async (value) => ({ valid: true, value }),
+		validateOutput: async (value) => ({ valid: true, value }),
+		describeInput: () => ({}),
+		describeOutput: () => ({}),
+		execute: async () => ({}),
+	};
+
+	test("are none while the plugins are still starting", () => {
+		const instance = createInstanceStart(
+			steps({ startPlugins: () => new Promise(() => {}) }),
+			recordingLogger().logger,
+		);
+
+		void instance.run();
+
+		expect(instance.operations.find("board.renameLabel")).toBeUndefined();
+	});
+
+	test("are those of the started plugins once they started", async () => {
+		const instance = createInstanceStart(
+			steps({
+				startPlugins: async () => ({
+					...pluginsWith(),
+					operations: registerOperations([renameLabel]),
+				}),
+			}),
+			recordingLogger().logger,
+		);
+
+		await instance.run();
+
+		expect(instance.operations.find("board.renameLabel")).toBe(renameLabel);
 	});
 });

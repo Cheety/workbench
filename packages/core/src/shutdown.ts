@@ -12,6 +12,7 @@ export type RunningInstance = {
 	readonly stopStartingPlugins: () => void;
 	readonly server: Pick<RunningServer, "stop">;
 	readonly plugins: Deactivatable | Promise<Deactivatable>;
+	readonly database: { readonly close: () => Promise<void> };
 };
 
 export async function shutDownInstance(
@@ -23,7 +24,23 @@ export async function shutDownInstance(
 	await plugins.catch(() => {});
 	const serverExitCode = await shutDown(instance.server, logger);
 	const pluginsExitCode = await deactivatePlugins(plugins, logger);
-	return serverExitCode === 0 ? pluginsExitCode : 1;
+	const databaseExitCode = await closeDatabase(instance.database, logger);
+	return serverExitCode === 0 && pluginsExitCode === 0 ? databaseExitCode : 1;
+}
+
+async function closeDatabase(
+	database: RunningInstance["database"],
+	logger: Logger,
+): Promise<ExitCode> {
+	try {
+		await database.close();
+		return 0;
+	} catch (error) {
+		logger.error("database connections failed to close", {
+			error: describeThrown(error),
+		});
+		return 1;
+	}
 }
 
 export function reportFailedStart(

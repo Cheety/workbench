@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Glob, type Subprocess, type TCPSocketListener } from "bun";
+import { z } from "zod";
 import { CORE_MIGRATIONS_DIRECTORY } from "./schema-migrations.ts";
 import {
 	createFreshDatabase,
@@ -7,8 +8,13 @@ import {
 	PostgresGate,
 	TEST_DATABASE_URL,
 } from "./testing/postgres.ts";
+import { createWorkspace } from "./workspaces.ts";
 
 const MAIN = new URL("./main.ts", import.meta.url).pathname;
+const CREATE_SERVICE_ACCOUNT = new URL(
+	"./create-service-account.ts",
+	import.meta.url,
+).pathname;
 const REFERENCE_MIGRATIONS_DIRECTORY = new URL(
 	"../../plugin-reference/migrations/",
 	import.meta.url,
@@ -402,5 +408,61 @@ describe("migrations at start", () => {
 			}),
 		);
 		expect(ready.status).toBe(503);
+	});
+});
+
+describe("HTTP API of an instance", () => {
+	test("runs the mutation and the query of the reference plugin for a token the operator created", async () => {
+		const database = await freshDatabase();
+		const command = Bun.spawn(
+			[
+				process.execPath,
+				CREATE_SERVICE_ACCOUNT,
+				"--name",
+				"agent",
+				"--valid-days",
+				"1",
+			],
+			{
+				env: { PATH: process.env.PATH ?? "", DATABASE_URL: database.url },
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const { token } = z
+			.object({ token: z.string() })
+			.parse(JSON.parse(await new Response(command.stdout).text()));
+		const workspace = "00000000-0000-4000-8000-00000000aaaa";
+		await createWorkspace(database.sql, {
+			id: workspace,
+			name: "Alpha",
+			createdAt: new Date("2026-11-26T08:00:00.000Z"),
+		});
+		const instance = spawnInstance({
+			DATABASE_URL: database.url,
+			PORT: "0",
+			PLUGINS: "reference",
+		});
+		const log = readLog(instance.stdout);
+		const [started] = await log.until("server started");
+		await log.until("instance started");
+		const call = (operation: string, input: unknown) =>
+			fetch(
+				`http://127.0.0.1:${started?.port}/api/workspaces/${workspace}/operations/${operation}`,
+				{
+					method: "POST",
+					headers: { Authorization: `Bearer ${token}` },
+					body: JSON.stringify(input),
+				},
+			);
+
+		const created = await call("reference.createNote", { title: " Plan " });
+		const listed = await call("reference.listNotes", { limit: 10 });
+
+		expect(created.status).toBe(200);
+		const note = await created.json();
+		expect(note).toMatchObject({ title: "Plan" });
+		expect(listed.status).toBe(200);
+		expect(await listed.json()).toEqual({ notes: [note] });
 	});
 });

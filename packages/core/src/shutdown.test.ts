@@ -63,13 +63,18 @@ describe("shutdown", () => {
 });
 
 describe("instance shutdown", () => {
-	test("stops the server before it deactivates the plugins and exits with 0", async () => {
+	test("stops the server, deactivates the plugins, closes the database connections and exits with 0", async () => {
 		const { logger } = recordingLogger();
 		const journal: string[] = [];
 
 		const exitCode = await shutDownInstance(
 			{
 				stopStartingPlugins: () => {},
+				database: {
+					close: async () => {
+						journal.push("database closed");
+					},
+				},
 				server: {
 					stop: async () => {
 						journal.push("server stopped");
@@ -86,7 +91,34 @@ describe("instance shutdown", () => {
 		);
 
 		expect(exitCode).toBe(0);
-		expect(journal).toEqual(["server stopped", "plugins deactivated"]);
+		expect(journal).toEqual([
+			"server stopped",
+			"plugins deactivated",
+			"database closed",
+		]);
+	});
+
+	test("reports it and exits with 1 when the database connections fail to close", async () => {
+		const { logger, lines } = recordingLogger();
+
+		const exitCode = await shutDownInstance(
+			{
+				stopStartingPlugins: () => {},
+				database: { close: () => Promise.reject(new Error("socket hang")) },
+				server: { stop: async () => {} },
+				plugins: { deactivate: async () => "clean" },
+			},
+			logger,
+		);
+
+		expect(exitCode).toBe(1);
+		expect(lines.map((line) => JSON.parse(line))).toEqual([
+			expect.objectContaining({
+				level: "error",
+				message: "database connections failed to close",
+				error: expect.objectContaining({ message: "socket hang" }),
+			}),
+		]);
 	});
 
 	test("exits with 1 when a plugin could not be deactivated", async () => {
@@ -95,6 +127,7 @@ describe("instance shutdown", () => {
 		const exitCode = await shutDownInstance(
 			{
 				stopStartingPlugins: () => {},
+				database: { close: async () => {} },
 				server: { stop: async () => {} },
 				plugins: { deactivate: async () => "incomplete" },
 			},
@@ -111,6 +144,7 @@ describe("instance shutdown", () => {
 		const exitCode = await shutDownInstance(
 			{
 				stopStartingPlugins: () => {},
+				database: { close: async () => {} },
 				server: { stop: () => Promise.reject(new Error("stuck")) },
 				plugins: {
 					deactivate: async () => {
@@ -136,6 +170,7 @@ describe("instance shutdown", () => {
 		const shuttingDown = shutDownInstance(
 			{
 				stopStartingPlugins: () => {},
+				database: { close: async () => {} },
 				server: { stop: async () => {} },
 				plugins: starting.promise,
 			},
@@ -160,6 +195,7 @@ describe("instance shutdown", () => {
 		const exitCode = await shutDownInstance(
 			{
 				stopStartingPlugins: () => {},
+				database: { close: async () => {} },
 				server: {
 					stop: async () => {
 						journal.push("server stopped");
@@ -190,6 +226,7 @@ describe("instance shutdown", () => {
 		const exitCode = await shutDownInstance(
 			{
 				stopStartingPlugins: () => {},
+				database: { close: async () => {} },
 				server: { stop: async () => {} },
 				plugins: {
 					deactivate: () => Promise.reject(new TypeError("kernel defect")),
@@ -217,6 +254,7 @@ describe("instance shutdown", () => {
 
 		const exitCode = await shutDownInstance(
 			{
+				database: { close: async () => {} },
 				stopStartingPlugins: () => {
 					journal.push("start stopped");
 					starting.resolve({
@@ -278,6 +316,7 @@ describe("failed plugin start", () => {
 		const exitCode = await shutDownInstance(
 			{
 				stopStartingPlugins: () => {},
+				database: { close: async () => {} },
 				server: {
 					stop: async () => {
 						journal.push("server stopped");

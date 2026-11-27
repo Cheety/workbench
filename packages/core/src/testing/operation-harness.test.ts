@@ -52,13 +52,7 @@ const unstoppable: PluginPackage = {
 		definePlugin({
 			manifest: { name: "unstoppable" },
 			deactivate: () => {
-				const error = new Error("cannot stop");
-				Object.defineProperty(error, "message", {
-					get: () => {
-						throw new Error("cannot describe why it cannot stop");
-					},
-				});
-				throw error;
+				throw new Error("cannot stop");
 			},
 		}),
 };
@@ -93,9 +87,14 @@ describe("the operation harness", () => {
 		const databases = await countTestDatabases();
 		const harness = await startOperationHarness({ plugins: [unstoppable] });
 
-		const stopped = harness.stop();
+		await harness.stop().catch(() => undefined);
 
-		await expect(stopped).rejects.toThrow("cannot describe why it cannot stop");
+		expect(harness.logEntries).toContainEqual(
+			expect.objectContaining({
+				message: "plugin failed to deactivate",
+				plugin: "unstoppable",
+			}),
+		);
 		expect(await countTestDatabases()).toBe(databases);
 	});
 

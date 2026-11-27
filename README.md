@@ -40,9 +40,11 @@ DATABASE_URL=postgres://workbench:workbench@127.0.0.1:54329/workbench_test bun r
 - `GET /health/live` meldet, dass der Prozess läuft, unabhängig von der Datenbank.
 - `GET /health/ready` antwortet mit 200, wenn der Start der Instanz abgeschlossen ist und Postgres erreichbar ist, sonst mit 503. Der Server startet auch ohne Datenbank.
 
-Beim Start wartet die Instanz ohne Obergrenze, bis Postgres erreichbar ist (Log-Eintrag `database unreachable, retrying` mit `reason` und `retryInMs`; die Wartezeit wächst exponentiell mit Zufallsanteil bis höchstens 10 s; Begründung in ADR-0008). Danach migriert sie das Schema `core` und die Schemas der Plugins (siehe [Migrationen](#migrationen)), aktiviert die Plugins und meldet `instance started`; erst dann ist sie bereit. Schlägt eine Migration fehl, meldet das Log `instance failed to start` mit `reason` (`core_schema_not_migrated` oder `plugin_schema_not_migrated`), und die Instanz bleibt bis zum nächsten Start „nicht bereit“.
+Beim Start wartet die Instanz ohne Obergrenze, bis Postgres erreichbar ist (Log-Eintrag `database unreachable, retrying` mit `reason` und `retryInMs`; die Wartezeit wächst exponentiell mit Zufallsanteil bis höchstens 10 s; Begründung in ADR-0008). Danach migriert sie das Schema `core` und die Schemas der Plugins (siehe [Migrationen](#migrationen)), aktiviert die Plugins und meldet `instance started`; erst dann ist sie bereit. Schlägt eine Migration fehl, meldet das Log `instance failed to start` mit `reason` (`core_schema_not_migrated` oder `plugin_schema_not_migrated`), und die Instanz bleibt bis zum nächsten Start „nicht bereit“; die HTTP-API antwortet dann mit 503 (`instance_not_ready`).
 
 Kann der Server nicht starten, etwa weil der Port belegt ist, endet der Prozess mit Exit-Code 1 und einem Log-Eintrag `server failed to start`, der Port und Fehlercode (z. B. `EADDRINUSE`) nennt.
+
+Eine unbekannte Route beantwortet der Server mit 404 als Problem Details (`route_not_found`, siehe [HTTP-API](#http-api)). Scheitert eine Anfrage außerhalb einer Operation, etwa weil Postgres beim Prüfen des Tokens nicht antwortet, antwortet er mit 500 (`internal_error`) und neutraler Meldung; das Log nennt den Fehler mit Name, Meldung und Stacktrace im Eintrag `request failed`.
 
 Logs sind JSON-Zeilen auf der Standardausgabe. Jede Anfrage trägt eine Korrelations-ID: Ein gültiger Header `X-Correlation-ID` (höchstens 128 Zeichen aus Buchstaben, Ziffern, `.`, `_`, `-`) wird übernommen, sonst erzeugt der Server eine. Die Antwort nennt sie im selben Header.
 
@@ -80,7 +82,7 @@ export default definePlugin({
 
 Beim Start entdeckt der Kernel die Plugin-Pakete, lädt die Einstiege der in `PLUGINS` genannten Plugins, löst ihre `requires` auf und aktiviert sie, vorausgesetzte zuerst. Von einem Plugin, das nicht in `PLUGINS` steht, läuft kein Code, und seine Mängel sind kein Ladefehler. Beim Shutdown (`SIGTERM`, `SIGINT`) stoppt erst der Server, dann werden die Plugins in umgekehrter Reihenfolge deaktiviert. Änderungen an `PLUGINS` wirken nach einem Neustart.
 
-Jedes Plugin hat für das Laden seines Einstiegs, für `activate` und für `deactivate` je die Frist `PLUGIN_HOOK_TIMEOUT_MS`. Wird der Einstieg nicht rechtzeitig geladen, gilt das Plugin als nicht geladen (`load_timed_out`). Wird `activate` nicht rechtzeitig fertig, gilt das Plugin als nicht geladen (`activation_timed_out`) und der Start geht mit den übrigen weiter. Für ein Plugin, dessen `activate` fehlschlägt oder die Frist überschreitet, ruft der Kernel `deactivate` nicht auf; es muss selbst freigeben, was es bis dahin belegt hat. Wird `deactivate` nicht rechtzeitig fertig oder schlägt es fehl, nennt das Log das Plugin (`plugin deactivation timed out`, `plugin failed to deactivate`), die übrigen werden trotzdem deaktiviert, und die Instanz endet mit Exit-Code 1. Ein Signal während des Starts beendet den Start der Plugins: Der Kernel aktiviert kein weiteres Plugin (Log-Eintrag `plugin start stopped` mit den nicht aktivierten in `notActivated`), wartet auf ein gerade laufendes `activate` höchstens die Frist und deaktiviert dann die bereits aktiven Plugins. Lädt der Kernel beim Signal noch Einstiege, lädt er die der übrigen aktivierten Plugins zu Ende, je Plugin höchstens die Frist, und aktiviert danach keines.
+Jedes Plugin hat für das Laden seines Einstiegs, für `activate` und für `deactivate` je die Frist `PLUGIN_HOOK_TIMEOUT_MS`. Wird der Einstieg nicht rechtzeitig geladen, gilt das Plugin als nicht geladen (`load_timed_out`). Wird `activate` nicht rechtzeitig fertig, gilt das Plugin als nicht geladen (`activation_timed_out`) und der Start geht mit den übrigen weiter. Für ein Plugin, dessen `activate` fehlschlägt oder die Frist überschreitet, ruft der Kernel `deactivate` nicht auf; es muss selbst freigeben, was es bis dahin belegt hat. Wird `deactivate` nicht rechtzeitig fertig oder schlägt es fehl, nennt das Log das Plugin (`plugin deactivation timed out`, `plugin failed to deactivate`), die übrigen werden trotzdem deaktiviert, und die Instanz endet mit Exit-Code 1. Lassen sich danach die Datenbankverbindungen nicht schließen, nennt das Log den Fehler im Eintrag `database connections failed to close`, und die Instanz endet ebenfalls mit Exit-Code 1. Ein Signal während des Starts beendet den Start der Plugins: Der Kernel aktiviert kein weiteres Plugin (Log-Eintrag `plugin start stopped` mit den nicht aktivierten in `notActivated`), wartet auf ein gerade laufendes `activate` höchstens die Frist und deaktiviert dann die bereits aktiven Plugins. Lädt der Kernel beim Signal noch Einstiege, lädt er die der übrigen aktivierten Plugins zu Ende, je Plugin höchstens die Frist, und aktiviert danach keines.
 
 Ein Paket, dessen `package.json` nicht lesbar ist oder `workbench.plugin` in anderer Form angibt, überspringt der Kernel; das Log nennt es als Eintrag `plugin package ignored` mit Verzeichnis (`directory`) und Grund (`problem`). Die übrigen Plugin-Pakete sind davon nicht betroffen.
 
@@ -122,7 +124,7 @@ Seine SQL-Migrationen liegen in einem Verzeichnis des Plugin-Pakets, das die `pa
 - Jede Datei mit der Endung `.sql` ist eine Migration. Ihr Name besteht aus vier Ziffern, einem Unterstrich und Kleinbuchstaben, Ziffern oder Unterstrichen, z. B. `0001_create_notes.sql`; die Migrationen laufen in der Reihenfolge ihrer Namen. Andere Dateien bleiben unbeachtet.
 - Jede Migration läuft in einer eigenen Transaktion mit dem Schema des Plugins als `search_path`; Tabellen werden daher ohne Schema angelegt.
 - Angewandte Migrationen hält die Tabelle `core.migrations` fest (Schema, Dateiname, Zeitpunkt); ein erneuter Start wendet nur neue Migrationen an. Eine angewandte Migration wird nie geändert, sondern durch eine neue ergänzt.
-- Die Migrationen des Schemas `core` liegen in `packages/core/migrations` und laufen genauso, mit `core` als `search_path`. Sie legen `core.workspaces` an, die Tabelle der Workspaces (ADR-0002). Schlägt eine davon fehl, meldet das Log `instance failed to start` mit `reason` `core_schema_not_migrated`, und die Instanz lädt keine Plugins.
+- Die Migrationen des Schemas `core` liegen in `packages/core/migrations` und laufen genauso, mit `core` als `search_path`. Sie legen `core.workspaces` an, die Tabelle der Workspaces (ADR-0002), sowie `core.service_accounts` und `core.api_tokens` für die Service-Accounts und ihre API-Tokens (siehe [HTTP-API](#http-api)). Schlägt eine davon fehl, meldet das Log `instance failed to start` mit `reason` `core_schema_not_migrated`, und die Instanz lädt keine Plugins.
 - Jeder Migrationslauf (erst `core`, dann die Schemas der Plugins) hält dieselbe Postgres-Advisory-Lock. Starten zwei Prozesse gleichzeitig, wartet der zweite (Log-Eintrag `migration lock held by another run, waiting`) und wendet nichts doppelt an. Ein Signal beendet das Warten; eine laufende Migration läuft zu Ende, weitere beginnen nicht. Jede Anweisung eines Laufs darf höchstens 60 s dauern, das Warten auf Tabellensperren eingeschlossen; dauert sie länger, schlägt die Migration fehl (`migration failed`) und der Lauf gibt die Lock frei (Begründung in ADR-0008).
 - Schlägt eine Migration fehl, wird sie zurückgerollt; die folgenden Migrationen desselben Schemas laufen nicht, die anderer Schemas schon. Das Log nennt Schema, Migration und Fehler (`migration failed`), das Plugin wird nicht geladen (`migration_failed`), und die Instanz meldet nicht „bereit“.
 - Nennt die `package.json` Migrationen, deklariert das Manifest aber nicht `database`, ist das Manifest ungültig.
@@ -215,6 +217,69 @@ await harness.stop();
 `result` ist `{ ok: true, output }` oder `{ ok: false, failure }` mit `code`, `kind`, `detail` und `issues`. Ohne Angabe gibt das Harness eine feste Uhr (`2026-11-26T08:00:00.000Z`), fortlaufende IDs im UUID-Format (`00000000-0000-4000-8000-000000000001`, …), `random()` = `0.5` und jedem Aufruf eine fortlaufende Correlation-ID (`harness-call-1`, …), unter der die Pipeline loggt; `now`, `newId`, `random` und `newCorrelationId` lassen sich als Optionen übergeben. Lädt ein Plugin nicht, wirft `startOperationHarness` einen `HarnessStartError` mit dem Ladefehler. `harness.logEntries` enthält die Log-Einträge.
 
 Das Referenz-Plugin bietet so die Mutation `reference.createNote` (Eingabe `title`, 1 bis 200 Zeichen nach Entfernen von Leerraum am Rand) und die Query `reference.listNotes` (Eingabe `limit`, 1 bis 100; die neuesten zuerst), beide auf den Notizen eines Workspaces in `plugin_reference.notes`. Seine Tests in `packages/plugin-reference/src/operations.test.ts` zeigen das Harness im Einsatz.
+
+### HTTP-API
+
+Jede Operation der aktiven Plugins ist per HTTP erreichbar, als dünner Adapter auf dieselbe Pipeline (ADR-0013):
+
+```sh
+curl -X POST "http://127.0.0.1:3000/api/workspaces/$WORKSPACE/operations/reference.createNote" \
+	-H "Authorization: Bearer $TOKEN" \
+	-d '{"title":"Plan"}'
+```
+
+- Der Pfad ist `POST /api/workspaces/{workspace}/operations/{operation}`, auch für eine Query. Der Body ist die Eingabe als JSON, höchstens 1 MiB (1048576 Bytes); die Antwort 200 enthält die Ausgabe der Operation. Eine andere Methode auf diesem Pfad beantwortet die API vor der Prüfung des Tokens mit 405 und `Allow: POST`, als Problem Details mit `code` `method_not_allowed`.
+- Jeder Aufruf braucht ein API-Token als `Authorization: Bearer <token>`; das Schema `Bearer` gilt in beliebiger Groß- und Kleinschreibung (RFC 9110). Fehlt es, steht es in einem anderen Schema, ist es unbekannt oder abgelaufen, antwortet die API mit 401 und `WWW-Authenticate: Bearer`, als Problem Details mit `code` `unauthenticated`. Die Antwort sagt nicht, welcher Fall vorlag; das Log nennt ihn im Eintrag `request not authenticated` mit `reason` (`missing_token`, `unknown_token`, `expired_token`). Der Akteur des Aufrufs ist der Service-Account des Tokens.
+- Jede Datenbankanweisung einer Anfrage darf höchstens 60 s dauern (`statement_timeout`); dauert sie länger, scheitert die Anfrage.
+- Jedes Scheitern kommt als Problem Details mit `Content-Type: application/problem+json` und der Korrelations-ID in `correlationId`, mit dem Status nach der Art (siehe [Aufruf einer Operation](#aufruf-einer-operation)). Ein interner Fehler nennt nur `internal_error` und eine neutrale Meldung, nie Stacktrace, Pfad oder Query; die Details stehen unter derselben Korrelations-ID im Log.
+
+| Code                   | Status | Bedeutung                                                                |
+| ---------------------- | ------ | ------------------------------------------------------------------------ |
+| `unauthenticated`      | 401    | Kein gültiges API-Token.                                                 |
+| `invalid_input`        | 400    | Der Body ist kein JSON, oder die Eingabe passt nicht zum Eingabe-Schema. |
+| `route_not_found`      | 404    | Weder Methode noch Pfad passen zu einer Route.                           |
+| `method_not_allowed`   | 405    | Der Pfad einer Operation mit anderer Methode als `POST`.                 |
+| `malformed_path`       | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                       |
+| `invalid_workspace_id` | 400    | Der Workspace im Pfad ist keine UUID.                                    |
+| `workspace_not_found`  | 404    | Kein Workspace hat diese UUID.                                           |
+| `unknown_operation`    | 404    | Kein aktives Plugin hat eine Operation dieses Namens registriert.        |
+| `body_too_large`       | 413    | Der Body ist größer als 1 MiB.                                           |
+| `instance_not_ready`   | 503    | Die Instanz startet noch oder ihr Start ist gescheitert.                 |
+| `internal_error`       | 500    | Die Anfrage scheiterte aus einem internen Grund.                         |
+
+#### Service-Account und API-Token anlegen
+
+Den ersten Service-Account samt API-Token legt der Betreiber im Container an:
+
+```sh
+bun run create-service-account --name "deploy agent" --valid-days 90
+```
+
+Das Kommando liest dieselben Umgebungsvariablen wie die Instanz (mindestens `DATABASE_URL` oder `DATABASE_URL_FILE`), migriert bei Bedarf das Schema `core`, legt den Service-Account an und schreibt eine JSON-Zeile auf die Standardausgabe:
+
+```json
+{
+	"serviceAccount": "7d4b…",
+	"token": "wbt_…",
+	"expiresAt": "2027-02-25T08:00:00.000Z"
+}
+```
+
+- `--name` ist 1 bis 200 Zeichen lang (nach Entfernen von Leerraum am Rand), `--valid-days` eine ganze Zahl von 1 bis 3650; das Token gilt bis `expiresAt`, ausschließlich. Jede Datenbankanweisung des Kommandos darf höchstens 60 s dauern.
+- Der Klartext des Tokens erscheint nur in dieser Ausgabe. Die Instanz speichert nur seinen SHA-256-Hash (ADR-0012); ein verlorenes Token lässt sich nicht wieder anzeigen, sondern nur neu anlegen.
+- Fehlt eine Option, ist ein Wert ungültig oder ist eine Option unbekannt, endet das Kommando mit Exit-Code 1 und der Zeile `usage: create-service-account …` auf der Standardfehlerausgabe. Scheitert die Datenbank, endet es mit Exit-Code 1 und dem Log-Eintrag `service account not created` mit `reason` (`core_schema_not_migrated` oder `database_failed`) auf der Standardfehlerausgabe.
+
+Scope (Operationen, Workspaces), Widerruf und Rechte folgen mit Identität und Zugriff; bisher darf jedes gültige Token jede Operation in jedem Workspace aufrufen.
+
+#### API-Vertrag
+
+`docs/openapi.json` beschreibt die HTTP-API als OpenAPI 3.1, erzeugt aus den Operationen aller Plugin-Pakete im Repository:
+
+```sh
+bun run openapi
+```
+
+Jede Operation erscheint mit ihrem Namen als `operationId`, Ein- und Ausgabe-Schema als JSON Schema und Problem Details für jedes Scheitern. Die Schemas kommen aus [Standard JSON Schema](https://standardschema.dev) (`~standard.jsonSchema`, etwa von zod 4); ein Schema ohne diese Erweiterung erscheint als `{}`. `bun run check` scheitert, wenn die Datei nicht zu den Operationen passt; dann `bun run openapi` ausführen und das Ergebnis committen.
 
 ### Contract
 
