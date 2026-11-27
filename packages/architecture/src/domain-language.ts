@@ -1,4 +1,5 @@
-import { join, sep } from "node:path";
+import { join } from "node:path";
+import { isInstalledDependency, isTestFile } from "./source-files.ts";
 
 export type DomainTermUse = {
 	readonly file: string;
@@ -27,8 +28,6 @@ const DOMAIN_TERMS: readonly DomainTerm[] = [
 	{ singular: "whiteboard", plural: "whiteboards" },
 ];
 
-export const INSTALLED_DEPENDENCIES = "node_modules";
-export const TEST_FILE = /\.test\.[cm]?[jt]sx?$/;
 const ALL_FILES = new Bun.Glob("**/*");
 const LETTERS = /[A-Za-z]+/g;
 const WORD_BOUNDARY = /(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/;
@@ -38,11 +37,7 @@ export async function findDomainLanguage(
 ): Promise<readonly DomainTermUse[]> {
 	const uses: DomainTermUse[] = [];
 	for await (const file of ALL_FILES.scan(directory)) {
-		if (
-			file.split(sep).includes(INSTALLED_DEPENDENCIES) ||
-			TEST_FILE.test(file)
-		)
-			continue;
+		if (isInstalledDependency(file) || isTestFile(file)) continue;
 		const words = wordsOf(await Bun.file(join(directory, file)).text());
 		for (const { singular, plural } of DOMAIN_TERMS)
 			if (contains(words, singular) || contains(words, plural))

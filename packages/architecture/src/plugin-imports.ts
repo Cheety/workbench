@@ -1,11 +1,14 @@
-import { dirname, join, resolve, sep } from "node:path";
-import { INSTALLED_DEPENDENCIES, TEST_FILE } from "./domain-language.ts";
+import { dirname, join, resolve } from "node:path";
 import {
 	findPluginPackages,
 	importedPlugin,
 	importsIn,
-	SOURCE_FILES,
 } from "./plugin-boundaries.ts";
+import {
+	isInstalledDependency,
+	isTestFile,
+	SOURCE_FILES,
+} from "./source-files.ts";
 
 export type PluginImport = {
 	readonly file: string;
@@ -19,11 +22,7 @@ export async function findPluginImports(
 	const plugins = await findPluginPackages(packagesDirectory);
 	const found: PluginImport[] = [];
 	for await (const path of SOURCE_FILES.scan(directory)) {
-		if (
-			path.split(sep).includes(INSTALLED_DEPENDENCIES) ||
-			TEST_FILE.test(path)
-		)
-			continue;
+		if (isInstalledDependency(path) || isTestFile(path)) continue;
 		const file = join(directory, path);
 		for (const { importPath, isPath } of importsIn(
 			await Bun.file(file).text(),

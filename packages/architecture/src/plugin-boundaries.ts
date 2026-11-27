@@ -1,5 +1,12 @@
 import { readdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+	INSTALLED_DEPENDENCIES,
+	isInstalledDependency,
+	isTestFile,
+	SOURCE_EXTENSIONS,
+	SOURCE_FILES,
+} from "./source-files.ts";
 
 export type PluginBoundaryViolation =
 	| ImportViolation
@@ -44,21 +51,6 @@ type Import = {
 
 const PACKAGE_JSON = "package.json";
 const CONTRACT_SUBPATH = "contract";
-const INSTALLED_DEPENDENCIES = "node_modules";
-const TEST_FILE = /\.test\.[cm]?[jt]sx?$/;
-const SOURCE_EXTENSIONS = [
-	"ts",
-	"tsx",
-	"mts",
-	"cts",
-	"js",
-	"jsx",
-	"mjs",
-	"cjs",
-];
-export const SOURCE_FILES = new Bun.Glob(
-	`**/*.{${SOURCE_EXTENSIONS.join(",")}}`,
-);
 const GAP = String.raw`(?:\s|/\*[\s\S]*?\*/|//[^\n]*\n)*`;
 const MODULE_SPECIFIER = new RegExp(
 	String.raw`(?<![\w$.])(?:import\.meta\.resolve|require\.resolve|mock\.module|from|import|require)${GAP}\(?${GAP}(["'\x60])([^"'\x60\r\n]+)\1`,
@@ -80,7 +72,7 @@ export async function findPluginBoundaryViolations(
 			});
 		const contractImports = new Map<string, string[]>();
 		for await (const path of SOURCE_FILES.scan(plugin.root)) {
-			if (path.split(sep).includes(INSTALLED_DEPENDENCIES)) continue;
+			if (isInstalledDependency(path)) continue;
 			const file = join(plugin.root, path);
 			const imports = importsIn(await Bun.file(file).text());
 			if (isContractFile(file, plugin.contract))
@@ -231,7 +223,7 @@ function isContractFile(file: string, contract: ContractExport): boolean {
 	return (
 		contract.kind === "published" &&
 		isWithin(file, dirname(contract.file)) &&
-		!TEST_FILE.test(file)
+		!isTestFile(file)
 	);
 }
 
