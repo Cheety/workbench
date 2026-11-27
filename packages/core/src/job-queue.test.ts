@@ -211,7 +211,7 @@ describe("a job that exceeds its timeout", () => {
 		]);
 	});
 
-	test("leaves nothing behind of what it writes after its time is up", async () => {
+	test("is refused what it writes after its time is up, and leaves nothing of it behind", async () => {
 		const database = await migratedDatabase();
 		await createMailerSchema(database.sql);
 		const timer = manualTimer();
@@ -237,10 +237,11 @@ describe("a job that exceeds its timeout", () => {
 		const running = queue.runDue(NOT_STOPPED);
 		await timerSet;
 		timer.expire();
-		timeIsUp.resolve();
 		await running;
-		await lateWrite.promise;
+		timeIsUp.resolve();
+		const lateWriteOutcome = await lateWrite.promise;
 
+		expect(lateWriteOutcome).toBe("refused");
 		expect(await sentReminders(database.sql)).toEqual([]);
 		expect(failuresIn(entries)).toEqual([
 			expect.objectContaining({ reason: "run_timed_out", attempt: 1 }),
@@ -373,28 +374,41 @@ describe("a job whose stalled attempt ends while the attempt that took it over s
 	});
 });
 
-describe("a job that is claimed while no active plugin declares it", () => {
-	test("is not run, and the operator learns that its attempt was counted", async () => {
+describe("a job that no active plugin declares", () => {
+	test("is not attempted, and runs once a plugin that declares it is active again", async () => {
 		const database = await migratedDatabase();
-		const declared = registryOf(sendingReminders(async () => {}));
-		await enqueueReminder(database.sql, declared, JOB);
-		const { queue, entries } = queueOf({
+		const run: string[] = [];
+		const declaring = registryOf(
+			sendingReminders(async (job) => {
+				run.push(job.id);
+			}),
+		);
+		const notDeclaring = registryOf(
+			defineJob({
+				name: "archiveCard",
+				payload: z.object({ cardId: z.string() }),
+				maxAttempts: 3,
+				run: async () => {},
+			}),
+		);
+		await enqueueReminder(database.sql, declaring, JOB);
+		const whileNotDeclared = queueOf({
 			sql: database.sql,
-			jobs: { ...declared, find: () => undefined },
+			jobs: notDeclaring,
 		});
 
-		await queue.runDue(NOT_STOPPED);
+		await whileNotDeclared.queue.runDue(NOT_STOPPED);
+		const rowsWhileNotDeclared: unknown[] = await database.sql`
+			SELECT state, attempts FROM core.jobs`;
+		await queueOf({ sql: database.sql, jobs: declaring }).queue.runDue(
+			NOT_STOPPED,
+		);
 
-		expect(entries).toEqual([
-			{
-				time: "2026-11-26T08:00:00.000Z",
-				level: "warn",
-				message: "job claimed but not declared",
-				jobId: JOB,
-				job: "mailer.sendReminder",
-				attempt: 1,
-			},
+		expect([...rowsWhileNotDeclared]).toEqual([
+			{ state: "pending", attempts: 0 },
 		]);
+		expect(whileNotDeclared.entries).toEqual([]);
+		expect(run).toEqual([JOB]);
 	});
 });
 
@@ -563,6 +577,45 @@ describe("a job that fails", () => {
 				attempts: 3,
 				failure_reason: "run_threw",
 				settled_at: new Date("2026-11-27T11:00:00.000Z"),
+			},
+		]);
+	});
+
+	test("waits no longer than just under an hour for its retry, however many attempts failed before", async () => {
+		const database = await migratedDatabase();
+		let now = NOW;
+		const jobs = registryOf(
+			defineJob({
+				name: "sendReminder",
+				payload: z.object({ cardId: z.string() }),
+				maxAttempts: 12,
+				run: async () => {
+					throw new Error("the mail server is down");
+				},
+			}),
+		);
+		await enqueueReminder(database.sql, jobs, JOB);
+		const { queue, entries } = queueOf({
+			sql: database.sql,
+			jobs,
+			now: () => now,
+			random: () => 0.999,
+		});
+
+		for (let hoursLater = 0; hoursLater <= 10; hoursLater += 1) {
+			now = new Date(NOW.getTime() + hoursLater * 3_600_000);
+			await queue.runDue(NOT_STOPPED);
+		}
+
+		const rows: unknown[] = await database.sql`
+			SELECT attempts, next_attempt_at FROM core.jobs`;
+		expect(failuresIn(entries).at(-1)).toEqual(
+			expect.objectContaining({ attempt: 11, retryInMs: 3_596_400 }),
+		);
+		expect([...rows]).toEqual([
+			{
+				attempts: 11,
+				next_attempt_at: new Date("2026-11-27T19:59:56.400Z"),
 			},
 		]);
 	});
@@ -810,14 +863,14 @@ describe("the job loop on the queue", () => {
 describe("the job queue", () => {
 	test("asks Postgres for nothing while no plugin declares a job, so it may run before the core schema exists", async () => {
 		const database = await freshDatabase();
-		const { queue, entries } = queueOf({
+		const { queue } = queueOf({
 			sql: database.sql,
 			jobs: registryOf(),
 		});
 
-		await queue.runDue(NOT_STOPPED);
+		const run = queue.runDue(NOT_STOPPED);
 
-		expect(entries).toEqual([]);
+		await expect(run).resolves.toBeUndefined();
 	});
 
 	test("hands a job to its run function once when two processes run the due jobs at the same time", async () => {
