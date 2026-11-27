@@ -90,16 +90,21 @@ function cursorAfter(position: AuditPosition): string {
 	return Buffer.from(JSON.stringify(encoded)).toString("base64url");
 }
 
+function invalidCursor(): OperationError {
+	return new OperationError(
+		"rejected",
+		"invalid_cursor",
+		"the cursor does not name a position in the audit",
+	);
+}
+
 function positionOf(cursor: string): AuditPosition {
-	const position = encodedPosition.safeParse(decodedJson(cursor));
-	if (!position.success)
-		throw new OperationError(
-			"rejected",
-			"invalid_cursor",
-			"the cursor is not one that a page of the audit named",
-		);
-	const [occurredAt, id] = position.data;
-	return { occurredAt: new Date(occurredAt), id };
+	const encoded = encodedPosition.safeParse(decodedJson(cursor));
+	if (!encoded.success) throw invalidCursor();
+	const [occurredAt, id] = encoded.data;
+	const position = { occurredAt: new Date(occurredAt), id };
+	if (cursorAfter(position) !== cursor) throw invalidCursor();
+	return position;
 }
 
 function decodedJson(cursor: string): unknown {

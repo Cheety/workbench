@@ -414,6 +414,10 @@ describe("a page of the audit", () => {
 			cursorOf(["yesterday", "00000000-0000-4000-a000-000000000001"]),
 		],
 		["whose id is no UUID", cursorOf(["2026-11-27T08:00:00.000Z", "first"])],
+		[
+			"that carries more than its position",
+			`${cursorOf(["2026-11-27T08:00:00.000Z", "00000000-0000-4000-a000-000000000001"])}~~`,
+		],
 	])("is refused for a cursor %s", async (_case, cursor) => {
 		const harness = await startLedger();
 		const workspace = await harness.createWorkspace("Accounts");
@@ -428,7 +432,7 @@ describe("a page of the audit", () => {
 			failure: {
 				code: "core.invalid_cursor",
 				kind: "rejected",
-				detail: "the cursor is not one that a page of the audit named",
+				detail: "the cursor does not name a position in the audit",
 				issues: [],
 			},
 		});

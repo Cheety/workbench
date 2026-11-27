@@ -217,7 +217,7 @@ Die Query `core.listAuditEntries` liefert die Einträge des Workspaces im Pfad, 
 
 - `actor` nennt Art (`user`, `service_account`) und ID des Akteurs, `apiTokenId` die ID des API-Tokens, mit dem der Aufruf kam, oder `null` für einen Aufruf ohne Token (etwa über das Test-Harness). So lässt sich unterscheiden, ob ein Mensch oder ein Agent gehandelt hat. Ein Eintrag enthält nie ein Token, seinen Hash oder die Eingabe der Mutation.
 - `occurredAt` ist der Zeitpunkt in UTC, auf Millisekunden genau, `workspace` das Ziel der Mutation, `result` bisher immer `succeeded`.
-- `nextCursor` ist `null`, wenn keine älteren Einträge folgen. Ein Cursor ist undurchsichtig und gilt nur als Ganzes; einen, den keine Seite genannt hat, lehnt die Operation mit `core.invalid_cursor` ab (Art `rejected`, per HTTP 422). Einträge desselben Zeitpunkts ordnet ihre ID, sodass keine Seite einen Eintrag wiederholt oder auslässt, auch wenn inzwischen neue entstehen.
+- `nextCursor` ist `null`, wenn keine älteren Einträge folgen. Ein Cursor ist undurchsichtig und gilt nur als Ganzes, Zeichen für Zeichen so, wie eine Seite ihn nennt; einen, der keine Position im Audit nennt, lehnt die Operation mit `core.invalid_cursor` ab (Art `rejected`, per HTTP 422). Einträge desselben Zeitpunkts ordnet ihre ID, sodass keine Seite einen Eintrag wiederholt oder auslässt, auch wenn inzwischen neue entstehen.
 - Die Operation verweist auf das Recht `core.audit.read`, das für den Instanz-Admin gedacht ist. Solange Rechte nicht durchgesetzt werden (siehe [Operationen](#operationen)), darf jeder Akteur mit gültigem Token das Audit jedes Workspaces lesen.
 
 ### Test-Harness
