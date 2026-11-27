@@ -91,6 +91,8 @@ export async function startPlugins(
 		options,
 		failures,
 	);
+	const events = registerEvents({ active, notActive });
+	warnOfUndeclaredEvents(active, events, logger);
 	const activeNames = active.map((plugin) => plugin.name);
 	logger.info("plugins started", {
 		active: activeNames,
@@ -105,12 +107,23 @@ export async function startPlugins(
 			...CORE_OPERATIONS,
 			...active.flatMap((plugin) => plugin.operations),
 		]),
-		events: registerEvents({ active, notActive }),
+		events,
 		deactivate: () => {
 			deactivation ??= deactivate(active, options);
 			return deactivation;
 		},
 	};
+}
+
+function warnOfUndeclaredEvents(
+	active: readonly ValidPlugin[],
+	events: EventRegistry,
+	logger: Logger,
+): void {
+	for (const { subscriptions } of active)
+		for (const { subscriber, event } of subscriptions)
+			if (events.findEvent(event) === undefined)
+				logger.warn("subscribed event not declared", { subscriber, event });
 }
 
 type EnabledPlugins = {

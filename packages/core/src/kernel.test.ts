@@ -2111,6 +2111,16 @@ const countCard = defineEventSubscription({
 
 const CARD_CREATED_CAPABILITY = "event:board.CardCreated";
 
+const statisticsCountingCards = packageOf(
+	definePlugin({
+		manifest: {
+			name: "statistics",
+			capabilities: [eventSubscriptionCapability(cardCreated)],
+		},
+		subscriptions: [countCard],
+	}),
+);
+
 describe("events of plugins", () => {
 	test("are registered under the name of the publishing plugin, with the subscriptions of the plugins that declare the capability", async () => {
 		const { plugins } = await start({
@@ -2141,6 +2151,42 @@ describe("events of plugins", () => {
 				.subscriptions()
 				.map(({ subscriber, event }) => ({ subscriber, event })),
 		).toEqual([{ subscriber: "statistics", event: "board.CardCreated" }]);
+	});
+
+	test("warns the operator of a subscription to an event that no active plugin declares, and loads the subscribing plugin all the same", async () => {
+		const { plugins, entries } = await start({
+			packages: [
+				packageOf(
+					definePlugin({ manifest: { name: "board" }, events: [cardCreated] }),
+				),
+				statisticsCountingCards,
+			],
+			enabledPlugins: ["statistics"],
+		});
+
+		expect(plugins.active).toEqual(["statistics"]);
+		expect(plugins.failures).toEqual([]);
+		expect(entries.filter((entry) => entry.level === "warn")).toEqual([
+			expect.objectContaining({
+				message: "subscribed event not declared",
+				subscriber: "statistics",
+				event: "board.CardCreated",
+			}),
+		]);
+	});
+
+	test("does not warn of a subscription to an event that an active plugin declares", async () => {
+		const { entries } = await start({
+			packages: [
+				packageOf(
+					definePlugin({ manifest: { name: "board" }, events: [cardCreated] }),
+				),
+				statisticsCountingCards,
+			],
+			enabledPlugins: ["board", "statistics"],
+		});
+
+		expect(entries.filter((entry) => entry.level === "warn")).toEqual([]);
 	});
 
 	test("does not load a plugin that subscribes to an event without declaring the capability for it", async () => {

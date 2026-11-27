@@ -255,7 +255,7 @@ export default definePlugin({
 });
 ```
 
-Ein Abo setzt kein `requires` voraus: Ist das publizierende Plugin nicht aktiv, kommt das Event nie. `ctx.capability("event:board.LabelRenamed")` liefert `{ event: "board.LabelRenamed" }`.
+Ein Abo setzt kein `requires` voraus: Ist das publizierende Plugin nicht aktiv, kommt das Event nie. Das ist kein Ladefehler, denn das publizierende Plugin kann schlicht nicht in `PLUGINS` stehen; abonniert ein aktives Plugin aber ein Event, das kein aktives Plugin in `events` deklariert, etwa wegen eines Tippfehlers im Namen, steht das beim Start je Abo als Warnung `subscribed event not declared` mit `subscriber` und `event` im Log. `ctx.capability("event:board.LabelRenamed")` liefert `{ event: "board.LabelRenamed" }`.
 
 Ein Plugin wird nicht geladen (`invalid_manifest`, `detail` nennt jeden Mangel), wenn
 
