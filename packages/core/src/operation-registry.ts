@@ -10,9 +10,13 @@ import { type JsonSchema, jsonSchemaReaderOf } from "./json-schema.ts";
 import { quote } from "./quote.ts";
 import { type Validator, validatorOf } from "./schema-validation.ts";
 
+export type OperationOwner =
+	| { readonly kind: "core" }
+	| { readonly kind: "plugin"; readonly name: string };
+
 export type RegisteredOperation = {
 	readonly name: string;
-	readonly plugin: string;
+	readonly owner: OperationOwner;
 	readonly kind: OperationKind;
 	readonly target: OperationTarget;
 	readonly right: string;
@@ -36,8 +40,28 @@ const OPERATION_NAME = /^[a-z]+(?:[A-Z][a-z0-9]*)+$/;
 
 const RIGHT_NAME = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*$/;
 
+const CORE_OWNER_NAME = "core";
+
+export function ownerName(owner: OperationOwner): string {
+	switch (owner.kind) {
+		case "core":
+			return CORE_OWNER_NAME;
+		case "plugin":
+			return owner.name;
+	}
+}
+
+function describeOwner(owner: OperationOwner): string {
+	switch (owner.kind) {
+		case "core":
+			return "the core";
+		case "plugin":
+			return `plugin ${quote(owner.name)}`;
+	}
+}
+
 export function readOperations(
-	plugin: string,
+	owner: OperationOwner,
 	declared: unknown,
 ): OperationsRead {
 	if (declared === undefined) return { value: [], problems: [] };
@@ -47,7 +71,7 @@ export function readOperations(
 	const problems: string[] = [];
 	const seen = new Set<string>();
 	for (const [position, candidate] of declared.entries()) {
-		const read = readOperation(plugin, position, candidate);
+		const read = readOperation(owner, position, candidate);
 		if (!read.valid) {
 			problems.push(...read.problems);
 			continue;
@@ -69,7 +93,7 @@ type OperationRead =
 	| { readonly valid: false; readonly problems: readonly string[] };
 
 function readOperation(
-	plugin: string,
+	owner: OperationOwner,
 	position: number,
 	candidate: unknown,
 ): OperationRead {
@@ -86,7 +110,8 @@ function readOperation(
 				`operations[${position}].name must be a verb and an object in camelCase, such as "renameWorkspace"`,
 			],
 		};
-	const fullName = `${plugin}.${name}`;
+	const prefix = ownerName(owner);
+	const fullName = `${prefix}.${name}`;
 	const operation = `operation ${quote(fullName)}`;
 	const problems: string[] = [];
 	const accepted = <Value>(
@@ -105,8 +130,8 @@ function readOperation(
 		`${operation} must target ${alternatives(OPERATION_TARGETS)}`,
 	);
 	const validRight = accepted(
-		isRightOf(plugin, right) ? right : undefined,
-		`${operation} must name exactly one right of plugin ${quote(plugin)}, such as ${quote(`${plugin}.workspace.edit`)}`,
+		isRightOf(prefix, right) ? right : undefined,
+		`${operation} must name exactly one right of ${describeOwner(owner)}, such as ${quote(`${prefix}.workspace.edit`)}`,
 	);
 	const validateInput = accepted(
 		validatorOf(input),
@@ -133,7 +158,7 @@ function readOperation(
 		valid: true,
 		operation: {
 			name: fullName,
-			plugin,
+			owner,
 			kind: validKind,
 			target: validTarget,
 			right: validRight,
@@ -160,10 +185,10 @@ function isOneOf<Member extends string>(
 	return members.some((member) => member === value);
 }
 
-function isRightOf(plugin: string, right: unknown): right is string {
+function isRightOf(prefix: string, right: unknown): right is string {
 	return (
 		typeof right === "string" &&
-		right.startsWith(`${plugin}.`) &&
+		right.startsWith(`${prefix}.`) &&
 		RIGHT_NAME.test(right)
 	);
 }

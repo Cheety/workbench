@@ -63,7 +63,10 @@ export function validatePlugin(
 		definition.manifest,
 		offeredCapabilities,
 	);
-	const operations = readOperations(declaredName, definition.operations);
+	const operations = readOperations(
+		{ kind: "plugin", name: declaredName },
+		definition.operations,
+	);
 	const problems = [
 		...nameProblems(definition.manifest, declaredName),
 		...requires.problems,

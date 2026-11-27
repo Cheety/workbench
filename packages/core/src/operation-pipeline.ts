@@ -8,12 +8,18 @@ import {
 import type { SQL } from "bun";
 import { describeThrown } from "./failure-reason.ts";
 import type { Logger } from "./logger.ts";
-import type {
-	OperationRegistry,
-	RegisteredOperation,
+import {
+	type OperationOwner,
+	type OperationRegistry,
+	ownerName,
+	type RegisteredOperation,
 } from "./operation-registry.ts";
 import { quote } from "./quote.ts";
-import { pluginSchemaName } from "./schema-name.ts";
+import {
+	CORE_SCHEMA,
+	pluginSchemaName,
+	type SchemaName,
+} from "./schema-name.ts";
 import type { ValidationIssue } from "./schema-validation.ts";
 import { workspaceExists } from "./workspaces.ts";
 
@@ -134,7 +140,7 @@ async function invoke(
 		);
 		return { ok: true, output };
 	} catch (error) {
-		return failed(logAndMapFailure(error, logger, operation.plugin));
+		return failed(logAndMapFailure(error, logger, operation.owner));
 	}
 }
 
@@ -151,12 +157,21 @@ function inTransaction(
 	sql: SQL,
 	run: (transaction: SQL) => Promise<unknown>,
 ): Promise<unknown> {
-	const schema = pluginSchemaName(operation.plugin);
+	const schema = schemaOf(operation.owner);
 	const body = async (transaction: SQL): Promise<unknown> => {
 		await transaction.unsafe(`SET LOCAL search_path TO "${schema}"`);
 		return run(transaction);
 	};
 	return BEGIN_TRANSACTION[operation.kind](sql, body);
+}
+
+function schemaOf(owner: OperationOwner): SchemaName {
+	switch (owner.kind) {
+		case "core":
+			return CORE_SCHEMA;
+		case "plugin":
+			return pluginSchemaName(owner.name);
+	}
 }
 
 async function requireWorkspace(
@@ -210,12 +225,12 @@ async function runExecute(
 function logAndMapFailure(
 	error: unknown,
 	logger: Logger,
-	plugin: string,
+	owner: OperationOwner,
 ): OperationFailure {
 	if (error instanceof WorkspaceNotFoundError) return WORKSPACE_NOT_FOUND;
 	if (error instanceof OperationError)
 		return {
-			code: `${plugin}.${error.code}`,
+			code: `${ownerName(owner)}.${error.code}`,
 			kind: error.kind,
 			detail: error.message,
 			issues: [],

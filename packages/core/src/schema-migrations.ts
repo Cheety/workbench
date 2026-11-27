@@ -15,9 +15,9 @@ import {
 } from "./migration-files.ts";
 import { quote } from "./quote.ts";
 import {
+	CORE_SCHEMA,
 	SCHEMA_NAME_PATTERN,
 	type SchemaName,
-	schemaName,
 } from "./schema-name.ts";
 
 export type Migration = {
@@ -65,8 +65,6 @@ const MIGRATION_LOCK_KEY = BigInt(
 );
 
 const STOPPED: MigrationRun = { stopped: true };
-
-const CORE_SCHEMA = schemaName("core");
 
 export const CORE_MIGRATIONS_DIRECTORY = fileURLToPath(
 	new URL("../migrations/", import.meta.url),
