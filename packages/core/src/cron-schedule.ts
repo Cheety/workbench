@@ -100,7 +100,7 @@ export function readCronSchedule(expression: unknown): CronScheduleRead {
 }
 
 function scheduleOf(expression: string, fields: Fields): CronScheduleRead {
-	if (findNextAfter(fields, new Date(0)) === undefined)
+	if (findDue(fields, new Date(0), FORWARD) === undefined)
 		return invalid("never falls due");
 	const found = (due: Date | undefined): Date => {
 		if (due === undefined) throw new CronScheduleNeverDueError(expression);
@@ -109,8 +109,8 @@ function scheduleOf(expression: string, fields: Fields): CronScheduleRead {
 	return {
 		valid: true,
 		schedule: {
-			nextAfter: (time) => found(findNextAfter(fields, time)),
-			latestUpTo: (time) => found(findLatestUpTo(fields, time)),
+			nextAfter: (time) => found(findDue(fields, time, FORWARD)),
+			latestUpTo: (time) => found(findDue(fields, time, BACKWARD)),
 		},
 	};
 }
@@ -150,44 +150,67 @@ function readItem(
 	return values;
 }
 
-function findNextAfter(fields: Fields, time: Date): Date | undefined {
-	const start = Math.floor(time.getTime() / MINUTE_MS) * MINUTE_MS + MINUTE_MS;
-	const horizon = start + SEARCH_HORIZON_MS;
-	let candidate = start;
-	while (candidate <= horizon) {
-		const at = new Date(candidate);
-		const year = at.getUTCFullYear();
-		const month = at.getUTCMonth();
-		const day = at.getUTCDate();
-		const hour = at.getUTCHours();
-		if (!fields.months.has(month + 1)) candidate = Date.UTC(year, month + 1, 1);
-		else if (!isDueOnDay(fields, at))
-			candidate = Date.UTC(year, month, day + 1);
-		else if (!fields.hours.has(hour))
-			candidate = Date.UTC(year, month, day, hour + 1);
-		else if (!fields.minutes.has(at.getUTCMinutes())) candidate += MINUTE_MS;
-		else return at;
-	}
-	return undefined;
-}
+type SearchDirection = {
+	first(minute: number): number;
+	isWithinHorizon(candidate: number, first: number): boolean;
+	pastMonth(at: Date): number;
+	pastDay(at: Date): number;
+	pastHour(at: Date): number;
+	pastMinute(at: Date): number;
+};
 
-function findLatestUpTo(fields: Fields, time: Date): Date | undefined {
-	const start = Math.floor(time.getTime() / MINUTE_MS) * MINUTE_MS;
-	const horizon = start - SEARCH_HORIZON_MS;
-	let candidate = start;
-	while (candidate >= horizon) {
+const FORWARD: SearchDirection = {
+	first: (minute) => minute + MINUTE_MS,
+	isWithinHorizon: (candidate, first) => candidate <= first + SEARCH_HORIZON_MS,
+	pastMonth: (at) => Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + 1, 1),
+	pastDay: (at) =>
+		Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate() + 1),
+	pastHour: (at) =>
+		Date.UTC(
+			at.getUTCFullYear(),
+			at.getUTCMonth(),
+			at.getUTCDate(),
+			at.getUTCHours() + 1,
+		),
+	pastMinute: (at) => at.getTime() + MINUTE_MS,
+};
+
+const BACKWARD: SearchDirection = {
+	first: (minute) => minute,
+	isWithinHorizon: (candidate, first) => candidate >= first - SEARCH_HORIZON_MS,
+	pastMonth: (at) =>
+		Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), 1) - MINUTE_MS,
+	pastDay: (at) =>
+		Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()) -
+		MINUTE_MS,
+	pastHour: (at) =>
+		Date.UTC(
+			at.getUTCFullYear(),
+			at.getUTCMonth(),
+			at.getUTCDate(),
+			at.getUTCHours(),
+		) - MINUTE_MS,
+	pastMinute: (at) => at.getTime() - MINUTE_MS,
+};
+
+function findDue(
+	fields: Fields,
+	time: Date,
+	direction: SearchDirection,
+): Date | undefined {
+	const first = direction.first(
+		Math.floor(time.getTime() / MINUTE_MS) * MINUTE_MS,
+	);
+	let candidate = first;
+	while (direction.isWithinHorizon(candidate, first)) {
 		const at = new Date(candidate);
-		const year = at.getUTCFullYear();
-		const month = at.getUTCMonth();
-		const day = at.getUTCDate();
-		const hour = at.getUTCHours();
-		if (!fields.months.has(month + 1))
-			candidate = Date.UTC(year, month, 1) - MINUTE_MS;
-		else if (!isDueOnDay(fields, at))
-			candidate = Date.UTC(year, month, day) - MINUTE_MS;
-		else if (!fields.hours.has(hour))
-			candidate = Date.UTC(year, month, day, hour) - MINUTE_MS;
-		else if (!fields.minutes.has(at.getUTCMinutes())) candidate -= MINUTE_MS;
+		if (!fields.months.has(at.getUTCMonth() + 1))
+			candidate = direction.pastMonth(at);
+		else if (!isDueOnDay(fields, at)) candidate = direction.pastDay(at);
+		else if (!fields.hours.has(at.getUTCHours()))
+			candidate = direction.pastHour(at);
+		else if (!fields.minutes.has(at.getUTCMinutes()))
+			candidate = direction.pastMinute(at);
 		else return at;
 	}
 	return undefined;
