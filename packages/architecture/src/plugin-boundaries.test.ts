@@ -204,6 +204,20 @@ describe("the contract export of a plugin", () => {
 		expect(await findPluginBoundaryViolations(packages)).toEqual([]);
 	});
 
+	test("follows imports that leave out the extension or name a directory", async () => {
+		const packages = await packagesDirectoryWith({
+			...NOTES_PLUGIN,
+			"plugin-notes/src/contract/index.ts": [
+				'export type { Note } from "./note";',
+				'export type { NoteId } from "./ids/";',
+			].join("\n"),
+			"plugin-notes/src/contract/note.ts": "export type Note = {};",
+			"plugin-notes/src/contract/ids/index.ts": "export type NoteId = string;",
+		});
+
+		expect(await findPluginBoundaryViolations(packages)).toEqual([]);
+	});
+
 	test("rejects plugin code that a further file of the contract imports", async () => {
 		const packages = await packagesDirectoryWith({
 			...NOTES_PLUGIN,

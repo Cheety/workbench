@@ -46,7 +46,17 @@ const PACKAGE_JSON = "package.json";
 const CONTRACT_SUBPATH = "contract";
 const INSTALLED_DEPENDENCIES = "node_modules";
 const TEST_FILE = /\.test\.[cm]?[jt]sx?$/;
-const SOURCE_FILES = new Bun.Glob("**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}");
+const SOURCE_EXTENSIONS = [
+	"ts",
+	"tsx",
+	"mts",
+	"cts",
+	"js",
+	"jsx",
+	"mjs",
+	"cjs",
+];
+const SOURCE_FILES = new Bun.Glob(`**/*.{${SOURCE_EXTENSIONS.join(",")}}`);
 const GAP = String.raw`(?:\s|/\*[\s\S]*?\*/|//[^\n]*\n)*`;
 const MODULE_SPECIFIER = new RegExp(
 	String.raw`(?<![\w$.])(?:import\.meta\.resolve|require\.resolve|mock\.module|from|import|require)${GAP}\(?${GAP}(["'\x60])([^"'\x60\r\n]+)\1`,
@@ -128,11 +138,23 @@ function unreachedContractFiles(
 	for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
 		if (reached.has(file)) continue;
 		reached.add(file);
-		pending.push(...(contractImports.get(file) ?? []));
+		pending.push(
+			...(contractImports.get(file) ?? []).flatMap(sourceFilesNamedBy),
+		);
 	}
 	return Array.from(contractImports.keys()).filter(
 		(file) => !reached.has(file),
 	);
+}
+
+function sourceFilesNamedBy(path: string): string[] {
+	return [
+		path,
+		...SOURCE_EXTENSIONS.flatMap((extension) => [
+			`${path}.${extension}`,
+			join(path, `index.${extension}`),
+		]),
+	];
 }
 
 async function findPluginPackages(
