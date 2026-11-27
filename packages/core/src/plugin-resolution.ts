@@ -3,11 +3,16 @@ import type { PluginCatalog, PluginLoad } from "./plugin-catalog.ts";
 import type { ValidPlugin } from "./plugin-manifest.ts";
 import { quote } from "./quote.ts";
 
+export type PluginResolution = {
+	readonly valid: readonly ValidPlugin[];
+	readonly activationOrder: readonly ValidPlugin[];
+};
+
 export async function resolvePlugins(
 	catalog: PluginCatalog,
 	enabledPlugins: readonly string[],
 	failures: LoadFailures,
-): Promise<readonly ValidPlugin[]> {
+): Promise<PluginResolution> {
 	const loads = new Map<string, PluginLoad>();
 	for (const name of new Set(enabledPlugins))
 		loads.set(name, await catalog.load(name));
@@ -87,7 +92,12 @@ export async function resolvePlugins(
 	};
 
 	for (const name of enabledPlugins) await resolve(name);
-	return activationOrder;
+	return {
+		valid: [...loads.values()].flatMap((load) =>
+			load.loaded ? [load.plugin] : [],
+		),
+		activationOrder,
+	};
 }
 
 function findDependencyCycles(

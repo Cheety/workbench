@@ -271,7 +271,7 @@ Eine Mutation publiziert ein Event in `execute`:
 await ctx.publish(labelRenamed, { labelId: input.labelId });
 ```
 
-Der Core prüft die Payload gegen das Schema der Definition und schreibt das Event in die Outbox `core.events`, in der Transaktion der Mutation (ADR-0015): ID, Name, Version, Zeitpunkt in UTC, Workspace und Payload, dazu in `core.event_deliveries` je eine Zustellung für jedes aktive Plugin, das das Event abonniert. Die Payload ist, was das Schema aus dem übergebenen Wert macht; zod-Objekte lassen unbekannte Felder weg. Wird die Mutation zurückgerollt, gibt es das Event nicht, und kein Handler erfährt je davon.
+Der Core prüft die Payload gegen das Schema der Definition und schreibt das Event in die Outbox `core.events`, in der Transaktion der Mutation (ADR-0015): ID, Name, Version, Zeitpunkt in UTC, Workspace und Payload, dazu in `core.event_deliveries` je eine Zustellung für jedes in `PLUGINS` aktivierte Plugin, dessen gültige Definition das Event abonniert, auch wenn es gerade einen Ladefehler hat. Die Payload ist, was das Schema aus dem übergebenen Wert macht; zod-Objekte lassen unbekannte Felder weg. Wird die Mutation zurückgerollt, gibt es das Event nicht, und kein Handler erfährt je davon.
 
 `publish` wirft, und die Mutation scheitert mit `internal_error` (`execute_threw` im Log, mit dem Fehler in `error`), wenn
 
@@ -300,9 +300,9 @@ Eine gelungene Zustellung steht nur mit `LOG_LEVEL=debug` im Log, als Eintrag `e
 | `delivery_failed`   | Die Zustellung scheiterte außerhalb des Handlers, etwa beim Festschreiben (ein aufgeschobener Constraint) oder weil das Schema der Payload warf; der Fehler steht in `error`. |
 
 - Die Reihenfolge ist nicht zugesichert: Ein Event, dessen Zustellung scheitert, hält die folgenden nicht auf, gleich aus welchem Grund sie scheitert.
-- Ein Plugin, das beim Publizieren nicht aktiv ist, etwa wegen eines Ladefehlers, erhält dieses Event nie, auch nicht nach dem nächsten Start: Eine Zustellung entsteht nur für Plugins, die beim Publizieren aktiv sind. „Mindestens einmal“ gilt für entstandene Zustellungen.
+- Ein Plugin, das beim Publizieren in `PLUGINS` steht, aber nicht aktiv ist, etwa weil `activate` oder seine Migration scheiterte oder ein vorausgesetztes Plugin fehlt, erhält das Event, sobald es nach einem Neustart aktiv ist. Ausgenommen ist ein Plugin, dessen Definition selbst ungültig ist oder nicht geladen werden konnte (`invalid_manifest`, `load_timed_out`, `unknown_plugin`, `duplicate_plugin`): Für es entsteht keine Zustellung, und es erhält die Events aus dieser Zeit nie.
 - Die Version eines Events wird nicht mit der Version verglichen, die das abonnierende Plugin importiert hat. Passt die Payload einer anderen Version nicht zu dessen Schema, scheitert die Zustellung bei jedem Versuch mit `invalid_payload`, ohne Ende, bis es eine Obergrenze der Versuche gibt.
-- Eine Zustellung an ein Plugin, das gerade nicht aktiv ist, bleibt liegen, bis es wieder aktiv ist. Ein Plugin, das ein Event erst später abonniert, erhält die Events von davor nicht.
+- Eine Zustellung an ein Plugin, das gerade nicht aktiv ist, bleibt liegen, bis es wieder aktiv ist, ohne Frist. Ein Plugin, das ein Event erst später abonniert oder erst später in `PLUGINS` aufgenommen wird, erhält die Events von davor nicht.
 - Ein Handler publiziert bisher selbst keine Events.
 
 Die Instanz stellt zu, sobald eine Mutation mit Events festgeschrieben ist, und sieht zusätzlich jede Sekunde nach fälligen Zustellungen: nach Wiederholungen und nach Events, die ein Absturz oder ein anderer Prozess liegen ließ. Sie versucht eine Zustellung nach der anderen. Scheitert ein solcher Durchgang als Ganzes, etwa weil Postgres nicht antwortet, nennt das Log den Fehler im Eintrag `event delivery failed`, und der nächste Durchgang folgt nach einer Sekunde.

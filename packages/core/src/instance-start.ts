@@ -38,7 +38,7 @@ type StartFailure = "core_schema_not_migrated" | "plugin_schema_not_migrated";
 const NO_PLUGINS: StartedPlugins = {
 	failures: [],
 	operations: registerOperations([]),
-	events: registerEvents([]),
+	events: registerEvents({ active: [], notActive: [] }),
 	deactivate: async () => "clean",
 };
 

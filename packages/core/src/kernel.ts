@@ -86,7 +86,11 @@ export async function startPlugins(
 	const failures = new LoadFailures(logger);
 
 	const packages = await discoverPackages(options);
-	const active = await activateEnabledPlugins(packages, options, failures);
+	const { active, notActive } = await activateEnabledPlugins(
+		packages,
+		options,
+		failures,
+	);
 	const activeNames = active.map((plugin) => plugin.name);
 	logger.info("plugins started", {
 		active: activeNames,
@@ -101,7 +105,7 @@ export async function startPlugins(
 			...CORE_OPERATIONS,
 			...active.flatMap((plugin) => plugin.operations),
 		]),
-		events: registerEvents(active),
+		events: registerEvents({ active, notActive }),
 		deactivate: () => {
 			deactivation ??= deactivate(active, options);
 			return deactivation;
@@ -109,20 +113,25 @@ export async function startPlugins(
 	};
 }
 
+type EnabledPlugins = {
+	readonly active: readonly ValidPlugin[];
+	readonly notActive: readonly ValidPlugin[];
+};
+
 async function activateEnabledPlugins(
 	packages: readonly PluginPackage[],
 	options: KernelOptions,
 	failures: LoadFailures,
-): Promise<readonly ValidPlugin[]> {
+): Promise<EnabledPlugins> {
 	const { logger, stopSignal } = options;
 	const active: ValidPlugin[] = [];
 	if (stopSignal?.aborted) {
 		logger.info("plugin start stopped", {
 			notActivated: options.enabledPlugins,
 		});
-		return active;
+		return { active, notActive: [] };
 	}
-	const activationOrder = await resolvePlugins(
+	const { valid, activationOrder } = await resolvePlugins(
 		catalogPlugins(
 			packages,
 			[DATABASE_CAPABILITY, ...Object.keys(options.capabilityProviders)],
@@ -157,7 +166,10 @@ async function activateEnabledPlugins(
 			version: plugin.version,
 		});
 	}
-	return active;
+	return {
+		active,
+		notActive: valid.filter((plugin) => !active.includes(plugin)),
+	};
 }
 
 async function migratePluginSchemas(

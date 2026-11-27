@@ -233,22 +233,32 @@ export type EventParticipant = {
 	readonly subscriptions: readonly RegisteredSubscription[];
 };
 
-export function registerEvents(
-	participants: readonly EventParticipant[],
-): EventRegistry {
+export type EventParticipants = {
+	readonly active: readonly EventParticipant[];
+	readonly notActive: readonly EventParticipant[];
+};
+
+export function registerEvents({
+	active,
+	notActive,
+}: EventParticipants): EventRegistry {
 	const byName = new Map(
-		participants.flatMap(({ events }) =>
+		active.flatMap(({ events }) =>
 			events.map((event) => [event.name, event] as const),
 		),
 	);
-	const subscriptions = participants.flatMap(
+	const subscriptions = active.flatMap(
 		(participant) => participant.subscriptions,
 	);
+	const declared = [
+		...subscriptions,
+		...notActive.flatMap((participant) => participant.subscriptions),
+	];
 	return {
 		findEvent: (name) => byName.get(name),
 		subscriptions: () => subscriptions,
 		subscribersOf: (event) =>
-			subscriptions
+			declared
 				.filter((subscription) => subscription.event === event)
 				.map((subscription) => subscription.subscriber),
 		findSubscription: (subscriber, event) =>

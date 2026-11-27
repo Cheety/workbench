@@ -55,7 +55,7 @@ async function startTestServer(startupStatus: StartupStatus = "started") {
 			pipeline: createOperationPipeline({
 				sql,
 				registry: registerOperations([]),
-				events: registerEvents([]),
+				events: registerEvents({ active: [], notActive: [] }),
 				now: () => NOW,
 				newId: () => "00000000-0000-4000-8000-000000000001",
 				newAuditEntryId: () => "00000000-0000-4000-a000-000000000001",

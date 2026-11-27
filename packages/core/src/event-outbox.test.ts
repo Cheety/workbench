@@ -80,7 +80,7 @@ function registryOf(
 		events: readEvents("board", [labelRenamed]).value,
 		subscriptions: [],
 	};
-	return registerEvents([board, ...subscribers]);
+	return registerEvents({ active: [board, ...subscribers], notActive: [] });
 }
 
 const labelRenamedWithBrokenSchema = defineEvent({
@@ -333,7 +333,7 @@ describe("event delivery", () => {
 		const database = await freshDatabase();
 		const { delivery, entries } = deliveryOf({
 			sql: database.sql,
-			events: registerEvents([]),
+			events: registerEvents({ active: [], notActive: [] }),
 		});
 
 		await delivery.deliverDue(NOT_STOPPED);

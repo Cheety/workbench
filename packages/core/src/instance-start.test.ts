@@ -22,7 +22,7 @@ function pluginsWith(...failures: LoadFailure[]): StartedPlugins {
 	return {
 		failures,
 		operations: registerOperations([]),
-		events: registerEvents([]),
+		events: registerEvents({ active: [], notActive: [] }),
 		deactivate: async () => "clean",
 	};
 }
@@ -288,9 +288,10 @@ describe("events of an instance", () => {
 			steps({
 				startPlugins: async () => ({
 					...pluginsWith(),
-					events: registerEvents([
-						{ events: [labelRenamed], subscriptions: [indexLabel] },
-					]),
+					events: registerEvents({
+						active: [{ events: [labelRenamed], subscriptions: [indexLabel] }],
+						notActive: [],
+					}),
 				}),
 			}),
 			recordingLogger().logger,

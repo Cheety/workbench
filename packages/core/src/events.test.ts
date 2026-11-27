@@ -13,6 +13,7 @@ import {
 } from "@workbench/sdk";
 import { z } from "zod";
 import { Secret } from "./config.ts";
+import { createEventDelivery } from "./event-outbox.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import { type PluginPackage, startPlugins } from "./kernel.ts";
 import { createOperationPipeline } from "./operation-pipeline.ts";
@@ -27,7 +28,7 @@ import {
 	type OperationHarnessOptions,
 	startOperationHarness,
 } from "./testing/operation-harness.ts";
-import { createFreshDatabase } from "./testing/postgres.ts";
+import { createFreshDatabase, type FreshDatabase } from "./testing/postgres.ts";
 import { recordingLogger } from "./testing/recording-logger.ts";
 import { createWorkspace } from "./workspaces.ts";
 
@@ -306,6 +307,132 @@ async function startLedgerPipeline(eventsCommitted: () => void) {
 		random: () => 0.5,
 		logger,
 	});
+}
+
+async function migratedDatabase(): Promise<FreshDatabase> {
+	const database = await createFreshDatabase();
+	cleanups.push(() => database.drop());
+	await migrateCoreSchema(
+		migrationRunner(database),
+		CORE_MIGRATIONS_DIRECTORY,
+		NOT_STOPPED,
+	);
+	await createWorkspace(database.sql, {
+		id: WORKSPACE,
+		name: "Alpha",
+		createdAt: new Date("2026-11-27T09:00:00.000Z"),
+	});
+	return database;
+}
+
+function migrationRunner(database: FreshDatabase): MigrationRunner {
+	return {
+		databaseUrl: new Secret(database.url),
+		connectionTimeoutMs: 10_000,
+		statementTimeoutMs: 60_000,
+		lockRetryDelayMs: () => 0,
+		setTimer: setSystemTimer,
+		logger: recordingLogger().logger,
+	};
+}
+
+async function startInstanceOn(
+	database: FreshDatabase,
+	packages: readonly PluginPackage[],
+) {
+	const { logger } = recordingLogger();
+	const plugins = await startPlugins({
+		discover: async () => ({ packages, unreadable: [] }),
+		enabledPlugins: packages.map((plugin) => plugin.pluginName),
+		capabilityProviders: {},
+		migrateSchemas: (schemas) =>
+			migrateSchemas(migrationRunner(database), schemas, NOT_STOPPED),
+		hookTimeout: { ms: 10_000, setTimer: setSystemTimer },
+		logger,
+	});
+	const sources = {
+		sql: database.sql,
+		events: plugins.events,
+		now: () => new Date("2026-11-27T09:00:00.000Z"),
+		newId: () => crypto.randomUUID(),
+		random: () => 0.5,
+		logger,
+	};
+	const pipeline = createOperationPipeline({
+		...sources,
+		registry: plugins.operations,
+		newAuditEntryId: () => crypto.randomUUID(),
+		newEventId: () => crypto.randomUUID(),
+		eventsCommitted: () => {},
+	});
+	const delivery = createEventDelivery({
+		...sources,
+		handlerTimeout: { ms: 10_000, setTimer: setSystemTimer },
+	});
+	return {
+		failures: plugins.failures,
+		addEntry: () =>
+			pipeline.invoke({
+				operation: "ledger.addEntry",
+				actor: ALICE,
+				apiTokenId: null,
+				workspace: WORKSPACE,
+				input: { amount: 5 },
+				correlationId: "request-1",
+			}),
+		deliverEvents: () => delivery.deliverDue(NOT_STOPPED),
+		stop: () => plugins.deactivate(),
+	};
+}
+
+function failingToActivate(plugin: PluginPackage): PluginPackage {
+	return {
+		...plugin,
+		loadDefinition: async () => ({
+			...z.looseObject({}).parse(await plugin.loadDefinition()),
+			activate: async () => {
+				throw new Error("the statistics store is unreachable");
+			},
+		}),
+	};
+}
+
+const statisticsWithoutCapability: PluginPackage = {
+	packageName: "@workbench/plugin-statistics",
+	pluginName: "statistics",
+	version: "1.0.0",
+	loadDefinition: async () =>
+		definePlugin({
+			manifest: { name: "statistics" },
+			subscriptions: [
+				defineEventSubscription({ event: entryAdded, handle: async () => {} }),
+			],
+		}),
+};
+
+const forecastRequiringAnAbsentPlugin: PluginPackage = {
+	packageName: "@workbench/plugin-forecast",
+	pluginName: "forecast",
+	version: "1.0.0",
+	loadDefinition: async () =>
+		definePlugin({
+			manifest: {
+				name: "forecast",
+				requires: { weather: "^1.0.0" },
+				capabilities: [eventSubscriptionCapability(entryAdded)],
+			},
+			subscriptions: [
+				defineEventSubscription({ event: entryAdded, handle: async () => {} }),
+			],
+		}),
+};
+
+async function subscribersWithDeliveries(
+	database: FreshDatabase,
+): Promise<unknown[]> {
+	const rows: unknown[] =
+		await database.sql`SELECT subscriber FROM core.event_deliveries ORDER BY subscriber`;
+	return [...rows];
 }
 
 async function start(
@@ -589,6 +716,63 @@ describe("an event whose handler fails", () => {
 				issues: [expect.objectContaining({ path: ["currency"] })],
 				attempt: 1,
 			}),
+		]);
+	});
+});
+
+describe("an event published while a subscribing plugin has a load failure", () => {
+	test("reaches the handler once the instance starts again with the plugin active", async () => {
+		const database = await migratedDatabase();
+		const statistics = recording("statistics");
+		const beforeRestart = await startInstanceOn(database, [
+			ledger,
+			failingToActivate(statistics.plugin),
+		]);
+		const added = await beforeRestart.addEntry();
+		await beforeRestart.deliverEvents();
+		const receivedBeforeRestart = [...statistics.received];
+		await beforeRestart.stop();
+
+		const afterRestart = await startInstanceOn(database, [
+			ledger,
+			statistics.plugin,
+		]);
+		cleanups.push(async () => {
+			await afterRestart.stop();
+		});
+		await afterRestart.deliverEvents();
+
+		expect(beforeRestart.failures).toEqual([
+			expect.objectContaining({
+				plugin: "statistics",
+				reason: "activation_failed",
+			}),
+		]);
+		expect(added).toEqual(expect.objectContaining({ ok: true }));
+		expect(receivedBeforeRestart).toEqual([]);
+		expect(statistics.received).toEqual([
+			expect.objectContaining({ name: "ledger.EntryAdded" }),
+		]);
+	});
+
+	test("is kept for each enabled plugin whose valid definition subscribes to it, and not for one whose definition is invalid", async () => {
+		const database = await migratedDatabase();
+		const reports = recording("reports");
+		const instance = await startInstanceOn(database, [
+			ledger,
+			statisticsWithoutCapability,
+			failingToActivate(reports.plugin),
+			forecastRequiringAnAbsentPlugin,
+		]);
+		cleanups.push(async () => {
+			await instance.stop();
+		});
+
+		await instance.addEntry();
+
+		expect(await subscribersWithDeliveries(database)).toEqual([
+			{ subscriber: "forecast" },
+			{ subscriber: "reports" },
 		]);
 	});
 });
