@@ -96,6 +96,22 @@ describe("plugin imports of the core", () => {
 describe("the packages of this repository", () => {
 	const packages = join(import.meta.dir, "..", "..");
 
+	test("include the reference plugin, whose import is found", async () => {
+		const consumer = await packagesDirectoryWith({
+			"consumer/src/kernel.ts":
+				'import type { Note } from "@workbench/plugin-reference/contract";',
+		});
+
+		expect(
+			await findPluginImports(join(consumer, "consumer"), packages),
+		).toEqual([
+			{
+				file: "src/kernel.ts",
+				importPath: "@workbench/plugin-reference/contract",
+			},
+		]);
+	});
+
 	test.each([["core"], ["sdk"]])(
 		"%s imports no plugin package, which the kernel finds at runtime",
 		async (packageDirectory) => {

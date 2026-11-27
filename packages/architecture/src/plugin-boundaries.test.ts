@@ -2,7 +2,10 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { findPluginBoundaryViolations } from "./plugin-boundaries.ts";
+import {
+	findPluginBoundaryViolations,
+	findPluginPackages,
+} from "./plugin-boundaries.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -388,9 +391,23 @@ describe("the contract export of a plugin", () => {
 });
 
 describe("the plugin packages of this repository", () => {
-	test("import one another only through contracts that hold no plugin code", async () => {
+	const packages = join(import.meta.dir, "..", "..");
+
+	test("include the reference plugin with its published contract", async () => {
+		const plugins = await findPluginPackages(packages);
+
 		expect(
-			await findPluginBoundaryViolations(join(import.meta.dir, "..", "..")),
-		).toEqual([]);
+			plugins.map(({ packageName, contract }) => ({
+				packageName,
+				contract: contract.kind,
+			})),
+		).toContainEqual({
+			packageName: "@workbench/plugin-reference",
+			contract: "published",
+		});
+	});
+
+	test("import one another only through contracts that hold no plugin code", async () => {
+		expect(await findPluginBoundaryViolations(packages)).toEqual([]);
 	});
 });
