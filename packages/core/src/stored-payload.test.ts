@@ -15,6 +15,12 @@ function cycle(): unknown {
 	return card;
 }
 
+function nested(levels: number): unknown {
+	let payload: unknown = "card-1";
+	for (let level = 0; level < levels; level += 1) payload = [payload];
+	return payload;
+}
+
 describe("the stored form of a payload", () => {
 	test("is the JSON of what the schema makes of the payload", async () => {
 		const validate = validating(z.object({ cardId: z.string().trim() }));
@@ -112,6 +118,51 @@ describe("the stored form of a payload", () => {
 			expect(stored).toEqual({ valid: true, json });
 		},
 	);
+
+	test.each([
+		["one level too deep", 101],
+		["far deeper than the stack of the process", 20_000],
+	])("is rejected for a payload nested %s", async (_case, levels) => {
+		const stored = await storedPayloadOf(
+			nested(levels),
+			validating(z.unknown()),
+		);
+
+		expect(stored).toEqual({
+			valid: false,
+			issues: [
+				{
+					path: [],
+					message: "the payload is nested deeper than 100 levels",
+				},
+			],
+		});
+	});
+
+	test("is rejected when the schema nests an accepted payload too deep", async () => {
+		const validate = validating(z.unknown().transform(() => nested(101)));
+
+		const stored = await storedPayloadOf("card-1", validate);
+
+		expect(stored).toEqual({
+			valid: false,
+			issues: [
+				{
+					path: [],
+					message: "the payload is nested deeper than 100 levels",
+				},
+			],
+		});
+	});
+
+	test("is accepted for a payload nested as deep as the core allows", async () => {
+		const stored = await storedPayloadOf(nested(100), validating(z.unknown()));
+
+		expect(stored).toEqual({
+			valid: true,
+			json: `${"[".repeat(100)}"card-1"${"]".repeat(100)}`,
+		});
+	});
 
 	test.each([
 		["nothing", undefined],
