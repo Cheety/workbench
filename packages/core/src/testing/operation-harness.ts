@@ -180,7 +180,7 @@ function harnessOf(
 				apiTokenId: null,
 				correlationId: newCorrelationId(),
 			}),
-		deliverEvents: () => delivery.deliverDue(),
+		deliverEvents: () => delivery.deliverDue(NOT_STOPPED),
 		stop: async () => {
 			try {
 				await plugins.deactivate();

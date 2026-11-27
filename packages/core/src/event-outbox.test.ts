@@ -3,6 +3,7 @@ import { defineEvent } from "@workbench/sdk";
 import { SQL } from "bun";
 import { z } from "zod";
 import { Secret } from "./config.ts";
+import { startEventDeliveryLoop } from "./event-delivery-loop.ts";
 import { createEventDelivery, recordEvent } from "./event-outbox.ts";
 import {
 	type EventRegistry,
@@ -28,6 +29,8 @@ const NOW = new Date("2026-11-27T09:00:00.000Z");
 const LATER = new Date("2026-11-27T10:00:00.000Z");
 
 const WORKSPACE = "00000000-0000-4000-8000-00000000aaaa";
+
+const NOT_STOPPED = new AbortController().signal;
 
 const NEVER_EXPIRING: HookTimeout = { ms: 10_000, setTimer: () => () => {} };
 
@@ -171,6 +174,8 @@ function deferred() {
 
 const EVENT = "00000000-0000-4000-e000-000000000001";
 
+const LATER_EVENT = "00000000-0000-4000-e000-000000000002";
+
 describe("event delivery", () => {
 	test("gives up on a handler that does not finish in time and delivers the event again once its retry is due", async () => {
 		const database = await migratedDatabase();
@@ -192,13 +197,13 @@ describe("event delivery", () => {
 		});
 
 		const timerSet = timer.set();
-		const delivering = delivery.deliverDue();
+		const delivering = delivery.deliverDue(NOT_STOPPED);
 		await timerSet;
 		timer.expire();
 		await delivering;
 		now = LATER;
-		await delivery.deliverDue();
-		await delivery.deliverDue();
+		await delivery.deliverDue(NOT_STOPPED);
+		await delivery.deliverDue(NOT_STOPPED);
 
 		expect(attempts).toBe(2);
 		expect(failuresIn(entries)).toEqual([
@@ -227,12 +232,12 @@ describe("event delivery", () => {
 		await deliveryOf({
 			sql: database.sql,
 			events: registryOf(subscription("statistics", async () => {})),
-		}).delivery.deliverDue();
+		}).delivery.deliverDue(NOT_STOPPED);
 		const handledWhileInactive = [...handled];
 		await deliveryOf({
 			sql: database.sql,
 			events: withSearch,
-		}).delivery.deliverDue();
+		}).delivery.deliverDue(NOT_STOPPED);
 
 		expect(handledWhileInactive).toEqual([]);
 		expect(handled).toEqual([EVENT]);
@@ -245,7 +250,7 @@ describe("event delivery", () => {
 			events: registerEvents([]),
 		});
 
-		await delivery.deliverDue();
+		await delivery.deliverDue(NOT_STOPPED);
 
 		expect(entries).toEqual([]);
 	});
@@ -269,12 +274,63 @@ describe("event delivery", () => {
 		const first = deliveryOf({
 			sql: database.sql,
 			events,
-		}).delivery.deliverDue();
+		}).delivery.deliverDue(NOT_STOPPED);
 		await entered.promise;
-		await deliveryOf({ sql: second, events }).delivery.deliverDue();
+		await deliveryOf({ sql: second, events }).delivery.deliverDue(NOT_STOPPED);
 		release.resolve();
 		await first;
 
 		expect(handled).toEqual([EVENT]);
+	});
+
+	test("attempts no further delivery once it is told to stop, and leaves the rest for the next run", async () => {
+		const database = await migratedDatabase();
+		const stopping = new AbortController();
+		const handled: string[] = [];
+		const events = registryOf(
+			subscription("search", async (event) => {
+				handled.push(event.id);
+				stopping.abort();
+			}),
+		);
+		await publishLabelRenamed(database.sql, events, EVENT);
+		await publishLabelRenamed(database.sql, events, LATER_EVENT);
+		const { delivery } = deliveryOf({ sql: database.sql, events });
+
+		await delivery.deliverDue(stopping.signal);
+		const handledUntilStopped = [...handled];
+		await delivery.deliverDue(NOT_STOPPED);
+
+		expect(handledUntilStopped).toEqual([EVENT]);
+		expect(handled).toEqual([EVENT, LATER_EVENT]);
+	});
+});
+
+describe("the event delivery loop on the outbox", () => {
+	test("delivers an event when it is woken, without waiting for its poll interval", async () => {
+		const database = await migratedDatabase();
+		const handled = deferred();
+		const events = registryOf(
+			subscription("search", async () => {
+				handled.resolve();
+			}),
+		);
+		await publishLabelRenamed(database.sql, events, EVENT);
+		const { logger } = recordingLogger();
+		const loop = startEventDeliveryLoop({
+			delivery: deliveryOf({ sql: database.sql, events }).delivery,
+			pollIntervalMs: 1_000,
+			setTimer: () => () => {},
+			logger,
+		});
+		cleanups.push(() => loop.stop());
+
+		loop.wake();
+		await handled.promise;
+		await loop.stop();
+
+		const [delivery] =
+			await database.sql`SELECT delivered_at FROM core.event_deliveries WHERE event_id = ${EVENT}`;
+		expect(delivery).toEqual({ delivered_at: NOW });
 	});
 });

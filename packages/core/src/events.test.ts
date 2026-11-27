@@ -12,12 +12,24 @@ import {
 	type PublishedEvent,
 } from "@workbench/sdk";
 import { z } from "zod";
-import type { PluginPackage } from "./kernel.ts";
+import { Secret } from "./config.ts";
+import { setSystemTimer } from "./hook-timeout.ts";
+import { type PluginPackage, startPlugins } from "./kernel.ts";
+import { createOperationPipeline } from "./operation-pipeline.ts";
+import {
+	CORE_MIGRATIONS_DIRECTORY,
+	type MigrationRunner,
+	migrateCoreSchema,
+	migrateSchemas,
+} from "./schema-migrations.ts";
 import {
 	type OperationHarness,
 	type OperationHarnessOptions,
 	startOperationHarness,
 } from "./testing/operation-harness.ts";
+import { createFreshDatabase } from "./testing/postgres.ts";
+import { recordingLogger } from "./testing/recording-logger.ts";
+import { createWorkspace } from "./workspaces.ts";
 
 const ALICE: Actor = { kind: "user", id: "alice" };
 
@@ -236,10 +248,60 @@ function recording(name: string) {
 }
 
 const harnesses: OperationHarness[] = [];
+const cleanups: (() => Promise<void>)[] = [];
 
 afterEach(async () => {
 	for (const harness of harnesses.splice(0)) await harness.stop();
+	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
+
+const NOT_STOPPED = new AbortController().signal;
+
+const WORKSPACE = "00000000-0000-4000-8000-00000000aaaa";
+
+async function startLedgerPipeline(eventsCommitted: () => void) {
+	const { logger } = recordingLogger();
+	const database = await createFreshDatabase();
+	cleanups.push(() => database.drop());
+	const runner: MigrationRunner = {
+		databaseUrl: new Secret(database.url),
+		connectionTimeoutMs: 10_000,
+		statementTimeoutMs: 60_000,
+		lockRetryDelayMs: () => 0,
+		setTimer: setSystemTimer,
+		logger,
+	};
+	await migrateCoreSchema(runner, CORE_MIGRATIONS_DIRECTORY, NOT_STOPPED);
+	const plugins = await startPlugins({
+		discover: async () => ({ packages: [ledger], unreadable: [] }),
+		enabledPlugins: ["ledger"],
+		capabilityProviders: {},
+		migrateSchemas: (schemas) => migrateSchemas(runner, schemas, NOT_STOPPED),
+		hookTimeout: { ms: 10_000, setTimer: setSystemTimer },
+		logger,
+	});
+	cleanups.push(async () => {
+		await plugins.deactivate();
+	});
+	const now = new Date("2026-11-27T09:00:00.000Z");
+	await createWorkspace(database.sql, {
+		id: WORKSPACE,
+		name: "Alpha",
+		createdAt: now,
+	});
+	return createOperationPipeline({
+		sql: database.sql,
+		registry: plugins.operations,
+		events: plugins.events,
+		now: () => now,
+		newId: () => crypto.randomUUID(),
+		newAuditEntryId: () => crypto.randomUUID(),
+		newEventId: () => crypto.randomUUID(),
+		eventsCommitted,
+		random: () => 0.5,
+		logger,
+	});
+}
 
 async function start(
 	plugins: readonly PluginPackage[],
@@ -598,4 +660,31 @@ describe("a query", () => {
 		);
 		expect(statistics.received).toEqual([]);
 	});
+});
+
+describe("the pipeline", () => {
+	test.each([
+		["once after a mutation that published an event", "ledger.addEntry", 5, 1],
+		["not after a mutation that was rolled back", "ledger.addEntry", -5, 0],
+		["not after a query", "ledger.countEntries", 5, 0],
+	])(
+		"tells the delivery that events were committed %s",
+		async (_case, operation, amount, expected) => {
+			let told = 0;
+			const pipeline = await startLedgerPipeline(() => {
+				told += 1;
+			});
+
+			await pipeline.invoke({
+				operation,
+				actor: ALICE,
+				apiTokenId: null,
+				workspace: WORKSPACE,
+				input: { amount },
+				correlationId: "request-1",
+			});
+
+			expect(told).toBe(expected);
+		},
+	);
 });

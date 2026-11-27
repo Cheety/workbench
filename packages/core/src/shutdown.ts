@@ -1,3 +1,4 @@
+import type { EventDeliveryLoop } from "./event-delivery-loop.ts";
 import { describeThrown } from "./failure-reason.ts";
 import type { RunningPlugins } from "./kernel.ts";
 import type { Logger } from "./logger.ts";
@@ -11,6 +12,7 @@ type Deactivatable = Pick<RunningPlugins, "deactivate">;
 export type RunningInstance = {
 	readonly stopStartingPlugins: () => void;
 	readonly server: Pick<RunningServer, "stop">;
+	readonly eventDelivery: Pick<EventDeliveryLoop, "stop">;
 	readonly plugins: Deactivatable | Promise<Deactivatable>;
 	readonly database: { readonly close: () => Promise<void> };
 };
@@ -23,9 +25,32 @@ export async function shutDownInstance(
 	const plugins = Promise.resolve(instance.plugins);
 	await plugins.catch(() => {});
 	const serverExitCode = await shutDown(instance.server, logger);
+	const eventDeliveryExitCode = await stopEventDelivery(
+		instance.eventDelivery,
+		logger,
+	);
 	const pluginsExitCode = await deactivatePlugins(plugins, logger);
 	const databaseExitCode = await closeDatabase(instance.database, logger);
-	return serverExitCode === 0 && pluginsExitCode === 0 ? databaseExitCode : 1;
+	return serverExitCode === 0 &&
+		eventDeliveryExitCode === 0 &&
+		pluginsExitCode === 0
+		? databaseExitCode
+		: 1;
+}
+
+async function stopEventDelivery(
+	eventDelivery: RunningInstance["eventDelivery"],
+	logger: Logger,
+): Promise<ExitCode> {
+	try {
+		await eventDelivery.stop();
+		return 0;
+	} catch (error) {
+		logger.error("event delivery failed to stop", {
+			error: describeThrown(error),
+		});
+		return 1;
+	}
 }
 
 async function closeDatabase(

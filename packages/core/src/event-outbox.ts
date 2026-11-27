@@ -83,7 +83,7 @@ export type EventDeliveryOptions = {
 };
 
 export type EventDelivery = {
-	deliverDue(): Promise<void>;
+	deliverDue(stopSignal: AbortSignal): Promise<void>;
 };
 
 const RETRY = { baseMs: 1_000, capMs: 300_000 } as const;
@@ -137,11 +137,11 @@ export function createEventDelivery(
 ): EventDelivery {
 	const retryDelayMs = fullJitterBackoff({ ...RETRY, random: options.random });
 	return {
-		deliverDue: async () => {
+		deliverDue: async (stopSignal) => {
 			const subscriptions = options.events.subscriptions();
 			if (subscriptions.length === 0) return;
 			let position = BEFORE_ALL;
-			for (;;) {
+			while (!stopSignal.aborted) {
 				const attempt = await options.sql.begin((transaction) =>
 					attemptNext(transaction, subscriptions, position, {
 						...options,
