@@ -179,7 +179,8 @@ function dueCronJobEnqueuerOf({
 	sql,
 	jobs,
 	newJobId,
-}: Pick<JobQueueOptions, "sql" | "jobs" | "newJobId">): (
+	logger,
+}: Pick<JobQueueOptions, "sql" | "jobs" | "newJobId" | "logger">): (
 	dueBy: Date,
 ) => Promise<void> {
 	const enqueuedDue = new Map<string, number>();
@@ -191,7 +192,8 @@ function dueCronJobEnqueuerOf({
 		for (const job of jobs.cronJobs()) {
 			if (isEnqueuedBeyond(job, dueBy)) continue;
 			const next = job.schedule.nextAfter(dueBy);
-			const dueTimes = [...(await missedDueTimes(sql, job, dueBy)), next];
+			const missed = await missedDueTimesOf(sql, job, dueBy);
+			const dueTimes = [...missed.caughtUp, next];
 			await sql`
 				INSERT INTO core.jobs (id, name, due_at, enqueued_at, next_attempt_at)
 				SELECT due.id, ${job.name}, due.at::timestamptz, ${dueBy}, due.at::timestamptz
@@ -207,28 +209,42 @@ function dueCronJobEnqueuerOf({
 				) AS due (id, at)
 				ON CONFLICT (name, due_at) DO NOTHING`;
 			enqueuedDue.set(job.name, next.getTime());
+			if (missed.skippedAfter !== undefined)
+				logger.warn("cron due times skipped", {
+					job: job.name,
+					latestEnqueuedDueAt: missed.skippedAfter,
+					oldestCaughtUpDueAt: missed.caughtUp[0],
+				});
 		}
 	};
 }
 
 const latestDueTime = z.object({ latest: z.date().nullable() });
 
-async function missedDueTimes(
+type MissedDueTimes = {
+	readonly caughtUp: readonly Date[];
+	readonly skippedAfter: Date | undefined;
+};
+
+async function missedDueTimesOf(
 	sql: SQL,
 	job: RegisteredCronJob,
 	dueBy: Date,
-): Promise<readonly Date[]> {
+): Promise<MissedDueTimes> {
 	const [row]: unknown[] = await sql`
 		SELECT max(due_at) AS latest FROM core.jobs WHERE name = ${job.name}`;
 	const { latest } = latestDueTime.parse(row);
-	if (latest === null) return [];
+	if (latest === null) return { caughtUp: [], skippedAfter: undefined };
 	const missed: Date[] = [];
 	let due = job.schedule.latestUpTo(dueBy);
 	while (due > latest && missed.length < MOST_CAUGHT_UP_DUE_TIMES) {
 		missed.push(due);
 		due = job.schedule.latestUpTo(new Date(due.getTime() - 1));
 	}
-	return missed.toReversed();
+	return {
+		caughtUp: missed.toReversed(),
+		skippedAfter: due > latest ? latest : undefined,
+	};
 }
 
 async function claimNext(

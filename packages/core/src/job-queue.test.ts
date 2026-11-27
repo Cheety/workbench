@@ -639,6 +639,10 @@ function everyMinute(run: Date[]): JobRegistry {
 	);
 }
 
+function skippedDueTimesIn(entries: readonly LogEntry[]): LogEntry[] {
+	return entries.filter((entry) => entry.message === "cron due times skipped");
+}
+
 describe("a cron job whose due times pass before a run of the queue enqueues them", () => {
 	test("runs for each due time since the last one that was enqueued, when a run of the queue took longer than its period", async () => {
 		const database = await migratedDatabase();
@@ -691,6 +695,49 @@ describe("a cron job whose due times pass before a run of the queue enqueues the
 			new Date("2026-12-04T11:59:00.000Z"),
 			new Date("2026-12-04T12:00:00.000Z"),
 		]);
+	});
+
+	test("tells the operator once which due times it skipped, when more than ten passed", async () => {
+		const database = await migratedDatabase();
+		let now = new Date("2026-11-27T12:00:30.000Z");
+		const { queue, entries } = queueOf({
+			sql: database.sql,
+			jobs: everyMinute([]),
+			now: () => now,
+		});
+
+		await queue.runDue(NOT_STOPPED);
+		now = new Date("2026-11-27T12:12:30.000Z");
+		await queue.runDue(NOT_STOPPED);
+		now = new Date("2026-11-27T12:13:00.000Z");
+		await queue.runDue(NOT_STOPPED);
+
+		expect(skippedDueTimesIn(entries)).toEqual([
+			expect.objectContaining({
+				level: "warn",
+				job: "mailer.sendDigest",
+				latestEnqueuedDueAt: "2026-11-27T12:01:00.000Z",
+				oldestCaughtUpDueAt: "2026-11-27T12:03:00.000Z",
+			}),
+		]);
+	});
+
+	test("warns of no skipped due time when it catches up on all ten that passed", async () => {
+		const database = await migratedDatabase();
+		const run: Date[] = [];
+		let now = new Date("2026-11-27T12:00:30.000Z");
+		const { queue, entries } = queueOf({
+			sql: database.sql,
+			jobs: everyMinute(run),
+			now: () => now,
+		});
+
+		await queue.runDue(NOT_STOPPED);
+		now = new Date("2026-11-27T12:11:30.000Z");
+		await queue.runDue(NOT_STOPPED);
+
+		expect(run).toHaveLength(11);
+		expect(skippedDueTimesIn(entries)).toEqual([]);
 	});
 
 	test("runs for the due times another process left out, not again for those it enqueued", async () => {
