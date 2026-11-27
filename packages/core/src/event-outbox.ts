@@ -66,9 +66,11 @@ export async function recordEvent(
 		INSERT INTO core.events (id, name, version, occurred_at, workspace_id, payload)
 		VALUES (${publication.id}, ${name}, ${event.version}, ${publication.occurredAt}, ${publication.workspace}, ${payload.value})`;
 	await transaction`
-		INSERT INTO core.event_deliveries (event_id, subscriber, next_attempt_at)
-		SELECT ${publication.id}, subscriber, ${publication.occurredAt}
-		FROM unnest(${transaction.array([...events.subscribersOf(name)], "TEXT")}::text[]) AS subscriber`;
+		INSERT INTO core.event_deliveries (event_id, event_sequence, subscriber, next_attempt_at)
+		SELECT e.id, e.sequence, subscriber, ${publication.occurredAt}
+		FROM core.events e
+		CROSS JOIN unnest(${transaction.array([...events.subscribersOf(name)], "TEXT")}::text[]) AS subscriber
+		WHERE e.id = ${publication.id}`;
 }
 
 export type EventDeliveryOptions = {
@@ -187,25 +189,37 @@ async function findNextDue(
 ): Promise<DueDelivery | undefined> {
 	const subscriptions = events.subscriptions();
 	const [row]: unknown[] = await sql`
-		SELECT e.id, e.sequence, e.name, d.subscriber, d.attempts
-		FROM core.event_deliveries d
-		JOIN core.events e ON e.id = d.event_id
-		WHERE d.delivered_at IS NULL
-			AND d.next_attempt_at <= ${now}
-			AND (d.subscriber, e.name) IN (
-				SELECT * FROM unnest(
-					${sql.array(
-						subscriptions.map(({ subscriber }) => subscriber),
-						"TEXT",
-					)}::text[],
-					${sql.array(
-						subscriptions.map(({ event }) => event),
-						"TEXT",
-					)}::text[]
-				)
+		WITH subscription (subscriber, event) AS (
+			SELECT * FROM unnest(
+				${sql.array(
+					subscriptions.map(({ subscriber }) => subscriber),
+					"TEXT",
+				)}::text[],
+				${sql.array(
+					subscriptions.map(({ event }) => event),
+					"TEXT",
+				)}::text[]
 			)
-			AND (e.sequence, d.subscriber) > (${after.sequence}::bigint, ${after.subscriber})
-		ORDER BY e.sequence, d.subscriber
+		)
+		SELECT due.id, due.sequence, due.name, due.subscriber, due.attempts
+		FROM (SELECT DISTINCT subscriber FROM subscription) active
+		CROSS JOIN LATERAL (
+			SELECT e.id, d.event_sequence AS sequence, e.name, d.subscriber, d.attempts
+			FROM core.event_deliveries d
+			JOIN core.events e ON e.id = d.event_id
+			WHERE d.subscriber = active.subscriber
+				AND d.delivered_at IS NULL
+				AND d.next_attempt_at <= ${now}
+				AND d.event_sequence >= ${after.sequence}::bigint
+				AND (d.event_sequence, d.subscriber) > (${after.sequence}::bigint, ${after.subscriber})
+				AND EXISTS (
+					SELECT FROM subscription s
+					WHERE s.subscriber = d.subscriber AND s.event = e.name
+				)
+			ORDER BY d.event_sequence
+			LIMIT 1
+		) due
+		ORDER BY due.sequence, due.subscriber
 		LIMIT 1`;
 	return row === undefined ? undefined : dueDelivery.parse(row);
 }

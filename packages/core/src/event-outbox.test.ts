@@ -24,10 +24,14 @@ import {
 	type SetTimer,
 	setSystemTimer,
 } from "./hook-timeout.ts";
+import { readMigrations } from "./migration-files.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
+	type MigrationRunner,
 	migrateCoreSchema,
+	migrateSchemas,
 } from "./schema-migrations.ts";
+import { CORE_SCHEMA } from "./schema-name.ts";
 import { createFreshDatabase, type FreshDatabase } from "./testing/postgres.ts";
 import { type LogEntry, recordingLogger } from "./testing/recording-logger.ts";
 import { createWorkspace } from "./workspaces.ts";
@@ -108,19 +112,23 @@ async function freshDatabase(): Promise<FreshDatabase> {
 	return database;
 }
 
+function migrationRunner(database: FreshDatabase): MigrationRunner {
+	return {
+		databaseUrl: new Secret(database.url),
+		connectionTimeoutMs: 10_000,
+		statementTimeoutMs: 60_000,
+		lockRetryDelayMs: () => 0,
+		setTimer: setSystemTimer,
+		logger: recordingLogger().logger,
+	};
+}
+
 async function migratedDatabase(): Promise<FreshDatabase> {
 	const database = await freshDatabase();
 	await migrateCoreSchema(
-		{
-			databaseUrl: new Secret(database.url),
-			connectionTimeoutMs: 10_000,
-			statementTimeoutMs: 60_000,
-			lockRetryDelayMs: () => 0,
-			setTimer: setSystemTimer,
-			logger: recordingLogger().logger,
-		},
+		migrationRunner(database),
 		CORE_MIGRATIONS_DIRECTORY,
-		new AbortController().signal,
+		NOT_STOPPED,
 	);
 	await createWorkspace(database.sql, {
 		id: WORKSPACE,
@@ -128,6 +136,43 @@ async function migratedDatabase(): Promise<FreshDatabase> {
 		createdAt: NOW,
 	});
 	return database;
+}
+
+const FIRST_MIGRATION_OF_THE_EVENT_SEQUENCE = "0005";
+
+async function databaseBeforeDeliveriesCarriedTheEventSequence(): Promise<FreshDatabase> {
+	const database = await freshDatabase();
+	const migrations = await readMigrations(CORE_MIGRATIONS_DIRECTORY);
+	await migrateSchemas(
+		migrationRunner(database),
+		[
+			{
+				schema: CORE_SCHEMA,
+				migrations: migrations.filter(
+					({ name }) => name < FIRST_MIGRATION_OF_THE_EVENT_SEQUENCE,
+				),
+			},
+		],
+		NOT_STOPPED,
+	);
+	await createWorkspace(database.sql, {
+		id: WORKSPACE,
+		name: "Alpha",
+		createdAt: NOW,
+	});
+	return database;
+}
+
+async function recordLabelRenamedBeforeTheEventSequence(
+	sql: SQL,
+	id: string,
+): Promise<void> {
+	await sql`
+		INSERT INTO core.events (id, name, version, occurred_at, workspace_id, payload)
+		VALUES (${id}, 'board.LabelRenamed', 1, ${NOW}, ${WORKSPACE}, ${{ labelId: "label-1" }})`;
+	await sql`
+		INSERT INTO core.event_deliveries (event_id, subscriber, next_attempt_at)
+		VALUES (${id}, 'search', ${NOW})`;
 }
 
 async function publishLabelRenamed(
@@ -367,6 +412,57 @@ describe("event delivery", () => {
 		await first;
 
 		expect(handled).toEqual([EVENT]);
+	});
+
+	test("attempts the deliveries in the order in which their events were recorded, event by event across the subscribing plugins", async () => {
+		const database = await migratedDatabase();
+		const handled: string[] = [];
+		const noting =
+			(subscriber: string): LabelRenamedHandler =>
+			async (event) => {
+				handled.push(`${subscriber} ${event.id}`);
+			};
+		const events = registryOf(
+			subscription("search", noting("search")),
+			subscription("archive", noting("archive")),
+		);
+		await publishLabelRenamed(database.sql, events, LATER_EVENT);
+		await publishLabelRenamed(database.sql, events, EVENT);
+
+		await deliveryOf({ sql: database.sql, events }).delivery.deliverDue(
+			NOT_STOPPED,
+		);
+
+		expect(handled).toEqual([
+			`archive ${LATER_EVENT}`,
+			`search ${LATER_EVENT}`,
+			`archive ${EVENT}`,
+			`search ${EVENT}`,
+		]);
+	});
+
+	test("delivers the events that were recorded before a delivery carried the sequence of its event, in their order", async () => {
+		const database = await databaseBeforeDeliveriesCarriedTheEventSequence();
+		await recordLabelRenamedBeforeTheEventSequence(database.sql, LATER_EVENT);
+		await recordLabelRenamedBeforeTheEventSequence(database.sql, EVENT);
+		const handled: string[] = [];
+		const events = registryOf(
+			subscription("search", async (event) => {
+				handled.push(event.id);
+			}),
+		);
+
+		const migration = await migrateCoreSchema(
+			migrationRunner(database),
+			CORE_MIGRATIONS_DIRECTORY,
+			NOT_STOPPED,
+		);
+		await deliveryOf({ sql: database.sql, events }).delivery.deliverDue(
+			NOT_STOPPED,
+		);
+
+		expect(migration).toBe("migrated");
+		expect(handled).toEqual([LATER_EVENT, EVENT]);
 	});
 
 	test("attempts no further delivery once it is told to stop, and leaves the rest for the next run", async () => {
