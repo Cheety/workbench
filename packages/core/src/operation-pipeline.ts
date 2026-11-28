@@ -1,12 +1,19 @@
 import {
 	type Actor,
+	type OperationAuth,
 	type OperationContext,
 	OperationError,
 	type OperationErrorKind,
 	type OperationKind,
+	type OperationTarget,
 } from "@workbench/sdk";
 import type { SQL } from "bun";
-import { type NewAuditEntry, recordAuditEntry } from "./audit.ts";
+import {
+	type AuditOutcome,
+	type DenialReason,
+	type NewAuditEntry,
+	recordAuditEntry,
+} from "./audit.ts";
 import { recordEvent } from "./event-outbox.ts";
 import type { EventRegistry } from "./event-registry.ts";
 import { describeThrown } from "./failure-reason.ts";
@@ -21,6 +28,7 @@ import {
 import { enqueueJob } from "./job-queue.ts";
 import type { JobRegistry } from "./job-registry.ts";
 import type { Logger } from "./logger.ts";
+import { findMembership, type MembershipLock } from "./memberships.ts";
 import type {
 	OperationRegistry,
 	RegisteredOperation,
@@ -29,7 +37,6 @@ import { type Owner, ownerName, schemaOf } from "./owner.ts";
 import { quote } from "./quote.ts";
 import type { ValidationIssue } from "./schema-validation.ts";
 import { statementsIn } from "./transaction-statements.ts";
-import { workspaceExists } from "./workspaces.ts";
 
 export type OperationCall = {
 	readonly operation: string;
@@ -41,7 +48,11 @@ export type OperationCall = {
 	readonly correlationId: string;
 };
 
-export type FailureKind = OperationErrorKind | "invalid_input" | "internal";
+export type FailureKind =
+	| OperationErrorKind
+	| "invalid_input"
+	| "forbidden"
+	| "internal";
 
 export type OperationFailure = {
 	readonly code: string;
@@ -103,11 +114,78 @@ const WORKSPACE_NOT_FOUND: OperationFailure = {
 	issues: [],
 };
 
-class WorkspaceNotFoundError extends Error {
-	constructor() {
-		super(WORKSPACE_NOT_FOUND.detail);
-		this.name = "WorkspaceNotFoundError";
+const MISSING_RIGHT: OperationFailure = {
+	code: "missing_right",
+	kind: "forbidden",
+	detail:
+		"the role of the actor in the workspace does not grant the right of the operation",
+	issues: [],
+};
+
+const OBJECT_NOT_FOUND: OperationFailure = {
+	code: "object_not_found",
+	kind: "not_found",
+	detail: "the object does not exist",
+	issues: [],
+};
+
+const NOT_OBJECT_HOLDER: OperationFailure = {
+	code: "not_object_holder",
+	kind: "forbidden",
+	detail: "the object belongs to another actor",
+	issues: [],
+};
+
+const DENIALS: Record<DenialReason, OperationFailure> = {
+	workspace_not_found: WORKSPACE_NOT_FOUND,
+	missing_right: MISSING_RIGHT,
+	object_not_found: OBJECT_NOT_FOUND,
+	not_object_holder: NOT_OBJECT_HOLDER,
+};
+
+const DENIALS_BY_TARGET: Record<OperationTarget, readonly DenialReason[]> = {
+	workspace: ["workspace_not_found", "missing_right"],
+	object: [
+		"workspace_not_found",
+		"missing_right",
+		"object_not_found",
+		"not_object_holder",
+	],
+};
+
+export function denialsOf(
+	target: OperationTarget,
+): readonly OperationFailure[] {
+	return DENIALS_BY_TARGET[target].map((reason) => DENIALS[reason]);
+}
+
+class CallFailedError extends Error {
+	readonly failure: OperationFailure;
+	readonly denial: DenialReason | null;
+
+	constructor(failure: OperationFailure, denial: DenialReason | null) {
+		super(failure.detail);
+		this.name = "CallFailedError";
+		this.failure = failure;
+		this.denial = denial;
 	}
+}
+
+function failedCall(failure: OperationFailure): CallFailedError {
+	return new CallFailedError(failure, null);
+}
+
+function deniedCall(reason: DenialReason): CallFailedError {
+	return new CallFailedError(DENIALS[reason], reason);
+}
+
+function invalidInput(issues: readonly ValidationIssue[]): OperationFailure {
+	return {
+		code: "invalid_input",
+		kind: "invalid_input",
+		detail: "the input does not match the input schema of the operation",
+		issues,
+	};
 }
 
 class InvalidOutputError extends Error {
@@ -138,6 +216,15 @@ class JobEnqueuedByQueryError extends Error {
 	}
 }
 
+class ObjectAccessUncheckedError extends Error {
+	constructor(operation: string) {
+		super(
+			`the operation ${quote(operation)} targets an object but never asked ctx.auth for access`,
+		);
+		this.name = "ObjectAccessUncheckedError";
+	}
+}
+
 class ExecuteThrewError extends Error {
 	constructor(cause: unknown) {
 		super("the execute function of the operation threw", { cause });
@@ -163,41 +250,35 @@ async function invoke(
 			detail: `no operation is named ${quote(call.operation)}`,
 			issues: [],
 		});
-	const logger = options.logger.with({
-		correlationId: call.correlationId,
-		operation: operation.name,
-	});
+	const logger = loggerOf(call, operation, options.logger);
 	const key = idempotencyKeyOf(call, operation.kind);
 	if (!key.valid) return failed(INVALID_IDEMPOTENCY_KEY);
 	try {
-		const input = await operation.validateInput(call.input);
-		if (!input.valid)
-			return failed({
-				code: "invalid_input",
-				kind: "invalid_input",
-				detail: "the input does not match the input schema of the operation",
-				issues: input.issues,
-			});
 		const publisher = publisherOf(call, operation, options);
 		const enqueuer = enqueuerOf(call, operation, options);
 		const output = await inTransaction(
 			operation,
 			options.sql,
 			async (transaction) => {
-				await requireWorkspace(transaction, call.workspace);
+				await authorize(transaction, call, operation);
+				const input = await operation.validateInput(call.input);
+				if (!input.valid) throw failedCall(invalidInput(input.issues));
 				const run = async (): Promise<unknown> => {
+					const access = accessOf(call);
 					const executed = await execute(
 						operation,
 						input.value,
 						contextOf(call, transaction, options, {
+							auth: access.auth,
 							publish: publisher.publishIn(transaction),
 							enqueue: enqueuer.enqueueIn(transaction),
 						}),
+						access,
 					);
 					if (IS_AUDITED[operation.kind])
 						await recordAuditEntry(
 							transaction,
-							newAuditEntryOf(call, operation, options),
+							newAuditEntryOf(call, operation, options, SUCCEEDED),
 						);
 					return executed;
 				};
@@ -220,8 +301,46 @@ async function invoke(
 		if (enqueuer.hasEnqueued()) options.jobsCommitted();
 		return { ok: true, output };
 	} catch (error) {
+		if (error instanceof CallFailedError && error.denial !== null)
+			return deny(call, operation, options, error.denial);
 		return failed(logAndMapFailure(error, logger, operation.owner));
 	}
+}
+
+async function deny(
+	call: OperationCall,
+	operation: RegisteredOperation,
+	options: OperationPipelineOptions,
+	reason: DenialReason,
+): Promise<OperationResult> {
+	try {
+		await options.sql.begin((transaction) =>
+			recordAuditEntry(
+				transaction,
+				newAuditEntryOf(call, operation, options, { result: "denied", reason }),
+			),
+		);
+	} catch (error) {
+		return failed(
+			logAndMapFailure(
+				error,
+				loggerOf(call, operation, options.logger),
+				operation.owner,
+			),
+		);
+	}
+	return failed(DENIALS[reason]);
+}
+
+function loggerOf(
+	call: OperationCall,
+	operation: RegisteredOperation,
+	logger: Logger,
+): Logger {
+	return logger.with({
+		correlationId: call.correlationId,
+		operation: operation.name,
+	});
 }
 
 type IdempotencyKeyOfCall =
@@ -244,6 +363,13 @@ const BEGIN_TRANSACTION: Record<
 	query: (sql, body) => sql.begin("read only", body),
 	mutation: (sql, body) => sql.begin("isolation level read committed", body),
 };
+
+const MEMBERSHIP_LOCK: Record<OperationKind, MembershipLock> = {
+	query: "none",
+	mutation: "share",
+};
+
+const SUCCEEDED: AuditOutcome = { result: "succeeded" };
 
 const IS_AUDITED: Record<OperationKind, boolean> = {
 	query: false,
@@ -273,23 +399,79 @@ function inTransaction(
 	return BEGIN_TRANSACTION[operation.kind](sql, body);
 }
 
-async function requireWorkspace(
+async function authorize(
 	transaction: SQL,
-	workspace: string,
+	call: OperationCall,
+	operation: RegisteredOperation,
 ): Promise<void> {
-	if (!(await workspaceExists(transaction, workspace)))
-		throw new WorkspaceNotFoundError();
+	const membership = await findMembership(
+		transaction,
+		call.workspace,
+		call.actor,
+		MEMBERSHIP_LOCK[operation.kind],
+	);
+	switch (membership.kind) {
+		case "no_workspace":
+			throw failedCall(WORKSPACE_NOT_FOUND);
+		case "not_member":
+			throw deniedCall("workspace_not_found");
+		case "member":
+			if (!operation.grantedTo.has(membership.role))
+				throw deniedCall("missing_right");
+	}
+}
+
+type CallAccess = {
+	readonly auth: OperationAuth;
+	throwRecordedDenial(): void;
+	hasBeenChecked(): boolean;
+};
+
+const REQUIRES_ACCESS_CHECK: Record<OperationTarget, boolean> = {
+	object: true,
+	workspace: false,
+};
+
+function accessOf(call: OperationCall): CallAccess {
+	let recordedDenial: CallFailedError | undefined;
+	let hasBeenChecked = false;
+	const recordDenial = (reason: DenialReason): CallFailedError => {
+		recordedDenial ??= deniedCall(reason);
+		return recordedDenial;
+	};
+	return {
+		auth: {
+			requireAccess: (object) => {
+				hasBeenChecked = true;
+				if (object === undefined) throw failedCall(OBJECT_NOT_FOUND);
+				if (object.workspace !== call.workspace)
+					throw recordDenial("object_not_found");
+				if (object.holder !== null && !isSameActor(object.holder, call.actor))
+					throw recordDenial("not_object_holder");
+				return object;
+			},
+		},
+		throwRecordedDenial: () => {
+			if (recordedDenial !== undefined) throw recordedDenial;
+		},
+		hasBeenChecked: () => hasBeenChecked,
+	};
+}
+
+function isSameActor(left: Actor, right: Actor): boolean {
+	return left.kind === right.kind && left.id === right.id;
 }
 
 function contextOf(
 	call: OperationCall,
 	transaction: SQL,
 	sources: Pick<OperationPipelineOptions, "now" | "newId" | "random">,
-	effects: Pick<OperationContext, "publish" | "enqueue">,
+	effects: Pick<OperationContext, "auth" | "publish" | "enqueue">,
 ): OperationContext {
 	return {
 		actor: call.actor,
 		workspace: call.workspace,
+		auth: effects.auth,
 		sql: statementsIn(transaction),
 		now: sources.now,
 		newId: sources.newId,
@@ -361,6 +543,7 @@ function newAuditEntryOf(
 	call: OperationCall,
 	operation: RegisteredOperation,
 	sources: Pick<OperationPipelineOptions, "now" | "newAuditEntryId">,
+	outcome: AuditOutcome,
 ): NewAuditEntry {
 	return {
 		id: sources.newAuditEntryId(),
@@ -369,6 +552,7 @@ function newAuditEntryOf(
 		apiTokenId: call.apiTokenId,
 		operation: operation.name,
 		workspace: call.workspace,
+		outcome,
 	};
 }
 
@@ -376,9 +560,10 @@ async function execute(
 	operation: RegisteredOperation,
 	input: unknown,
 	ctx: OperationContext,
+	access: CallAccess,
 ): Promise<unknown> {
 	const output = await operation.validateOutput(
-		await runExecute(operation, input, ctx),
+		await runExecute(operation, input, ctx, access),
 	);
 	if (!output.valid) throw new InvalidOutputError(output.issues);
 	return output.value;
@@ -388,13 +573,21 @@ async function runExecute(
 	operation: RegisteredOperation,
 	input: unknown,
 	ctx: OperationContext,
+	access: CallAccess,
 ): Promise<unknown> {
+	let output: unknown;
 	try {
-		return await operation.execute(input, ctx);
+		output = await operation.execute(input, ctx);
 	} catch (error) {
-		if (error instanceof OperationError) throw error;
+		access.throwRecordedDenial();
+		if (error instanceof OperationError || error instanceof CallFailedError)
+			throw error;
 		throw new ExecuteThrewError(error);
 	}
+	access.throwRecordedDenial();
+	if (REQUIRES_ACCESS_CHECK[operation.target] && !access.hasBeenChecked())
+		throw new ObjectAccessUncheckedError(operation.name);
+	return output;
 }
 
 function logAndMapFailure(
@@ -402,7 +595,7 @@ function logAndMapFailure(
 	logger: Logger,
 	owner: Owner,
 ): OperationFailure {
-	if (error instanceof WorkspaceNotFoundError) return WORKSPACE_NOT_FOUND;
+	if (error instanceof CallFailedError) return error.failure;
 	if (error instanceof IdempotencyKeyReusedError) return IDEMPOTENCY_KEY_REUSED;
 	if (error instanceof OperationError)
 		return {
@@ -416,6 +609,8 @@ function logAndMapFailure(
 			reason: "invalid_output",
 			issues: error.issues,
 		});
+	else if (error instanceof ObjectAccessUncheckedError)
+		logger.error("operation failed", { reason: "object_access_unchecked" });
 	else if (error instanceof ExecuteThrewError)
 		logger.error("operation failed", {
 			reason: "execute_threw",

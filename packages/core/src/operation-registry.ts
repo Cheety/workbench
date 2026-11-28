@@ -4,12 +4,14 @@ import {
 	type OperationContext,
 	type OperationKind,
 	type OperationTarget,
+	type StartRole,
 } from "@workbench/sdk";
 import { isRecord } from "./is-record.ts";
 import { type JsonSchema, jsonSchemaReaderOf } from "./json-schema.ts";
 import { describeOwner, type Owner, ownerName } from "./owner.ts";
 import { isPluginName } from "./plugin-name.ts";
 import { quote } from "./quote.ts";
+import { type DeclaredRights, isRightOf } from "./rights.ts";
 import { type Validator, validatorOf } from "./schema-validation.ts";
 
 export type RegisteredOperation = {
@@ -18,6 +20,7 @@ export type RegisteredOperation = {
 	readonly kind: OperationKind;
 	readonly target: OperationTarget;
 	readonly right: string;
+	readonly grantedTo: ReadonlySet<StartRole>;
 	readonly validateInput: Validator;
 	readonly validateOutput: Validator;
 	describeInput(): JsonSchema;
@@ -62,11 +65,10 @@ export function findQualifiedOperationName(
 	return { plugin, name };
 }
 
-const RIGHT_NAME = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*$/;
-
 export function readOperations(
 	owner: Owner,
 	declared: unknown,
+	rights: DeclaredRights,
 ): OperationsRead {
 	if (declared === undefined) return { value: [], problems: [] };
 	if (!Array.isArray(declared))
@@ -75,7 +77,7 @@ export function readOperations(
 	const problems: string[] = [];
 	const seen = new Set<string>();
 	for (const [position, candidate] of declared.entries()) {
-		const read = readOperation(owner, position, candidate);
+		const read = readOperation(owner, rights, position, candidate);
 		if (!read.valid) {
 			problems.push(...read.problems);
 			continue;
@@ -98,6 +100,7 @@ type OperationRead =
 
 function readOperation(
 	owner: Owner,
+	rights: DeclaredRights,
 	position: number,
 	candidate: unknown,
 ): OperationRead {
@@ -134,9 +137,15 @@ function readOperation(
 		`${operation} must target ${alternatives(OPERATION_TARGETS)}`,
 	);
 	const validRight = accepted(
-		isRightOf(prefix, right) ? right : undefined,
+		isRightOf(owner, right) ? right : undefined,
 		`${operation} must name exactly one right of ${describeOwner(owner)}, such as ${quote(`${prefix}.workspace.edit`)}`,
 	);
+	const grantedTo =
+		validRight === undefined ? undefined : rights.get(validRight);
+	if (validRight !== undefined && grantedTo === undefined)
+		problems.push(
+			`${operation} must name a right that ${describeOwner(owner)} declares in rights, not ${quote(validRight)}`,
+		);
 	const validateInput = accepted(
 		validatorOf(input),
 		`${operation} must declare its input as a schema`,
@@ -153,6 +162,7 @@ function readOperation(
 		validKind === undefined ||
 		validTarget === undefined ||
 		validRight === undefined ||
+		grantedTo === undefined ||
 		validateInput === undefined ||
 		validateOutput === undefined ||
 		validExecute === undefined
@@ -166,6 +176,7 @@ function readOperation(
 			kind: validKind,
 			target: validTarget,
 			right: validRight,
+			grantedTo,
 			validateInput,
 			validateOutput,
 			describeInput: jsonSchemaReaderOf(input, "input"),
@@ -187,14 +198,6 @@ function isOneOf<Member extends string>(
 	members: readonly Member[],
 ): value is Member {
 	return members.some((member) => member === value);
-}
-
-function isRightOf(prefix: string, right: unknown): right is string {
-	return (
-		typeof right === "string" &&
-		right.startsWith(`${prefix}.`) &&
-		RIGHT_NAME.test(right)
-	);
 }
 
 export function registerOperations(

@@ -423,14 +423,16 @@ describe("a job that exceeds its timeout", () => {
 		await createMailerSchema(database.sql);
 		const timer = manualTimer();
 		const timeIsUp = Promise.withResolvers<void>();
-		const lateWrite = Promise.withResolvers<"written" | "refused">();
+		const lateWrite = Promise.withResolvers<unknown>();
 		const jobs = registryOf(
 			sendingReminders(async (job, ctx) => {
 				started.resolve();
 				await timeIsUp.promise;
-				await ctx.sql`INSERT INTO sent_reminders (job_id) VALUES (${job.id})`.then(
-					() => lateWrite.resolve("written"),
-					() => lateWrite.resolve("refused"),
+				lateWrite.resolve(
+					await ctx.sql`INSERT INTO sent_reminders (job_id) VALUES (${job.id})`.then(
+						() => "written",
+						(error: unknown) => error,
+					),
 				);
 			}),
 		);
@@ -451,7 +453,7 @@ describe("a job that exceeds its timeout", () => {
 		timeIsUp.resolve();
 		const lateWriteOutcome = await lateWrite.promise;
 
-		expect(lateWriteOutcome).toBe("refused");
+		expect(lateWriteOutcome).toMatchObject({ name: "StatementRefusedError" });
 		expect(await sentReminders(database.sql)).toEqual([]);
 		expect(failuresIn(entries)).toEqual([
 			expect.objectContaining({ reason: "run_timed_out", attempt: 1 }),

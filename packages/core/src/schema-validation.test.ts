@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { z } from "zod";
 import {
 	InvalidSchemaResultError,
 	type Validator,
@@ -17,7 +18,54 @@ function validatorReturning(result: unknown): Validator {
 	return validate;
 }
 
+const RESULT_DELIVERIES: [string, (result: unknown) => unknown][] = [
+	["at once", (result) => result],
+	["as a promise", (result) => Promise.resolve(result)],
+];
+
 describe("validating with a Standard Schema", () => {
+	test.each(RESULT_DELIVERIES)(
+		"reads the value of a result the schema returns %s",
+		async (_case, deliver) => {
+			const validate = validatorReturning(
+				deliver({ value: { title: "Milk" } }),
+			);
+
+			const validation = await validate({});
+
+			expect(validation).toEqual({ valid: true, value: { title: "Milk" } });
+		},
+	);
+
+	test.each(RESULT_DELIVERIES)(
+		"reads the issues of a result the schema returns %s",
+		async (_case, deliver) => {
+			const validate = validatorReturning(
+				deliver({ issues: [{ message: "Required", path: ["title"] }] }),
+			);
+
+			const validation = await validate({});
+
+			expect(validation).toEqual({
+				valid: false,
+				issues: [{ path: ["title"], message: "Required" }],
+			});
+		},
+	);
+
+	test("rejects a value a schema with an asynchronous refinement refuses", async () => {
+		const validate = validatorOf(
+			z.string().refine(async (title) => title.length > 0, "Required"),
+		);
+
+		const validation = await validate?.("");
+
+		expect(validation).toEqual({
+			valid: false,
+			issues: [{ path: [], message: "Required" }],
+		});
+	});
+
 	test("reads the path and message of each issue", async () => {
 		const validate = validatorReturning({
 			issues: [{ message: "Too small", path: ["items", { key: 0 }, "title"] }],

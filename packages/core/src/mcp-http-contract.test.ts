@@ -51,6 +51,7 @@ const ledger: PluginPackage = {
 		...definePlugin({
 			manifest: { name: "ledger", capabilities: [DATABASE_CAPABILITY] },
 		}),
+		rights: [{ name: "ledger.book.close", defaultRoles: ["owner"] }],
 		operations: [closeBook],
 	}),
 	loadMigrations: async () => [],
@@ -113,11 +114,18 @@ describe("the reference operations listed as MCP tools", () => {
 			"reference.createNote",
 		);
 		const api = await startReferenceInstance();
-		const client = await mcp.connectedClient(api.url, await api.issueToken());
+		const client = await mcp.connectedClient(
+			api.url,
+			await api.issueToken("owner"),
+		);
 
 		const { tools } = await client.listTools();
 
-		expect(tools.filter((tool) => tool.name.startsWith("reference_"))).toEqual([
+		expect(
+			tools.filter((tool) =>
+				["reference_createNote", "reference_listNotes"].includes(tool.name),
+			),
+		).toEqual([
 			{
 				name: "reference_createNote",
 				inputSchema: {
@@ -176,12 +184,12 @@ describe("an operation of the reference plugin over MCP and over HTTP", () => {
 
 		const answeredOverHttp = await overHttp(
 			overHttpApi,
-			await overHttpApi.issueToken(),
+			await overHttpApi.issueToken("owner"),
 			call,
 		);
 		const answeredOverMcp = await overMcp(
 			overMcpApi,
-			await overMcpApi.issueToken(),
+			await overMcpApi.issueToken("owner"),
 			call,
 		);
 
@@ -195,7 +203,7 @@ describe("an operation of the reference plugin over MCP and over HTTP", () => {
 
 	test("reaches the same operation, so a note created over MCP is listed over HTTP", async () => {
 		const api = await startReferenceInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 		const created = await overMcp(api, token, {
 			operation: "reference.createNote",
 			workspace: API_INSTANCE_WORKSPACE,
@@ -228,7 +236,7 @@ describe("an operation of the reference plugin over MCP and over HTTP", () => {
 		"fails for $case with the same problem details and stable code $code",
 		async ({ code, workspace, input }) => {
 			const api = await startReferenceInstance();
-			const token = await api.issueToken();
+			const token = await api.issueToken("owner");
 			const call = { operation: "reference.createNote", workspace, input };
 
 			const failedOverHttp = await overHttp(api, token, call);
@@ -246,7 +254,7 @@ describe("an operation of the reference plugin over MCP and over HTTP", () => {
 describe("an idempotency key over MCP and over HTTP", () => {
 	test("is the same key, so a mutation repeated over MCP answers what it answered over HTTP without running again", async () => {
 		const api = await startReferenceInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 		const response = await api.post(
 			`/api/workspaces/${API_INSTANCE_WORKSPACE}/operations/reference.createNote`,
 			JSON.stringify({ title: "Plan" }),
@@ -277,7 +285,7 @@ describe("an idempotency key over MCP and over HTTP", () => {
 describe("a domain error of a plugin over MCP and over HTTP", () => {
 	test("comes with the same problem details, status and stable code of the plugin", async () => {
 		const api = await mcp.startInstance([ledger]);
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 		const call = {
 			operation: "ledger.closeBook",
 			workspace: API_INSTANCE_WORKSPACE,

@@ -80,11 +80,14 @@ psql_in() {
 	compose "$1" exec -T postgres psql --username workbench --dbname workbench --tuples-only --no-align --command "$2"
 }
 
-create_token() {
-	local output token
+create_owner_token() {
+	local output token account
 	output="$(compose "$1" exec -T workbench bun run --silent create-service-account --name smoke --valid-days 1)"
 	token="$(jq --raw-output '.token // empty' <<<"$output" 2>/dev/null)" || token=""
 	[ -n "$token" ] || fail "$1 printed no token field in the JSON output of create-service-account"
+	account="$(jq --raw-output '.serviceAccount // empty' <<<"$output" 2>/dev/null)" || account=""
+	[[ "$account" =~ ^[0-9a-f-]{36}$ ]] || fail "$1 printed no service account id in the JSON output of create-service-account"
+	psql_in "$1" "INSERT INTO core.memberships (workspace_id, actor_kind, actor_id, role, created_at) VALUES ('$workspace', 'service_account', '$account', 'owner', now())" >/dev/null
 	echo "$token"
 }
 
@@ -132,7 +135,7 @@ for index in "${!projects[@]}"; do
 	[ "$applied" = "$expected_migrations" ] || fail "$project applied migrations $applied, expected $expected_migrations"
 
 	psql_in "$project" "INSERT INTO core.workspaces (id, name, created_at) VALUES ('$workspace', 'Smoke', now())" >/dev/null
-	tokens[$project]="$(create_token "$project")"
+	tokens[$project]="$(create_owner_token "$project")"
 
 	status="$(create_note "$project" "$port" "${tokens[$project]}")"
 	[ "$status" = 200 ] || fail "$project answers reference.createNote with $status: $(cat "$work/$project.note")"

@@ -18,6 +18,12 @@ const renameLabel = defineOperation({
 	execute: async ({ label }) => ({ label }),
 });
 
+const moveLabel = defineOperation({
+	...renameLabel,
+	name: "moveLabel",
+	target: "object",
+});
+
 const opaqueSchema = {
 	"~standard": {
 		version: 1,
@@ -42,7 +48,11 @@ const board: PluginPackage = {
 	version: "1.0.0",
 	loadDefinition: async () => ({
 		...definePlugin({ manifest: { name: "board" } }),
-		operations: [renameLabel, countLabels],
+		rights: [
+			{ name: "board.label.edit", defaultRoles: ["owner"] },
+			{ name: "board.label.read", defaultRoles: ["owner"] },
+		],
+		operations: [renameLabel, countLabels, moveLabel],
 	}),
 };
 
@@ -116,6 +126,58 @@ describe("the OpenAPI document of the HTTP API", () => {
 			},
 		});
 	});
+
+	test.each([
+		[
+			"a workspace",
+			"board.renameLabel",
+			["missing_right"],
+			["workspace_not_found"],
+		],
+		[
+			"an object",
+			"board.moveLabel",
+			["missing_right", "not_object_holder"],
+			["workspace_not_found", "object_not_found"],
+		],
+	])(
+		"names the codes of a denied call on %s as 403 and 404",
+		async (_case, operation, forbidden, notFound) => {
+			const document = await describeHttpApi([board], setSystemTimer);
+
+			expect(
+				document.paths[`/api/workspaces/{workspace}/operations/${operation}`]
+					?.post?.responses,
+			).toMatchObject({
+				"403": {
+					headers: CORRELATION_ID_HEADERS,
+					content: {
+						"application/problem+json": {
+							schema: {
+								allOf: [
+									{ $ref: "#/components/schemas/ProblemDetails" },
+									{ properties: { code: { enum: forbidden } } },
+								],
+							},
+						},
+					},
+				},
+				"404": {
+					headers: CORRELATION_ID_HEADERS,
+					content: {
+						"application/problem+json": {
+							schema: {
+								allOf: [
+									{ $ref: "#/components/schemas/ProblemDetails" },
+									{ properties: { code: { enum: notFound } } },
+								],
+							},
+						},
+					},
+				},
+			});
+		},
+	);
 
 	test("offers a mutation, but not a query, an optional Idempotency-Key header", async () => {
 		const document = await describeHttpApi([board], setSystemTimer);
@@ -199,9 +261,20 @@ describe("the OpenAPI document of the HTTP API", () => {
 			properties: {
 				entries: {
 					items: {
-						properties: {
-							occurredAt: { type: "string", format: "date-time" },
-						},
+						oneOf: [
+							{
+								properties: {
+									occurredAt: { type: "string", format: "date-time" },
+									result: { const: "succeeded" },
+								},
+							},
+							{
+								properties: {
+									occurredAt: { type: "string", format: "date-time" },
+									result: { const: "denied" },
+								},
+							},
+						],
 					},
 				},
 			},

@@ -9,6 +9,7 @@ import {
 	eventSubscriptionCapability,
 	type PluginContext,
 	type PluginDefinition,
+	type RightDefinition,
 } from "@workbench/sdk";
 import { z } from "zod";
 import { Secret } from "./config.ts";
@@ -1965,6 +1966,12 @@ const listCards = defineOperation({
 	execute: async () => ({ ids: [] }),
 });
 
+const BOARD_RIGHTS: readonly RightDefinition[] = [
+	{ name: "board.card.create", defaultRoles: ["owner", "editor"] },
+	{ name: "board.card.read", defaultRoles: ["owner", "editor", "viewer"] },
+	{ name: "board.card.list", defaultRoles: [] },
+];
+
 describe("operations of plugins", () => {
 	test("are registered under the plugin name and the name of the operation", async () => {
 		const { plugins } = await start({
@@ -1972,6 +1979,7 @@ describe("operations of plugins", () => {
 				packageOf(
 					definePlugin({
 						manifest: { name: "board" },
+						rights: BOARD_RIGHTS,
 						operations: [createCard, listCards],
 					}),
 				),
@@ -1992,6 +2000,7 @@ describe("operations of plugins", () => {
 				packageOf(
 					definePlugin({
 						manifest: { name: "board", requires: { missing: "^1.0.0" } },
+						rights: BOARD_RIGHTS,
 						operations: [createCard],
 					}),
 				),
@@ -2022,6 +2031,11 @@ describe("operations of plugins", () => {
 			"an operation with a right of another plugin",
 			[{ ...createCard, right: "chat.message.send" }],
 			'operation "board.createCard" must name exactly one right of plugin "board", such as "board.workspace.edit"',
+		],
+		[
+			"an operation with a right its plugin does not declare",
+			[{ ...createCard, right: "board.card.archive" }],
+			'operation "board.createCard" must name a right that plugin "board" declares in rights, not "board.card.archive"',
 		],
 		[
 			"an operation name that is not a verb and an object in camelCase",
@@ -2072,6 +2086,7 @@ describe("operations of plugins", () => {
 					version: "1.0.0",
 					loadDefinition: async () => ({
 						manifest: { name: "board" },
+						rights: BOARD_RIGHTS,
 						operations,
 					}),
 				},
@@ -2087,6 +2102,64 @@ describe("operations of plugins", () => {
 			},
 		]);
 		expect(plugins.operations.find("board.createCard")).toBeUndefined();
+	});
+});
+
+describe("rights of plugins", () => {
+	test.each([
+		[
+			"rights that are not a list",
+			{ create: BOARD_RIGHTS[0] },
+			"rights must be a list of rights",
+		],
+		[
+			"a right of another plugin",
+			[{ name: "chat.message.send", defaultRoles: ["owner"] }],
+			'rights[0] must be named as a right of plugin "board", such as "board.workspace.edit"',
+		],
+		[
+			"a right without default roles",
+			[{ name: "board.card.create" }],
+			'right "board.card.create" must list its default roles, each once, out of "owner", "editor", "viewer"',
+		],
+		[
+			"a right with a role that is no start role",
+			[{ name: "board.card.create", defaultRoles: ["admin"] }],
+			'right "board.card.create" must list its default roles, each once, out of "owner", "editor", "viewer"',
+		],
+		[
+			"a right with a default role named twice",
+			[{ name: "board.card.create", defaultRoles: ["owner", "owner"] }],
+			'right "board.card.create" must list its default roles, each once, out of "owner", "editor", "viewer"',
+		],
+		[
+			"a right declared twice",
+			[
+				{ name: "board.card.create", defaultRoles: ["owner"] },
+				{ name: "board.card.create", defaultRoles: ["editor"] },
+			],
+			'right "board.card.create" is declared more than once',
+		],
+	])("rejects a plugin with %s", async (_case, rights, problem) => {
+		const { plugins } = await start({
+			packages: [
+				{
+					packageName: "@workbench/plugin-board",
+					pluginName: "board",
+					version: "1.0.0",
+					loadDefinition: async () => ({ manifest: { name: "board" }, rights }),
+				},
+			],
+			enabledPlugins: ["board"],
+		});
+
+		expect(plugins.failures).toEqual([
+			{
+				plugin: "board",
+				reason: "invalid_manifest",
+				detail: `plugin package "@workbench/plugin-board" has an invalid manifest: ${problem}`,
+			},
+		]);
 	});
 });
 

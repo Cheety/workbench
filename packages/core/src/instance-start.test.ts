@@ -174,21 +174,28 @@ describe("instance start", () => {
 		expect(started).toBe(false);
 	});
 
-	test("has no core schema while it is being migrated or when it is not migrated", async () => {
-		const migrating = createInstanceStart(
-			steps({ migrateCoreSchema: () => new Promise(() => {}) }),
+	test("has no core schema while it is being migrated", async () => {
+		const coreMigration = pendingStep<CoreSchemaMigration>();
+		const instance = createInstanceStart(
+			steps({ migrateCoreSchema: coreMigration.run }),
 			recordingLogger().logger,
 		);
-		const notMigrated = createInstanceStart(
+
+		void instance.run();
+		await coreMigration.called;
+
+		expect(instance.hasCoreSchema()).toBe(false);
+	});
+
+	test("has no core schema when it is not migrated", async () => {
+		const instance = createInstanceStart(
 			steps({ migrateCoreSchema: async () => "not_migrated" }),
 			recordingLogger().logger,
 		);
 
-		void migrating.run();
-		await notMigrated.run();
+		await instance.run();
 
-		expect(migrating.hasCoreSchema()).toBe(false);
-		expect(notMigrated.hasCoreSchema()).toBe(false);
+		expect(instance.hasCoreSchema()).toBe(false);
 	});
 
 	test("has the core schema once it is migrated, while the plugins are still starting", async () => {
@@ -282,6 +289,7 @@ const renameLabel: RegisteredOperation = {
 	kind: "mutation",
 	target: "workspace",
 	right: "board.label.edit",
+	grantedTo: new Set(["owner"]),
 	validateInput: async (value) => ({ valid: true, value }),
 	validateOutput: async (value) => ({ valid: true, value }),
 	describeInput: () => ({}),
@@ -378,22 +386,6 @@ describe("the registries of an instance", () => {
 				whileStarting,
 				onceStarted,
 			});
-		},
-	);
-
-	test.each(registries)(
-		"have the %s of the started plugins once they started",
-		async (_kind, registered, seen, _whileStarting, onceStarted) => {
-			const instance = createInstanceStart(
-				steps({
-					startPlugins: async () => ({ ...pluginsWith(), ...registered }),
-				}),
-				recordingLogger().logger,
-			);
-
-			await instance.run();
-
-			expect(seen(instance)).toEqual(onceStarted);
 		},
 	);
 });

@@ -1,4 +1,4 @@
-import type { Actor } from "@workbench/sdk";
+import type { Actor, StartRole } from "@workbench/sdk";
 import { Secret } from "../config.ts";
 import { createEventDelivery } from "../event-outbox.ts";
 import { setSystemTimer } from "../hook-timeout.ts";
@@ -9,6 +9,7 @@ import {
 	startPlugins,
 } from "../kernel.ts";
 import type { Logger } from "../logger.ts";
+import { grantMembership } from "../memberships.ts";
 import {
 	createOperationPipeline,
 	type OperationPipeline,
@@ -42,6 +43,11 @@ export type OperationHarnessOptions = {
 	readonly newCorrelationId?: () => string;
 };
 
+export type HarnessMember = {
+	readonly actor: Actor;
+	readonly role: StartRole;
+};
+
 export type HarnessCall = {
 	readonly actor: Actor;
 	readonly workspace: string;
@@ -52,7 +58,10 @@ export type HarnessCall = {
 
 export type OperationHarness = {
 	readonly logEntries: readonly LogEntry[];
-	createWorkspace(name: string): Promise<string>;
+	createWorkspace(
+		name: string,
+		members: readonly HarnessMember[],
+	): Promise<string>;
 	call(call: HarnessCall): Promise<OperationResult>;
 	deliverEvents(): Promise<void>;
 	runJobs(): Promise<void>;
@@ -194,9 +203,19 @@ function harnessOf(
 		options.newCorrelationId ?? sequentialCorrelationIds();
 	return {
 		logEntries: entries,
-		createWorkspace: async (name) => {
+		createWorkspace: async (name, members) => {
 			const id = newId();
-			await createWorkspace(database.sql, { id, name, createdAt: now() });
+			const createdAt = now();
+			await database.sql.begin(async (transaction) => {
+				await createWorkspace(transaction, { id, name, createdAt });
+				for (const { actor, role } of members)
+					await grantMembership(transaction, {
+						workspace: id,
+						actor,
+						role,
+						createdAt,
+					});
+			});
 			return id;
 		},
 		call: ({ idempotencyKey, ...call }) =>

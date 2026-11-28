@@ -139,6 +139,7 @@ export class PostgresGate {
 	readonly #port: number;
 	readonly #target: URL;
 	#listener: TCPSocketListener<DownstreamState> | undefined;
+	#mode: GateMode = "refusing";
 	#acceptedConnections = 0;
 	readonly #held = new Set<GateDirection>();
 	readonly #heldBack: (() => void)[] = [];
@@ -179,7 +180,8 @@ export class PostgresGate {
 	}
 
 	goSilent(): void {
-		this.#switchTo("silent");
+		if (this.#mode === "forwarding") this.#mode = "silent";
+		else this.#switchTo("silent");
 	}
 
 	holdRequests(): void {
@@ -192,7 +194,8 @@ export class PostgresGate {
 
 	release(): void {
 		this.#held.clear();
-		for (const forward of this.#heldBack.splice(0)) forward();
+		for (const forward of this.#heldBack.splice(0))
+			if (this.#mode !== "silent") forward();
 	}
 
 	close(): void {
@@ -200,6 +203,7 @@ export class PostgresGate {
 	}
 
 	#pass(direction: GateDirection, forward: () => void): void {
+		if (this.#mode === "silent") return;
 		if (this.#held.has(direction)) this.#heldBack.push(forward);
 		else forward();
 	}
@@ -207,6 +211,7 @@ export class PostgresGate {
 	#switchTo(mode: GateMode): void {
 		this.#listener?.stop(true);
 		this.#listener = undefined;
+		this.#mode = mode;
 		if (mode === "refusing") return;
 		const target = {
 			hostname: this.#target.hostname,
@@ -219,7 +224,7 @@ export class PostgresGate {
 				open: (downstream) => {
 					this.#acceptedConnections += 1;
 					downstream.data = { upstream: undefined, pending: [] };
-					if (mode === "silent") return;
+					if (this.#mode === "silent") return;
 					void Bun.connect({
 						...target,
 						socket: {

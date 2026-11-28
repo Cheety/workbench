@@ -18,10 +18,3 @@ export async function createWorkspace(
 ): Promise<void> {
 	await sql`INSERT INTO core.workspaces (id, name, created_at) VALUES (${workspace.id}, ${workspace.name}, ${workspace.createdAt})`;
 }
-
-export async function workspaceExists(sql: SQL, id: string): Promise<boolean> {
-	if (!isWorkspaceId(id)) return false;
-	const rows: unknown[] =
-		await sql`SELECT 1 FROM core.workspaces WHERE id = ${id}`;
-	return rows.length > 0;
-}

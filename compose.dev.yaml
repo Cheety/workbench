@@ -1,4 +1,3 @@
-# Local test database for `bun run check`. Not a deployment file.
 name: workbench-dev
 
 services:

@@ -28,11 +28,35 @@ export type Schema<Value> = {
 	};
 };
 
-export type ActorKind = "user" | "service_account";
+export const ACTOR_KINDS = ["user", "service_account"] as const;
+export type ActorKind = (typeof ACTOR_KINDS)[number];
 
 export type Actor = {
 	readonly kind: ActorKind;
 	readonly id: string;
+};
+
+export const START_ROLES = ["owner", "editor", "viewer"] as const;
+export type StartRole = (typeof START_ROLES)[number];
+
+export type RightDefinition = {
+	readonly name: string;
+	readonly defaultRoles: readonly StartRole[];
+};
+
+export function defineRight(definition: RightDefinition): RightDefinition {
+	return definition;
+}
+
+export type AccessedObject = {
+	readonly workspace: string;
+	readonly holder: Actor | null;
+};
+
+export type OperationAuth = {
+	requireAccess<Accessed extends AccessedObject>(
+		object: Accessed | undefined,
+	): Accessed;
 };
 
 export type Sql = (
@@ -43,6 +67,7 @@ export type Sql = (
 export type OperationContext = {
 	readonly actor: Actor;
 	readonly workspace: string;
+	readonly auth: OperationAuth;
 	readonly sql: Sql;
 	now(): Date;
 	newId(): string;

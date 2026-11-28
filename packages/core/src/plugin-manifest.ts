@@ -15,6 +15,7 @@ import {
 import { CORE_OWNER_NAME, pluginOwner } from "./owner.ts";
 import { isPluginName } from "./plugin-name.ts";
 import { quote } from "./quote.ts";
+import { readRights } from "./rights.ts";
 import type { Migration } from "./schema-migrations.ts";
 import { MAX_PLUGIN_NAME_LENGTH } from "./schema-name.ts";
 
@@ -70,9 +71,11 @@ export function validatePlugin(
 		definition.manifest,
 		offeredCapabilities,
 	);
+	const rights = readRights(pluginOwner(declaredName), definition.rights);
 	const operations = readOperations(
 		pluginOwner(declaredName),
 		definition.operations,
+		rights.value,
 	);
 	const events = readEvents(declaredName, definition.events);
 	const subscriptions = readSubscriptions(
@@ -91,6 +94,7 @@ export function validatePlugin(
 		...migrationProblems(loadMigrations, capabilities.value),
 		...hookProblems(definition, "activate"),
 		...hookProblems(definition, "deactivate"),
+		...rights.problems,
 		...operations.problems,
 		...events.problems,
 		...subscriptions.problems,

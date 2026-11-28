@@ -180,9 +180,17 @@ _Avoid_: Zugriff, Freigabe
 Eine frei definierbare, benannte Zusammenstellung von Rechten, die über eine Mitgliedschaft vergeben wird.
 _Avoid_: Gruppe, Berechtigungsstufe
 
+**Startrolle**:
+Eine der Rollen Owner, Editor und Viewer, die jede Instanz kennt und denen ein Plugin seine Rechte per Default zuordnet; ein Recht ohne Zuordnung steht niemandem zu.
+_Avoid_: Standardrolle, Basisrolle, Default-Rolle
+
 **Recht**:
 Eine von einem Plugin deklarierte, benannte Erlaubnis (z. B. `kanban.board.edit`), auf die jede Operation genau einmal verweist.
 _Avoid_: Permission, Scope, Privileg
+
+**Besitzer**:
+Der Akteur, dem ein Objekt gehört, etwa weil er es angelegt hat; die Pipeline lässt über `ctx.auth` nur ihn auf das Objekt zu, wenn das Plugin den Besitzer nennt. Im Code heißt er `holder`.
+_Avoid_: Owner (das ist die Startrolle), Ersteller, Autor
 
 **Instanz-Admin**:
 Ein Nutzer, der Plugins, Nutzer und Instanz-Einstellungen verwaltet, unabhängig von Mitgliedschaften.

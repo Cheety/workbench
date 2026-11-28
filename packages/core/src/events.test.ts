@@ -16,6 +16,7 @@ import { Secret } from "./config.ts";
 import { createEventDelivery } from "./event-outbox.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import { type PluginPackage, startPlugins } from "./kernel.ts";
+import { grantMembership } from "./memberships.ts";
 import { createOperationPipeline } from "./operation-pipeline.ts";
 import { startPollLoop } from "./poll-loop.ts";
 import {
@@ -151,6 +152,10 @@ const ledger: PluginPackage = {
 	loadDefinition: async () =>
 		definePlugin({
 			manifest: { name: "ledger", capabilities: [DATABASE_CAPABILITY] },
+			rights: [
+				{ name: "ledger.entry.add", defaultRoles: ["owner"] },
+				{ name: "ledger.entry.read", defaultRoles: ["owner"] },
+			],
 			operations: [
 				addEntry,
 				addEntryWithUndeclaredEvent,
@@ -233,6 +238,7 @@ function tally(
 						eventSubscriptionCapability(entryAdded),
 					],
 				},
+				rights: [{ name: "tally.entry.read", defaultRoles: ["owner"] }],
 				operations: [listTallied],
 				subscriptions: [defineEventSubscription({ event: entryAdded, handle })],
 			}),
@@ -366,6 +372,12 @@ async function migratedDatabase(): Promise<FreshDatabase> {
 	await createWorkspace(database.sql, {
 		id: WORKSPACE,
 		name: "Alpha",
+		createdAt: new Date("2026-11-27T09:00:00.000Z"),
+	});
+	await grantMembership(database.sql, {
+		workspace: WORKSPACE,
+		actor: ALICE,
+		role: "owner",
 		createdAt: new Date("2026-11-27T09:00:00.000Z"),
 	});
 	return database;
@@ -536,7 +548,9 @@ describe("an event a mutation publishes", () => {
 	test("reaches the handler of a plugin that subscribed to it, with id, time, version, workspace and payload", async () => {
 		const statistics = recording("statistics");
 		const harness = await start([ledger, statistics.plugin]);
-		const workspace = await harness.createWorkspace("Alpha");
+		const workspace = await harness.createWorkspace("Alpha", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const entryId = await addEntryTo(harness, workspace, 5);
 		await harness.deliverEvents();
@@ -564,7 +578,9 @@ describe("an event a mutation publishes", () => {
 	test("is never delivered when the mutation is rolled back", async () => {
 		const statistics = recording("statistics");
 		const harness = await start([ledger, statistics.plugin]);
-		const workspace = await harness.createWorkspace("Alpha");
+		const workspace = await harness.createWorkspace("Alpha", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const added = await harness.call(addingEntry(workspace, -5));
 		await harness.deliverEvents();
@@ -583,7 +599,9 @@ describe("an event a mutation publishes", () => {
 				await ctx.sql`INSERT INTO tallied_entries (event_id, entry_id) VALUES (${event.id}, ${event.payload.entryId})`;
 			}),
 		]);
-		const workspace = await harness.createWorkspace("Alpha");
+		const workspace = await harness.createWorkspace("Alpha", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const entryId = await addEntryTo(harness, workspace, 5);
 		await harness.deliverEvents();
@@ -597,7 +615,9 @@ describe("an event a mutation publishes", () => {
 		const statistics = recording("statistics");
 		const search = recording("search");
 		const harness = await start([ledger, statistics.plugin, search.plugin]);
-		const workspace = await harness.createWorkspace("Alpha");
+		const workspace = await harness.createWorkspace("Alpha", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		await harness.call(addingEntry(workspace, 5));
 		await harness.call(addingEntry(workspace, 6));
@@ -622,7 +642,9 @@ describe("an event whose handler fails", () => {
 			if (attempts.length <= 2) throw new Error("the index is locked");
 		});
 		const harness = await start([ledger, flaky], { now: clock.now });
-		const workspace = await harness.createWorkspace("Alpha");
+		const workspace = await harness.createWorkspace("Alpha", [
+			{ actor: ALICE, role: "owner" },
+		]);
 		await harness.call(addingEntry(workspace, 5));
 
 		await harness.deliverEvents();
@@ -668,7 +690,9 @@ describe("an event whose handler fails", () => {
 			handled.push(event.payload.entryId);
 		});
 		const harness = await start([ledger, choosy, statistics.plugin]);
-		const workspace = await harness.createWorkspace("Alpha");
+		const workspace = await harness.createWorkspace("Alpha", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const refusedEntry = await addEntryTo(harness, workspace, 5);
 		refused.push(refusedEntry);
@@ -696,7 +720,9 @@ describe("an event whose handler fails", () => {
 			],
 			{ now: clock.now },
 		);
-		const workspace = await harness.createWorkspace("Alpha");
+		const workspace = await harness.createWorkspace("Alpha", [
+			{ actor: ALICE, role: "owner" },
+		]);
 		const entryId = await addEntryTo(harness, workspace, 5);
 
 		await harness.deliverEvents();
@@ -737,7 +763,9 @@ describe("an event whose handler fails", () => {
 				}),
 		};
 		const harness = await start([ledger, strict]);
-		const workspace = await harness.createWorkspace("Alpha");
+		const workspace = await harness.createWorkspace("Alpha", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		await harness.call(addingEntry(workspace, 5));
 		await harness.deliverEvents();
@@ -852,7 +880,9 @@ describe("a mutation that publishes what it may not", () => {
 		async (_case, operation, name, event) => {
 			const statistics = recording("statistics");
 			const harness = await start([ledger, billing, statistics.plugin]);
-			const workspace = await harness.createWorkspace("Alpha");
+			const workspace = await harness.createWorkspace("Alpha", [
+				{ actor: ALICE, role: "owner" },
+			]);
 
 			const added = await harness.call(
 				calling(workspace, operation, { amount: 5 }),
@@ -885,7 +915,9 @@ describe("a query", () => {
 	test("fails when it publishes an event, and delivers nothing", async () => {
 		const statistics = recording("statistics");
 		const harness = await start([ledger, statistics.plugin]);
-		const workspace = await harness.createWorkspace("Alpha");
+		const workspace = await harness.createWorkspace("Alpha", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const announced = await harness.call(
 			calling(workspace, "ledger.announceCount", {}),

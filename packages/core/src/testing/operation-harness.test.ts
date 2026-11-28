@@ -12,6 +12,8 @@ import { TEST_DATABASE_URL } from "./postgres.ts";
 
 const ALICE: Actor = { kind: "user", id: "alice" };
 
+const AGENT: Actor = { kind: "service_account", id: "agent" };
+
 const describeCall = defineOperation({
 	name: "describeCall",
 	kind: "query",
@@ -63,6 +65,10 @@ const ledger: PluginPackage = {
 	version: "1.0.0",
 	loadDefinition: async () => ({
 		...definePlugin({ manifest: { name: "ledger" } }),
+		rights: [
+			{ name: "ledger.entry.add", defaultRoles: ["owner"] },
+			{ name: "ledger.entry.read", defaultRoles: ["owner"] },
+		],
 		operations: [describeCall, drawId, nameDatabase],
 	}),
 };
@@ -83,7 +89,9 @@ const unstoppable: PluginPackage = {
 async function databaseOf(harness: OperationHarness): Promise<string> {
 	const named = await harness.call({
 		actor: ALICE,
-		workspace: await harness.createWorkspace("Accounts"),
+		workspace: await harness.createWorkspace("Accounts", [
+			{ actor: ALICE, role: "owner" },
+		]),
 		operation: "ledger.nameDatabase",
 		input: {},
 	});
@@ -149,7 +157,9 @@ describe("the operation harness", () => {
 
 	test("gives the operation a fixed clock, sequential ids and a fixed random number by default", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const described = await harness.call({
 			actor: ALICE,
@@ -185,10 +195,12 @@ describe("the operation harness", () => {
 			newId: () => ids.shift() ?? "exhausted",
 			random: () => 0.25,
 		});
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", [
+			{ actor: AGENT, role: "owner" },
+		]);
 
 		const described = await harness.call({
-			actor: { kind: "service_account", id: "agent" },
+			actor: AGENT,
 			workspace,
 			operation: "ledger.describeCall",
 			input: {},
@@ -211,7 +223,9 @@ describe("the operation harness", () => {
 
 	test("draws the ids of audit entries from a sequence of their own, so a mutation does not shift the ids of the next operation", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", [
+			{ actor: ALICE, role: "owner" },
+		]);
 		const call = {
 			actor: ALICE,
 			workspace,
@@ -256,7 +270,9 @@ describe("the operation harness", () => {
 		const harness = await startLedger({
 			newAuditEntryId: () => ids.shift() ?? "exhausted",
 		});
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", [
+			{ actor: ALICE, role: "owner" },
+		]);
 		await harness.call({
 			actor: ALICE,
 			workspace,
