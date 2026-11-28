@@ -418,6 +418,7 @@ const CONCURRENT_CALLS = 3;
 
 async function startLedgerPipeline(
 	database: FreshDatabase,
+	now: () => Date = () => new Date("2026-11-28T09:00:00.000Z"),
 ): Promise<OperationPipeline> {
 	const { logger } = recordingLogger();
 	const runner: MigrationRunner = {
@@ -440,11 +441,10 @@ async function startLedgerPipeline(
 	cleanups.push(async () => {
 		await plugins.deactivate();
 	});
-	const now = new Date("2026-11-28T09:00:00.000Z");
 	await createWorkspace(database.sql, {
 		id: WORKSPACE,
 		name: "Accounts",
-		createdAt: now,
+		createdAt: now(),
 	});
 	const pool = new SQL(database.url, { max: CONCURRENT_CALLS });
 	cleanups.push(() => pool.close());
@@ -453,7 +453,7 @@ async function startLedgerPipeline(
 		registry: plugins.operations,
 		events: plugins.events,
 		jobs: plugins.jobs,
-		now: () => now,
+		now,
 		newId: () => crypto.randomUUID(),
 		newAuditEntryId: () => crypto.randomUUID(),
 		newEventId: () => crypto.randomUUID(),
@@ -550,6 +550,43 @@ describe("a call waiting for one with the same idempotency key that fails", () =
 		expect(
 			await database.sql`SELECT amount FROM plugin_ledger.entries`,
 		).toEqual([{ amount: 5 }]);
+	});
+});
+
+async function removingKeysCreatedBefore(
+	database: FreshDatabase,
+	createdBefore: string,
+): Promise<void> {
+	await database.sql.unsafe(`
+		CREATE FUNCTION public.remove_keys_meanwhile() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			DELETE FROM core.idempotency_keys WHERE created_at < '${createdBefore}';
+			RETURN NULL;
+		END $$;
+		CREATE TRIGGER remove_keys_meanwhile AFTER INSERT ON core.idempotency_keys
+			FOR EACH STATEMENT EXECUTE FUNCTION public.remove_keys_meanwhile();
+	`);
+}
+
+describe("an idempotency key removed between the claim that found it and its answer being read", () => {
+	test("is claimed anew, so the call runs instead of failing", async () => {
+		const database = await createFreshDatabase();
+		cleanups.push(() => database.drop());
+		const clock = adjustableClock("2026-11-27T09:00:00.000Z");
+		const pipeline = await startLedgerPipeline(database, clock.now);
+		await addingEntryBehindTheLock(pipeline, 42, "call-1");
+		clock.advanceBy(ONE_DAY_MS + ONE_MINUTE_MS);
+		await removingKeysCreatedBefore(database, "2026-11-28T00:00:00.000Z");
+
+		const again = await addingEntryBehindTheLock(pipeline, 43, "call-2");
+
+		expect(again).toEqual({
+			ok: true,
+			output: { id: expect.any(String), amount: 43 },
+		});
+		expect(
+			await database.sql`SELECT amount FROM plugin_ledger.entries ORDER BY amount`,
+		).toEqual([{ amount: 42 }, { amount: 43 }]);
 	});
 });
 

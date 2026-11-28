@@ -49,7 +49,20 @@ export class IdempotencyKeyReusedError extends Error {
 	}
 }
 
+const MOST_CLAIMS = 2;
+
+export class IdempotencyKeyKeptRemovedError extends Error {
+	constructor() {
+		super(
+			`the idempotency key was removed each of the ${MOST_CLAIMS} times it was found claimed`,
+		);
+		this.name = "IdempotencyKeyKeptRemovedError";
+	}
+}
+
 const storedCall = z.object({ output: z.string(), matches: z.boolean() });
+
+type StoredCall = z.infer<typeof storedCall>;
 
 export async function runIdempotently(
 	transaction: SQL,
@@ -57,32 +70,56 @@ export async function runIdempotently(
 	run: () => Promise<unknown>,
 ): Promise<unknown> {
 	const inputHash = inputHashOf(call.input);
+	for (let claim = 1; claim <= MOST_CLAIMS; claim += 1) {
+		if (await isClaimed(transaction, call, inputHash))
+			return answered(transaction, call, await run());
+		const stored = await findStoredCall(transaction, call, inputHash);
+		if (stored !== undefined) return replayed(stored);
+	}
+	throw new IdempotencyKeyKeptRemovedError();
+}
+
+async function isClaimed(
+	transaction: SQL,
+	call: IdempotentCall,
+	inputHash: string,
+): Promise<boolean> {
 	const claimed: unknown[] = await transaction`
 		INSERT INTO core.idempotency_keys (actor_kind, actor_id, key, operation, workspace_id, input_hash, created_at)
 		VALUES (${call.actor.kind}, ${call.actor.id}, ${call.key}, ${call.operation}, ${call.workspace}, ${inputHash}, ${call.calledAt})
 		ON CONFLICT (actor_kind, actor_id, key) DO NOTHING
 		RETURNING key`;
-	if (claimed.length === 0) return replayed(transaction, call, inputHash);
-	const output = jsonFormOf(await run());
+	return claimed.length > 0;
+}
+
+async function answered(
+	transaction: SQL,
+	call: IdempotentCall,
+	output: unknown,
+): Promise<unknown> {
+	const json = jsonFormOf(output);
 	await transaction`
-		UPDATE core.idempotency_keys SET output = ${output}::text::json
+		UPDATE core.idempotency_keys SET output = ${json}::text::json
 		WHERE actor_kind = ${call.actor.kind} AND actor_id = ${call.actor.id} AND key = ${call.key}`;
-	const answer: unknown = JSON.parse(output);
+	const answer: unknown = JSON.parse(json);
 	return answer;
 }
 
-async function replayed(
+async function findStoredCall(
 	transaction: SQL,
 	call: IdempotentCall,
 	inputHash: string,
-): Promise<unknown> {
+): Promise<StoredCall | undefined> {
 	const [row]: unknown[] = await transaction`
 		SELECT
 			output::text AS output,
 			(operation = ${call.operation} AND workspace_id = ${call.workspace} AND input_hash = ${inputHash}) AS matches
 		FROM core.idempotency_keys
 		WHERE actor_kind = ${call.actor.kind} AND actor_id = ${call.actor.id} AND key = ${call.key}`;
-	const stored = storedCall.parse(row);
+	return row === undefined ? undefined : storedCall.parse(row);
+}
+
+function replayed(stored: StoredCall): unknown {
 	if (!stored.matches) throw new IdempotencyKeyReusedError();
 	const answer: unknown = JSON.parse(stored.output);
 	return answer;
