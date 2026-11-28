@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
 import { LOG_LEVELS, type LogLevel } from "./logger.ts";
 import { isPluginName } from "./plugin-name.ts";
@@ -135,7 +136,7 @@ type ResolvedValue = {
 };
 
 function readVariable(
-	source: ConfigSource,
+	source: Pick<ConfigSource, "env">,
 	variable: string,
 ): string | undefined {
 	const value = source.env[variable];
@@ -242,5 +243,151 @@ export function loadConfigFromEnvironment(): Config {
 	return loadConfig({
 		env: process.env,
 		readSecretFile: (path) => readFileSync(path, "utf8"),
+	});
+}
+
+export type CliConfig = {
+	readonly instanceUrl: URL;
+	readonly token: Secret;
+};
+
+export type CliConfigSource = {
+	readonly env: Readonly<Record<string, string | undefined>>;
+	readonly readFile: (path: string) => string | undefined;
+};
+
+const CLI_CONFIG_FILE = join("workbench", "cli.json");
+
+const INSTANCE_SCHEMES = ["http", "https"] as const;
+
+const cliConfigFile = z
+	.object({ url: z.string().optional(), token: z.string().optional() })
+	.strict();
+
+type CliConfigFile = z.infer<typeof cliConfigFile>;
+
+type CliConfigFileRead =
+	| {
+			readonly read: true;
+			readonly path: string | undefined;
+			readonly file: CliConfigFile;
+	  }
+	| { readonly read: false; readonly issue: ConfigIssue };
+
+function isInstanceUrl(value: string): boolean {
+	if (!URL.canParse(value)) return false;
+	const { protocol, hostname } = new URL(value);
+	return (
+		INSTANCE_SCHEMES.some((scheme) => protocol === `${scheme}:`) &&
+		hostname !== ""
+	);
+}
+
+function defaultCliConfigPath(source: CliConfigSource): string | undefined {
+	const configHome = readVariable(source, "XDG_CONFIG_HOME");
+	if (configHome !== undefined) return join(configHome, CLI_CONFIG_FILE);
+	const home = readVariable(source, "HOME");
+	if (home === undefined) return undefined;
+	return join(home, ".config", CLI_CONFIG_FILE);
+}
+
+function readCliConfigFile(source: CliConfigSource): CliConfigFileRead {
+	const chosen = readVariable(source, "WORKBENCH_CONFIG");
+	const path = chosen ?? defaultCliConfigPath(source);
+	if (path === undefined) return { read: true, path, file: {} };
+	const text = source.readFile(path);
+	if (text === undefined)
+		return chosen === undefined
+			? { read: true, path, file: {} }
+			: {
+					read: false,
+					issue: {
+						variable: "WORKBENCH_CONFIG",
+						problem: "names a file that does not exist",
+					},
+				};
+	const parsed = cliConfigFile.safeParse(parsedJsonOrUndefined(text));
+	if (!parsed.success)
+		return {
+			read: false,
+			issue: {
+				variable: path,
+				problem:
+					"must be a JSON object with no other fields than the strings url and token",
+			},
+		};
+	return { read: true, path, file: parsed.data };
+}
+
+function parsedJsonOrUndefined(text: string): unknown {
+	try {
+		return JSON.parse(text);
+	} catch (error) {
+		if (error instanceof SyntaxError) return undefined;
+		throw error;
+	}
+}
+
+type CliValue = {
+	readonly value: string | undefined;
+	readonly reportedAs: string;
+};
+
+function resolveCliValue(
+	source: CliConfigSource,
+	variable: string,
+	inFile: {
+		readonly path: string | undefined;
+		readonly field: string;
+		readonly value: string | undefined;
+	},
+): CliValue {
+	const fromEnvironment = readVariable(source, variable);
+	if (fromEnvironment !== undefined)
+		return { value: fromEnvironment, reportedAs: variable };
+	if (inFile.value !== undefined && inFile.value !== "")
+		return {
+			value: inFile.value,
+			reportedAs: `${inFile.field} in ${inFile.path}`,
+		};
+	const alternative =
+		inFile.path === undefined ? "" : `, or ${inFile.field} in ${inFile.path}`;
+	return { value: undefined, reportedAs: `${variable}${alternative}` };
+}
+
+export function loadCliConfig(source: CliConfigSource): CliConfig {
+	const configFile = readCliConfigFile(source);
+	if (!configFile.read) throw new InvalidConfigError([configFile.issue]);
+	const { path, file } = configFile;
+	const url = resolveCliValue(source, "WORKBENCH_URL", {
+		path,
+		field: "url",
+		value: file.url,
+	});
+	const token = resolveCliValue(source, "WORKBENCH_TOKEN", {
+		path,
+		field: "token",
+		value: file.token,
+	});
+	const issues: ConfigIssue[] = [];
+	if (url.value === undefined)
+		issues.push({ variable: url.reportedAs, problem: "is required" });
+	else if (!isInstanceUrl(url.value))
+		issues.push({
+			variable: url.reportedAs,
+			problem: `must be a ${INSTANCE_SCHEMES.map((scheme) => `${scheme}://`).join(" or ")} URL with a host`,
+		});
+	if (token.value === undefined)
+		issues.push({ variable: token.reportedAs, problem: "is required" });
+	if (url.value === undefined || token.value === undefined || issues.length > 0)
+		throw new InvalidConfigError(issues);
+	return { instanceUrl: new URL(url.value), token: new Secret(token.value) };
+}
+
+export function loadCliConfigFromEnvironment(): CliConfig {
+	return loadCliConfig({
+		env: process.env,
+		readFile: (path) =>
+			existsSync(path) ? readFileSync(path, "utf8") : undefined,
 	});
 }
