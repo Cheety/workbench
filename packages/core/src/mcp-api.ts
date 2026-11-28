@@ -12,7 +12,10 @@ import {
 	authenticateRequest,
 	type HttpApi,
 } from "./http-api.ts";
-import type { RegisteredOperation } from "./operation-registry.ts";
+import type {
+	OperationRegistry,
+	RegisteredOperation,
+} from "./operation-registry.ts";
 import {
 	MAX_BODY_BYTES,
 	type Problem,
@@ -47,6 +50,10 @@ const INVALID_WORKSPACE_ARGUMENT: Problem = {
 	detail: "the workspace argument of the tool is not a UUID",
 };
 
+export type McpApi = Pick<HttpApi, "authenticate" | "pipeline"> & {
+	readonly operations: Pick<OperationRegistry, "list">;
+};
+
 type ToolCaller = {
 	readonly actor: Actor;
 	readonly apiTokenId: string;
@@ -54,7 +61,7 @@ type ToolCaller = {
 };
 
 export async function answerMcpRequest(
-	api: HttpApi,
+	api: McpApi,
 	incoming: ApiRequest,
 ): Promise<Response> {
 	const { request, correlationId } = incoming;
@@ -82,7 +89,7 @@ export async function answerMcpRequest(
 	}
 }
 
-function mcpServerFor(api: HttpApi, caller: ToolCaller): Server {
+function mcpServerFor(api: McpApi, caller: ToolCaller): Server {
 	const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
 	server.setRequestHandler(ListToolsRequestSchema, () => ({
 		tools: api.operations.list().map(toolOf),
@@ -110,7 +117,7 @@ function toolOf(operation: RegisteredOperation): Tool {
 }
 
 async function callTool(
-	api: HttpApi,
+	api: McpApi,
 	caller: ToolCaller,
 	params: {
 		readonly name: string;

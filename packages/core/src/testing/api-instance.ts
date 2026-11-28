@@ -117,10 +117,10 @@ async function startedApiInstance(
 			return `request-${issuedCorrelationIds}`;
 		},
 		startupStatus: () => "started",
+		operations: running.operations,
 		api: {
 			authenticate: (token) =>
 				authenticateToken(authenticationSql, token, clock),
-			operations: running.operations,
 			pipeline: createOperationPipeline({
 				sql: database.sql,
 				registry: running.operations,

@@ -199,9 +199,9 @@ const server = startServerOrExit({
 	checkDatabase,
 	newCorrelationId: () => crypto.randomUUID(),
 	startupStatus: instance.status,
+	operations: instance.operations,
 	api: {
 		authenticate: (token) => authenticateToken(sql, token, now()),
-		operations: instance.operations,
 		pipeline: createOperationPipeline({
 			sql,
 			registry: instance.operations,

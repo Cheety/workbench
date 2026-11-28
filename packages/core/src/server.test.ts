@@ -51,9 +51,9 @@ async function startTestServer(startupStatus: StartupStatus = "started") {
 		}),
 		newCorrelationId: () => `generated-${nextId++}`,
 		startupStatus: () => startupStatus,
+		operations: registerOperations([]),
 		api: {
 			authenticate: (token) => authenticateToken(sql, token, NOW),
-			operations: registerOperations([]),
 			pipeline: createOperationPipeline({
 				sql,
 				registry: registerOperations([]),
