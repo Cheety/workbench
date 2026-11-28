@@ -29,12 +29,28 @@ const NOW = new Date("2026-11-26T08:00:00.000Z");
 
 const NOT_STOPPED = new AbortController().signal;
 
+export type IdentifiedToken = {
+	readonly token: string;
+	readonly serviceAccountId: string;
+	readonly apiTokenId: string;
+};
+
+export class UnidentifiedApiTokenError extends Error {
+	constructor(idsIssued: number) {
+		super(
+			`creating a service account issued ${idsIssued} ids, expected one for the service account and one for its API token`,
+		);
+		this.name = "UnidentifiedApiTokenError";
+	}
+}
+
 export type ApiInstance = {
 	readonly url: string;
 	readonly database: FreshDatabase;
 	readonly logEntries: readonly LogEntry[];
 	refuseAuthenticationDatabase(): void;
 	issueToken(role: StartRole): Promise<string>;
+	issueIdentifiedToken(role: StartRole): Promise<IdentifiedToken>;
 	setClock(now: Date): void;
 	post(
 		path: string,
@@ -143,30 +159,48 @@ async function startedApiInstance(
 	});
 	cleanups.push(() => server.stop());
 	const url = `http://127.0.0.1:${server.port}`;
+	const issueIdentifiedToken = async (
+		role: StartRole,
+	): Promise<IdentifiedToken> => {
+		issuedTokens += 1;
+		const idsOfTheAccount: string[] = [];
+		const issued = await createServiceAccount(
+			database.sql,
+			{ name: `agent ${issuedTokens}`, validDays: 30 },
+			{
+				now: () => clock,
+				newId: () => {
+					const id = newId();
+					idsOfTheAccount.push(id);
+					return id;
+				},
+				newToken: () => new Secret(`wbt_test-token-${issuedTokens}`),
+			},
+		);
+		const [apiTokenId, ...unexpected] = idsOfTheAccount.filter(
+			(id) => id !== issued.serviceAccountId,
+		);
+		if (apiTokenId === undefined || unexpected.length > 0)
+			throw new UnidentifiedApiTokenError(idsOfTheAccount.length);
+		await grantMembership(database.sql, {
+			workspace: API_INSTANCE_WORKSPACE,
+			actor: { kind: "service_account", id: issued.serviceAccountId },
+			role,
+			createdAt: clock,
+		});
+		return {
+			token: issued.token.reveal(),
+			serviceAccountId: issued.serviceAccountId,
+			apiTokenId,
+		};
+	};
 	return {
 		url,
 		database,
 		logEntries: entries,
 		refuseAuthenticationDatabase: () => authenticationGate.refuse(),
-		issueToken: async (role) => {
-			issuedTokens += 1;
-			const issued = await createServiceAccount(
-				database.sql,
-				{ name: `agent ${issuedTokens}`, validDays: 30 },
-				{
-					now: () => clock,
-					newId,
-					newToken: () => new Secret(`wbt_test-token-${issuedTokens}`),
-				},
-			);
-			await grantMembership(database.sql, {
-				workspace: API_INSTANCE_WORKSPACE,
-				actor: { kind: "service_account", id: issued.serviceAccountId },
-				role,
-				createdAt: clock,
-			});
-			return issued.token.reveal();
-		},
+		issueToken: async (role) => (await issueIdentifiedToken(role)).token,
+		issueIdentifiedToken,
 		setClock: (now) => {
 			clock = now;
 		},
