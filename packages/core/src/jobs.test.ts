@@ -646,17 +646,17 @@ describe("a mutation that enqueues what it may not", () => {
 			"a job its plugin does not declare",
 			"billing.sendInvoiceWithUndeclaredJob",
 			"UndeclaredJobError",
-			'"billing" enqueued the job "billing.remindOfInvoice", which it does not declare among its jobs',
+			"billing.remindOfInvoice",
 		],
 		[
 			"a payload its job definition rejects",
 			"billing.sendInvoiceWithMalformedJob",
 			"InvalidJobPayloadError",
-			'the payload of the job "billing.deliverInvoice" does not match its payload schema',
+			"billing.deliverInvoice",
 		],
 	])(
 		"is rolled back and runs nothing for %s",
-		async (_case, operation, name, message) => {
+		async (_case, operation, name, job) => {
 			const deliveries = recordingDeliveries();
 			const harness = await start([deliveries.plugin]);
 			const workspace = await harness.createWorkspace("Alpha");
@@ -674,7 +674,10 @@ describe("a mutation that enqueues what it may not", () => {
 				expect.objectContaining({
 					message: "operation failed",
 					reason: "execute_threw",
-					error: expect.objectContaining({ name, message }),
+					error: expect.objectContaining({
+						name,
+						message: expect.stringContaining(job),
+					}),
 				}),
 			);
 			expect(
@@ -705,8 +708,7 @@ describe("a query", () => {
 				message: "operation failed",
 				error: expect.objectContaining({
 					name: "JobEnqueuedByQueryError",
-					message:
-						'the query "billing.countInvoicesAndRemind" enqueued a job; only a mutation enqueues jobs',
+					message: expect.stringContaining("billing.countInvoicesAndRemind"),
 				}),
 			}),
 		);

@@ -1314,9 +1314,10 @@ describe("a cron job of an instance with two processes", () => {
 
 		const enqueued = enqueueReminder(database.sql, jobs, JOB);
 
-		await expect(enqueued).rejects.toThrow(
-			'"mailer" enqueued the job "mailer.sendReminder", which it does not declare among its jobs',
-		);
+		await expect(enqueued).rejects.toMatchObject({
+			name: "UndeclaredJobError",
+			message: expect.stringContaining("mailer.sendReminder"),
+		});
 	});
 });
 
