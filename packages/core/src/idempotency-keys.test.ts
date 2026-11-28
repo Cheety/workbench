@@ -172,25 +172,34 @@ describe("a mutation called with an idempotency key already used", () => {
 	test.each([
 		{
 			variant: "another input",
+			operation: "ledger.addEntry",
 			amount: 43,
 			workspaceOf: (workspaces: Workspaces) => workspaces.accounts,
 		},
 		{
 			variant: "another workspace",
+			operation: "ledger.addEntry",
 			amount: 42,
 			workspaceOf: (workspaces: Workspaces) => workspaces.payroll,
 		},
+		{
+			variant: "another operation",
+			operation: "ledger.addEntryBehindLock",
+			amount: 42,
+			workspaceOf: (workspaces: Workspaces) => workspaces.accounts,
+		},
 	])(
 		"is rejected with idempotency_key_reused for $variant and runs not",
-		async ({ amount, workspaceOf }) => {
+		async ({ operation, amount, workspaceOf }) => {
 			const harness = await startLedger();
 			const accounts = await harness.createWorkspace("Accounts");
 			const payroll = await harness.createWorkspace("Payroll");
 			await harness.call(addingEntry(accounts, 42, "retry-1"));
 
-			const again = await harness.call(
-				addingEntry(workspaceOf({ accounts, payroll }), amount, "retry-1"),
-			);
+			const again = await harness.call({
+				...addingEntry(workspaceOf({ accounts, payroll }), amount, "retry-1"),
+				operation,
+			});
 
 			expect(again).toEqual({
 				ok: false,
@@ -476,26 +485,32 @@ async function untilSessionsWaitForALock(
 			WHERE datname = current_database() AND wait_event_type = 'Lock'`;
 }
 
+function addingEntryBehindTheLock(
+	pipeline: OperationPipeline,
+	amount: number,
+	correlationId: string,
+) {
+	return pipeline.invoke({
+		operation: "ledger.addEntryBehindLock",
+		actor: ALICE,
+		apiTokenId: null,
+		idempotencyKey: "retry-1",
+		workspace: WORKSPACE,
+		input: { amount },
+		correlationId,
+	});
+}
+
 describe("two calls of a mutation with the same idempotency key at the same time", () => {
 	test("run it once, and the later answers as the earlier", async () => {
 		const database = await createFreshDatabase();
 		cleanups.push(() => database.drop());
 		const pipeline = await startLedgerPipeline(database);
 		const holder = await connectionHoldingTheEntryLock(database);
-		const calling = (correlationId: string) =>
-			pipeline.invoke({
-				operation: "ledger.addEntryBehindLock",
-				actor: ALICE,
-				apiTokenId: null,
-				idempotencyKey: "retry-1",
-				workspace: WORKSPACE,
-				input: { amount: 42 },
-				correlationId,
-			});
 
-		const earlier = calling("call-1");
+		const earlier = addingEntryBehindTheLock(pipeline, 42, "call-1");
 		await untilSessionsWaitForALock(database.sql, 1);
-		const later = calling("call-2");
+		const later = addingEntryBehindTheLock(pipeline, 42, "call-2");
 		await untilSessionsWaitForALock(database.sql, 2);
 		await holder`SELECT pg_advisory_unlock(${ENTRY_LOCK})`;
 		const answers = await Promise.all([earlier, later]);
@@ -508,6 +523,33 @@ describe("two calls of a mutation with the same idempotency key at the same time
 		expect(
 			await database.sql`SELECT amount FROM plugin_ledger.entries`,
 		).toEqual([{ amount: 42 }]);
+	});
+});
+
+describe("a call waiting for one with the same idempotency key that fails", () => {
+	test("runs the mutation itself once the failed call has rolled back", async () => {
+		const database = await createFreshDatabase();
+		cleanups.push(() => database.drop());
+		const pipeline = await startLedgerPipeline(database);
+		const holder = await connectionHoldingTheEntryLock(database);
+
+		const failing = addingEntryBehindTheLock(pipeline, 0, "call-1");
+		await untilSessionsWaitForALock(database.sql, 1);
+		const waiting = addingEntryBehindTheLock(pipeline, 5, "call-2");
+		await untilSessionsWaitForALock(database.sql, 2);
+		await holder`SELECT pg_advisory_unlock(${ENTRY_LOCK})`;
+		const answers = await Promise.all([failing, waiting]);
+
+		expect(answers).toEqual([
+			{
+				ok: false,
+				failure: expect.objectContaining({ code: "ledger.zero_amount" }),
+			},
+			{ ok: true, output: { id: expect.any(String), amount: 5 } },
+		]);
+		expect(
+			await database.sql`SELECT amount FROM plugin_ledger.entries`,
+		).toEqual([{ amount: 5 }]);
 	});
 });
 
