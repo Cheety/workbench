@@ -268,6 +268,23 @@ function unreachablePostgres(database: FreshDatabase): {
 	return { sql, cancellation };
 }
 
+function postgresBehindAGate(database: FreshDatabase): {
+	readonly gate: PostgresGate;
+	readonly sql: SQL;
+	readonly cancellation: SQL;
+} {
+	const gate = PostgresGate.create(database.url);
+	gate.forward();
+	const sql = new SQL(gate.url, { max: 1 });
+	const cancellation = new SQL(gate.url, { max: 1 });
+	cleanups.push(async () => {
+		await cancellation.close();
+		await sql.close();
+		gate.close();
+	});
+	return { gate, sql, cancellation };
+}
+
 async function refuseNewConnections(database: FreshDatabase): Promise<void> {
 	const name = new URL(database.url).pathname.slice(1);
 	const admin = new SQL(TEST_DATABASE_URL, { max: 1 });
@@ -339,6 +356,8 @@ describe("a job that exceeds its timeout", () => {
 				retryInMs: 2500,
 			}),
 		]);
+		expect(timer.delaysMs).toEqual([250, 250]);
+		expect(timer.pendingCount()).toBe(0);
 	});
 
 	test("counts as failed when its payload schema does not finish validating in time", async () => {
@@ -371,6 +390,7 @@ describe("a job that exceeds its timeout", () => {
 				retryInMs: 2500,
 			}),
 		]);
+		expect(timer.delaysMs).toEqual([250]);
 	});
 
 	test("is not run when its payload schema finishes validating after its time is up", async () => {
@@ -415,6 +435,7 @@ describe("a job that exceeds its timeout", () => {
 		await database.sql`SELECT 1`;
 
 		expect(run).toEqual([]);
+		expect(timer.delaysMs).toEqual([250]);
 	});
 
 	test("is refused what it writes after its time is up, and leaves nothing of it behind", async () => {
@@ -1615,17 +1636,17 @@ describe("the job loop on the queue", () => {
 describe("the job queue", () => {
 	test("asks Postgres for nothing until the core schema exists", async () => {
 		const database = await freshDatabase();
-		const unreachable = unreachablePostgres(database);
+		const { gate, sql, cancellation } = postgresBehindAGate(database);
 		const { queue } = queueOf({
-			sql: unreachable.sql,
-			cancellation: unreachable.cancellation,
+			sql,
+			cancellation,
 			jobs: registryOf(sendingReminders(async () => {})),
 			hasCoreSchema: () => false,
 		});
 
-		const run = queue.runDue(NOT_STOPPED);
+		await queue.runDue(NOT_STOPPED);
 
-		await expect(run).resolves.toBeUndefined();
+		expect(gate.acceptedConnections).toBe(0);
 	});
 
 	test("hands a job to its run function once when two processes run the due jobs at the same time", async () => {

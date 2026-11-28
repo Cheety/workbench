@@ -297,20 +297,21 @@ function cancellationBehindAGate(database: FreshDatabase): {
 	return { gate, cancellation };
 }
 
-function unreachablePostgres(database: FreshDatabase): {
+function postgresBehindAGate(database: FreshDatabase): {
+	readonly gate: PostgresGate;
 	readonly sql: SQL;
 	readonly cancellation: SQL;
 } {
 	const gate = PostgresGate.create(database.url);
-	gate.refuse();
-	const sql = new SQL(gate.url, { max: 1, connectionTimeout: 1 });
-	const cancellation = new SQL(gate.url, { max: 1, connectionTimeout: 1 });
+	gate.forward();
+	const sql = new SQL(gate.url, { max: 1 });
+	const cancellation = new SQL(gate.url, { max: 1 });
 	cleanups.push(async () => {
 		await cancellation.close();
 		await sql.close();
 		gate.close();
 	});
-	return { sql, cancellation };
+	return { gate, sql, cancellation };
 }
 
 async function refuseNewConnections(database: FreshDatabase): Promise<void> {
@@ -457,6 +458,8 @@ describe("event delivery", () => {
 				retryInMs: 500,
 			}),
 		]);
+		expect(timer.delaysMs).toEqual([250, 250]);
+		expect(timer.pendingCount()).toBe(0);
 	});
 
 	test("gives up on a payload schema that does not finish validating in time, as on a handler", async () => {
@@ -491,6 +494,7 @@ describe("event delivery", () => {
 				attempt: 1,
 			}),
 		]);
+		expect(timer.delaysMs).toEqual([250]);
 	});
 
 	test("does not start a handler whose payload schema finishes validating after its time is up", async () => {
@@ -534,6 +538,7 @@ describe("event delivery", () => {
 		await database.sql`SELECT 1`;
 
 		expect(handled).toEqual([]);
+		expect(timer.delaysMs).toEqual([250]);
 	});
 
 	test("tells the operator the wait it stored for the retry, though every draw of the jitter differs", async () => {
@@ -654,17 +659,17 @@ describe("event delivery", () => {
 
 	test("asks Postgres for nothing until the core schema exists", async () => {
 		const database = await freshDatabase();
-		const unreachable = unreachablePostgres(database);
+		const { gate, sql, cancellation } = postgresBehindAGate(database);
 		const { delivery } = deliveryOf({
-			sql: unreachable.sql,
-			cancellation: unreachable.cancellation,
+			sql,
+			cancellation,
 			events: registryOf(subscribing("search", labelRenamed, async () => {})),
 			hasCoreSchema: () => false,
 		});
 
-		const delivered = delivery.deliverDue(NOT_STOPPED);
+		await delivery.deliverDue(NOT_STOPPED);
 
-		await expect(delivered).resolves.toBeUndefined();
+		expect(gate.acceptedConnections).toBe(0);
 	});
 
 	test("hands an event to its handler once when two deliveries run at the same time", async () => {
@@ -1243,14 +1248,20 @@ async function deliveriesOf(sql: SQL, eventId: string): Promise<unknown[]> {
 	return [...rows];
 }
 
+function withoutTime({ time: _time, ...entry }: LogEntry): LogEntry {
+	return entry;
+}
+
 function deadLettersIn(entries: readonly LogEntry[]): LogEntry[] {
-	return entries.filter((entry) => entry.message === "event dead-lettered");
+	return entries
+		.filter((entry) => entry.message === "event dead-lettered")
+		.map(withoutTime);
 }
 
 function expiriesIn(entries: readonly LogEntry[]): LogEntry[] {
-	return entries.filter(
-		(entry) => entry.message === "event deliveries expired",
-	);
+	return entries
+		.filter((entry) => entry.message === "event deliveries expired")
+		.map(withoutTime);
 }
 
 async function insertLabelRenamedOpenFor(
@@ -1299,7 +1310,6 @@ describe("a delivery whose handler keeps failing", () => {
 		expect(failuresIn(entries)).toHaveLength(MOST_ATTEMPTS - 1);
 		expect(deadLettersIn(entries)).toEqual([
 			{
-				time: "2026-11-26T08:00:00.000Z",
 				level: "error",
 				message: "event dead-lettered",
 				eventId: EVENT,
@@ -1414,7 +1424,6 @@ describe("a delivery that is still open when its delivery deadline has passed", 
 		expect(expiriesIn(justBefore.entries)).toEqual([]);
 		expect(expiriesIn(onTheDay.entries)).toEqual([
 			{
-				time: "2026-11-26T08:00:00.000Z",
 				level: "error",
 				message: "event deliveries expired",
 				subscriber: "archive",
@@ -1422,7 +1431,6 @@ describe("a delivery that is still open when its delivery deadline has passed", 
 				expired: 2,
 			},
 			{
-				time: "2026-11-26T08:00:00.000Z",
 				level: "error",
 				message: "event deliveries expired",
 				subscriber: "search",
