@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { type Actor, defineCronJob } from "@workbench/sdk";
+import { type Actor, defineCronJob, type OperationKind } from "@workbench/sdk";
 import type { SQL } from "bun";
 import { z } from "zod";
 import { isRecord } from "./is-record.ts";
@@ -15,6 +15,11 @@ const IDEMPOTENCY_KEY = new RegExp(IDEMPOTENCY_KEY_PATTERN);
 const RETENTION_MS = 86_400_000;
 
 const MOST_REMOVED_PER_RUN = 10_000;
+
+export const TAKES_IDEMPOTENCY_KEY: Record<OperationKind, boolean> = {
+	query: false,
+	mutation: true,
+};
 
 export class InvalidIdempotencyKeyError extends Error {
 	constructor() {

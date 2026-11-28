@@ -1,8 +1,9 @@
 import { fileURLToPath } from "node:url";
-import { DATABASE_CAPABILITY, type OperationKind } from "@workbench/sdk";
+import { DATABASE_CAPABILITY } from "@workbench/sdk";
 import { CORE_OPERATIONS } from "./core-operations.ts";
 import type { SetTimer } from "./hook-timeout.ts";
 import { IDEMPOTENCY_KEY_HEADER, OPERATION_PATH_TEMPLATE } from "./http-api.ts";
+import { TAKES_IDEMPOTENCY_KEY } from "./idempotency-keys.ts";
 import type { JsonSchema } from "./json-schema.ts";
 import type { PluginPackage } from "./kernel.ts";
 import type { RegisteredOperation } from "./operation-registry.ts";
@@ -117,11 +118,6 @@ const IDEMPOTENCY_KEY_PARAMETER: JsonSchema = {
 	schema: { type: "string", minLength: 1, maxLength: 255 },
 };
 
-const HEADER_PARAMETERS: Record<OperationKind, readonly JsonSchema[]> = {
-	query: [],
-	mutation: [IDEMPOTENCY_KEY_PARAMETER],
-};
-
 const RESPONSE_HEADERS = {
 	[CORRELATION_ID_HEADER]: { $ref: CORRELATION_ID_REF },
 };
@@ -175,7 +171,12 @@ async function operationsOf(
 function describeOperation(operation: RegisteredOperation): OpenApiOperation {
 	return {
 		operationId: operation.name,
-		parameters: [WORKSPACE_PARAMETER, ...HEADER_PARAMETERS[operation.kind]],
+		parameters: [
+			WORKSPACE_PARAMETER,
+			...(TAKES_IDEMPOTENCY_KEY[operation.kind]
+				? [IDEMPOTENCY_KEY_PARAMETER]
+				: []),
+		],
 		requestBody: {
 			required: true,
 			content: { [JSON_CONTENT_TYPE]: { schema: operation.describeInput() } },

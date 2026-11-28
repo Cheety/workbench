@@ -15,6 +15,7 @@ import {
 	InvalidIdempotencyKeyError,
 	idempotencyKey,
 	runIdempotently,
+	TAKES_IDEMPOTENCY_KEY,
 } from "./idempotency-keys.ts";
 import { enqueueJob } from "./job-queue.ts";
 import type { JobRegistry } from "./job-registry.ts";
@@ -168,7 +169,7 @@ async function invoke(
 	});
 	try {
 		const key =
-			call.idempotencyKey === null || !IS_REPLAYED[operation.kind]
+			call.idempotencyKey === null || !TAKES_IDEMPOTENCY_KEY[operation.kind]
 				? null
 				: idempotencyKey(call.idempotencyKey);
 		const input = await operation.validateInput(call.input);
@@ -234,11 +235,6 @@ const BEGIN_TRANSACTION: Record<
 };
 
 const IS_AUDITED: Record<OperationKind, boolean> = {
-	query: false,
-	mutation: true,
-};
-
-const IS_REPLAYED: Record<OperationKind, boolean> = {
 	query: false,
 	mutation: true,
 };
