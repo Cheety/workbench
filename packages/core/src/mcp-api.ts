@@ -95,9 +95,17 @@ function mcpServerFor(
 	return server;
 }
 
+function toolNameOf(operationName: string): string {
+	return operationName.replace(OPERATION_NAME_SEPARATOR, TOOL_NAME_SEPARATOR);
+}
+
+function operationNameOf(toolName: string): string {
+	return toolName.replace(TOOL_NAME_SEPARATOR, OPERATION_NAME_SEPARATOR);
+}
+
 function toolOf(operation: RegisteredOperation): Tool {
 	return {
-		name: operation.name.replace(OPERATION_NAME_SEPARATOR, TOOL_NAME_SEPARATOR),
+		name: toolNameOf(operation.name),
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -124,10 +132,7 @@ async function callTool(
 	if (typeof workspace !== "string" || !isWorkspaceId(workspace))
 		return toolError(INVALID_WORKSPACE_ARGUMENT, correlationId);
 	const result = await api.pipeline.invoke({
-		operation: params.name.replace(
-			TOOL_NAME_SEPARATOR,
-			OPERATION_NAME_SEPARATOR,
-		),
+		operation: operationNameOf(params.name),
 		actor: authentication.actor,
 		apiTokenId: authentication.apiTokenId,
 		idempotencyKey: null,
