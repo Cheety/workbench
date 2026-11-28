@@ -57,6 +57,12 @@ export type McpApi = Pick<HttpApi, "authenticate" | "pipeline"> & {
 	readonly operations: Pick<OperationRegistry, "list">;
 };
 
+type McpRequest = {
+	readonly api: McpApi;
+	readonly authentication: AuthenticatedToken;
+	readonly correlationId: string;
+};
+
 export async function answerMcpRequest(
 	api: McpApi,
 	incoming: ApiRequest,
@@ -69,7 +75,7 @@ export async function answerMcpRequest(
 	}
 	const authentication = await authenticateRequest(api, incoming);
 	if (!authentication.authenticated) return authentication.response;
-	const server = mcpServerFor(api, authentication, correlationId);
+	const server = mcpServerFor({ api, authentication, correlationId });
 	const transport = new WebStandardStreamableHTTPServerTransport({
 		enableJsonResponse: true,
 		maxRequestBodySize: MAX_BODY_BYTES,
@@ -82,17 +88,13 @@ export async function answerMcpRequest(
 	}
 }
 
-function mcpServerFor(
-	api: McpApi,
-	authentication: AuthenticatedToken,
-	correlationId: string,
-): Server {
+function mcpServerFor(mcpRequest: McpRequest): Server {
 	const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
 	server.setRequestHandler(ListToolsRequestSchema, () => ({
-		tools: api.operations.list().map(toolOf),
+		tools: mcpRequest.api.operations.list().map(toolOf),
 	}));
 	server.setRequestHandler(CallToolRequestSchema, ({ params }) =>
-		callTool(api, authentication, correlationId, params),
+		callTool(mcpRequest, params),
 	);
 	return server;
 }
@@ -127,9 +129,7 @@ function toolOf(operation: RegisteredOperation): Tool {
 }
 
 async function callTool(
-	api: McpApi,
-	authentication: AuthenticatedToken,
-	correlationId: string,
+	{ api, authentication, correlationId }: McpRequest,
 	params: {
 		readonly name: string;
 		readonly arguments?: Readonly<Record<string, unknown>> | undefined;
