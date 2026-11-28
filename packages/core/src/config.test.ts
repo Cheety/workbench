@@ -387,6 +387,49 @@ describe("loadCliConfig", () => {
 		]);
 	});
 
+	test.each([
+		{
+			case: "a line break in WORKBENCH_TOKEN",
+			env: { WORKBENCH_TOKEN: `${TOKEN}\n` },
+			file: {},
+			subject: "WORKBENCH_TOKEN",
+		},
+		{
+			case: "a space in WORKBENCH_TOKEN",
+			env: { WORKBENCH_TOKEN: `Bearer ${TOKEN}` },
+			file: {},
+			subject: "WORKBENCH_TOKEN",
+		},
+		{
+			case: "a character beyond ASCII in the token of the file",
+			env: {},
+			file: { token: `${TOKEN}\u20ac` },
+			subject: "token in /home/ada/.config/workbench/cli.json",
+		},
+	])(
+		"rejects a token that cannot be sent as a bearer token in an HTTP header, with $case, and names its source, not the token",
+		({ env, file, subject }) => {
+			const error = captureInvalidCliConfig({
+				env: {
+					HOME: "/home/ada",
+					WORKBENCH_URL: "http://127.0.0.1:3000",
+					...env,
+				},
+				readFile: filesOf({
+					"/home/ada/.config/workbench/cli.json": JSON.stringify(file),
+				}),
+			});
+
+			expect(error.issues).toEqual([
+				{
+					subject,
+					problem: "must consist of visible ASCII characters only",
+				},
+			]);
+			expect(error.message).not.toContain(TOKEN);
+		},
+	);
+
 	test("names only the variables when neither HOME nor XDG_CONFIG_HOME is set", () => {
 		const error = captureInvalidCliConfig({ env: {}, readFile: filesOf({}) });
 

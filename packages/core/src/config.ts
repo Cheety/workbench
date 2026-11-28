@@ -287,6 +287,8 @@ const INSTANCE_SCHEMES = ["http", "https"] as const;
 
 const MISSING_FILE_REASON = "ENOENT";
 
+const BEARER_TOKEN = /^[!-~]+$/;
+
 const cliConfigFile = z
 	.object({ url: z.string().optional(), token: z.string().optional() })
 	.strict();
@@ -411,7 +413,16 @@ function instanceUrlOf(resolved: Resolved<CliValue>): Resolved<URL> {
 
 function tokenOf(resolved: Resolved<CliValue>): Resolved<Secret> {
 	if (!resolved.ok) return resolved;
-	return { ok: true, value: new Secret(resolved.value.value) };
+	const { value, reportedAs } = resolved.value;
+	if (!BEARER_TOKEN.test(value))
+		return {
+			ok: false,
+			issue: {
+				subject: reportedAs,
+				problem: "must consist of visible ASCII characters only",
+			},
+		};
+	return { ok: true, value: new Secret(value) };
 }
 
 export function loadCliConfig(source: CliConfigSource): CliConfig {

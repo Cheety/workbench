@@ -591,7 +591,7 @@ Die Konfigurationsdatei ist ein JSON-Objekt mit höchstens den Feldern `url` und
 { "url": "https://workbench.example", "token": "wbt_…" }
 ```
 
-Fehlt ein Pflichtwert, ist die Adresse ungültig, fehlt die Datei aus `WORKBENCH_CONFIG`, lässt sich eine Datei nicht lesen (`<datei> cannot be read`, etwa ein Verzeichnis oder ohne Leserecht) oder ist sie kein solches Objekt, endet das Kommando mit Exit-Code 2 und `invalid configuration:`, darunter je Befund eine Zeile, die Variable, Feld oder Datei nennt, nie einen Wert, etwa `WORKBENCH_TOKEN, or token in /home/ada/.config/workbench/cli.json is required`.
+Fehlt ein Pflichtwert, ist die Adresse ungültig, besteht das Token nicht nur aus sichtbaren ASCII-Zeichen (`must consist of visible ASCII characters only`, etwa mit Zeilenumbruch oder Leerzeichen, sodass es sich nicht als Bearer-Token senden ließe), fehlt die Datei aus `WORKBENCH_CONFIG`, lässt sich eine Datei nicht lesen (`<datei> cannot be read`, etwa ein Verzeichnis oder ohne Leserecht) oder ist sie kein solches Objekt, endet das Kommando mit Exit-Code 2 und `invalid configuration:`, darunter je Befund eine Zeile, die Variable, Feld oder Datei nennt, nie einen Wert, etwa `WORKBENCH_TOKEN, or token in /home/ada/.config/workbench/cli.json is required`.
 
 ### Contract
 
