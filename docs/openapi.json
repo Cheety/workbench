@@ -920,7 +920,8 @@
 															"rights": {
 																"type": "array",
 																"items": { "type": "string" }
-															}
+															},
+															"subjectApiTokenId": { "type": "string" }
 														},
 														"required": [
 															"id",
@@ -1173,7 +1174,8 @@
 															"rights": {
 																"type": "array",
 																"items": { "type": "string" }
-															}
+															},
+															"subjectApiTokenId": { "type": "string" }
 														},
 														"required": [
 															"id",

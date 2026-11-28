@@ -709,6 +709,69 @@ describe("an API token that is revoked or expired", () => {
 	});
 });
 
+describe("the audit of managing API tokens", () => {
+	test("names the created and the revoked token as subject and the token of the call as the token it came with", async () => {
+		const api = await startLedgerInstance();
+		const admin = await api.issueInstanceAdminToken();
+		const owner = await api.issueIdentifiedToken("owner");
+		const created = await createToken(api, owner.token, {
+			operations: null,
+			workspaces: null,
+			validDays: 7,
+		});
+		await api.post(
+			onInstance("core.revokeApiToken"),
+			JSON.stringify({ id: created.id }),
+			bearer(owner.token),
+		);
+
+		const response = await api.post(
+			onInstance("core.listInstanceAuditEntries"),
+			JSON.stringify({ limit: 10, cursor: null }),
+			bearer(admin.token),
+		);
+
+		expect(await response.json()).toMatchObject({
+			entries: [
+				{
+					apiTokenId: owner.apiTokenId,
+					operation: "core.revokeApiToken",
+					result: "succeeded",
+					subjectApiTokenId: created.id,
+				},
+				{
+					apiTokenId: owner.apiTokenId,
+					operation: "core.createApiToken",
+					result: "succeeded",
+					subjectApiTokenId: created.id,
+				},
+			],
+		});
+	});
+
+	test("leaves the field of a subject token out of an entry that names none", async () => {
+		const api = await startLedgerInstance();
+		const admin = await api.issueInstanceAdminToken();
+		await api.post(
+			onInstance("core.createWorkspace"),
+			JSON.stringify({ name: "Finance" }),
+			bearer(admin.token),
+		);
+
+		const response = await api.post(
+			onInstance("core.listInstanceAuditEntries"),
+			JSON.stringify({ limit: 10, cursor: null }),
+			bearer(admin.token),
+		);
+
+		const listed = z
+			.object({ entries: z.array(z.record(z.string(), z.unknown())) })
+			.parse(await response.json());
+		expect(listed.entries).toHaveLength(1);
+		expect(listed.entries[0]).not.toHaveProperty("subjectApiTokenId");
+	});
+});
+
 describe("the API tokens of an actor", () => {
 	test("lists only the tokens of the calling actor, the newest first, with scope, expiry and revocation", async () => {
 		const api = await startLedgerInstance();

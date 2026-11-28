@@ -140,7 +140,7 @@ export const createApiTokenOperation = defineInstanceOperation({
 			workspaces: scope.workspaces.toList(),
 		};
 	},
-	auditSubject: () => NO_AUDIT_SUBJECT,
+	auditSubject: (_input, { id }) => ({ ...NO_AUDIT_SUBJECT, apiToken: id }),
 });
 
 const listedTokenRow = z.object({
@@ -249,5 +249,5 @@ export const revokeApiTokenOperation = defineInstanceOperation({
 			);
 		return { id, revokedAt: revoked.revoked_at.toISOString() };
 	},
-	auditSubject: () => NO_AUDIT_SUBJECT,
+	auditSubject: ({ id }) => ({ ...NO_AUDIT_SUBJECT, apiToken: id }),
 });

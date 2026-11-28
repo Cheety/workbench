@@ -33,5 +33,5 @@ Die Antwort von `core.createApiToken` enthält das Token im Klartext. Mit einem 
 
 - Bis es Nutzer mit Login gibt, hält nur ein Service-Account Tokens (`core.api_tokens.service_account_id`); ein Nutzer erhält `core.not_a_service_account`. Tokens für Nutzer verlangen eine neue Migration, die den Akteur nach Art und ID nennt.
 - Das Token aus `create-service-account` hat keinen Scope.
-- Audit-Einträge von Anlegen und Widerruf nennen das Token des Aufrufs, nicht das angelegte oder widerrufene.
+- Audit-Einträge von Anlegen und Widerruf nennen das Token des Aufrufs in `api_token_id` und das angelegte oder widerrufene in `subject_api_token_id`. Diese Spalte hat keinen Fremdschlüssel auf `core.api_tokens`, damit ein künftiger Löschjob abgelaufene Tokens löschen kann, ohne ihren Nachweis im Audit zu verlieren.
 - Abgelaufene und widerrufene Tokens bleiben in `core.api_tokens`; ein Löschjob fehlt noch.

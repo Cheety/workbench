@@ -60,6 +60,7 @@ function auditEntryOn<Workspace extends z.ZodType<string | null>>(
 			member: auditedActor.nullable(),
 			role: roleNameSchema.nullable(),
 			rights: z.array(z.string()).optional(),
+			subjectApiTokenId: z.string().optional(),
 		}),
 		z.object({
 			...fields,
@@ -87,6 +88,7 @@ const auditEntryRow = z.object({
 	member_id: z.string().nullable(),
 	role_name: roleNameSchema.nullable(),
 	rights: z.array(z.string()).nullable(),
+	subject_api_token_id: z.string().nullable(),
 });
 
 type AuditEntryRow = z.infer<typeof auditEntryRow>;
@@ -111,6 +113,7 @@ type ListedOutcome =
 			readonly member: Actor | null;
 			readonly role: RoleName | null;
 			readonly rights?: string[];
+			readonly subjectApiTokenId?: string;
 	  }
 	| { readonly result: "denied"; readonly reason: DenialReason };
 
@@ -128,6 +131,9 @@ function outcomeOf(row: AuditEntryRow): ListedOutcome {
 				member,
 				role: row.role_name,
 				...(row.rights === null ? {} : { rights: row.rights }),
+				...(row.subject_api_token_id === null
+					? {}
+					: { subjectApiTokenId: row.subject_api_token_id }),
 			};
 		case "denied":
 			if (row.reason === null)
@@ -135,7 +141,12 @@ function outcomeOf(row: AuditEntryRow): ListedOutcome {
 					row.id,
 					"was denied without a reason",
 				);
-			if (member !== null || row.role_name !== null || row.rights !== null)
+			if (
+				member !== null ||
+				row.role_name !== null ||
+				row.rights !== null ||
+				row.subject_api_token_id !== null
+			)
 				throw new InconsistentAuditEntryError(
 					row.id,
 					"was denied with a subject",
@@ -162,13 +173,13 @@ export async function recordAuditEntry(
 ): Promise<void> {
 	switch (entry.outcome.result) {
 		case "succeeded": {
-			const { member, role, rights } = entry.outcome.subject;
+			const { member, role, rights, apiToken } = entry.outcome.subject;
 			const rightsJson = rights === null ? null : JSON.stringify(rights);
 			const memberKind = member === null ? null : member.kind;
 			const memberId = member === null ? null : member.id;
 			await transaction`
-				INSERT INTO core.audit_entries (id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason, member_kind, member_id, role_name, rights)
-				VALUES (${entry.id}, ${entry.occurredAt}, ${entry.actor.kind}, ${entry.actor.id}, ${entry.apiTokenId}, ${entry.operation}, ${entry.workspace}, 'succeeded', NULL, ${memberKind}, ${memberId}, ${role}, ${rightsJson}::text::jsonb)`;
+				INSERT INTO core.audit_entries (id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason, member_kind, member_id, role_name, rights, subject_api_token_id)
+				VALUES (${entry.id}, ${entry.occurredAt}, ${entry.actor.kind}, ${entry.actor.id}, ${entry.apiTokenId}, ${entry.operation}, ${entry.workspace}, 'succeeded', NULL, ${memberKind}, ${memberId}, ${role}, ${rightsJson}::text::jsonb, ${apiToken})`;
 			return;
 		}
 		case "denied":
@@ -226,13 +237,13 @@ export const listAuditEntries = defineOperation({
 		const page = await pageOf(auditEntries, request, (after, upTo) =>
 			after === null
 				? ctx.sql`
-					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason, member_kind, member_id, role_name, rights
+					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason, member_kind, member_id, role_name, rights, subject_api_token_id
 					FROM core.audit_entries
 					WHERE workspace_id = ${ctx.workspace}
 					ORDER BY occurred_at DESC, id DESC
 					LIMIT ${upTo}`
 				: ctx.sql`
-					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason, member_kind, member_id, role_name, rights
+					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason, member_kind, member_id, role_name, rights, subject_api_token_id
 					FROM core.audit_entries
 					WHERE workspace_id = ${ctx.workspace}
 						AND (occurred_at, id) < (${after.occurredAt}, ${after.id})
@@ -262,12 +273,12 @@ export const listInstanceAuditEntries = defineInstanceOperation({
 		const page = await pageOf(auditEntries, request, (after, upTo) =>
 			after === null
 				? ctx.sql`
-					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason, member_kind, member_id, role_name, rights
+					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason, member_kind, member_id, role_name, rights, subject_api_token_id
 					FROM core.audit_entries
 					ORDER BY occurred_at DESC, id DESC
 					LIMIT ${upTo}`
 				: ctx.sql`
-					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason, member_kind, member_id, role_name, rights
+					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason, member_kind, member_id, role_name, rights, subject_api_token_id
 					FROM core.audit_entries
 					WHERE (occurred_at, id) < (${after.occurredAt}, ${after.id})
 					ORDER BY occurred_at DESC, id DESC
