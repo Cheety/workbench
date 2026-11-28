@@ -16,33 +16,46 @@ import {
 	type TransactionHook,
 } from "./transaction-deadline.ts";
 
-const connectionSettings = z.object({
-	sslMode: z.number(),
-	tls: z.unknown(),
-	query: z.string(),
-});
-
-describe("the connection that cancels statements", () => {
-	test.each(["disable", "prefer", "require", "verify-ca", "verify-full"])(
-		"verifies the server and limits its statements as the pool of the same URL does with sslmode=%s",
-		async (mode) => {
-			const url = `${TEST_DATABASE_URL}?sslmode=${mode}`;
-			const pool = new SQL(url, { connection: { statement_timeout: 60_000 } });
-			const cancellation = openStatementCancellation(url, 60_000);
-
-			expect(connectionSettings.parse(cancellation.options)).toEqual(
-				connectionSettings.parse(pool.options),
-			);
-			await cancellation.close();
-			await pool.close();
-		},
-	);
-});
-
 const cleanups: (() => Promise<void>)[] = [];
 
 afterEach(async () => {
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+});
+
+describe("the connection that cancels statements", () => {
+	test.each(["disable", "prefer"])(
+		"limits its statements to the statement_timeout it is opened with, with sslmode=%s",
+		async (mode) => {
+			const cancellation = openStatementCancellation(
+				`${TEST_DATABASE_URL}?sslmode=${mode}`,
+				60_000,
+			);
+			cleanups.push(() => cancellation.close());
+
+			const limit = await statementTimeoutIn((strings, ...values) =>
+				cancellation(strings, ...values),
+			);
+
+			expect(limit).toBe("1min");
+		},
+	);
+
+	test.each(["require", "verify-ca", "verify-full"])(
+		"connects only over the TLS that sslmode=%s demands, refusing the test server that offers none",
+		async (mode) => {
+			const cancellation = openStatementCancellation(
+				`${TEST_DATABASE_URL}?sslmode=${mode}`,
+				60_000,
+			);
+			cleanups.push(() => cancellation.close());
+
+			const refused = cancellation`SELECT 1`;
+
+			await expect(refused).rejects.toMatchObject({
+				code: "ERR_POSTGRES_TLS_NOT_AVAILABLE",
+			});
+		},
+	);
 });
 
 const HOOK_LOCK = 4712;

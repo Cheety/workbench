@@ -7,6 +7,7 @@ import {
 } from "./event-registry.ts";
 import {
 	createInstanceStart,
+	type InstanceStart,
 	type InstanceStartSteps,
 	type StartedPlugins,
 } from "./instance-start.ts";
@@ -275,130 +276,112 @@ describe("instance start", () => {
 	});
 });
 
-describe("operations of an instance", () => {
-	const renameLabel: RegisteredOperation = {
-		name: "board.renameLabel",
-		owner: { kind: "plugin", name: "board" },
-		kind: "mutation",
-		target: "workspace",
-		right: "board.label.edit",
-		validateInput: async (value) => ({ valid: true, value }),
-		validateOutput: async (value) => ({ valid: true, value }),
-		describeInput: () => ({}),
-		describeOutput: () => ({}),
-		execute: async () => ({}),
-	};
+const renameLabel: RegisteredOperation = {
+	name: "board.renameLabel",
+	owner: { kind: "plugin", name: "board" },
+	kind: "mutation",
+	target: "workspace",
+	right: "board.label.edit",
+	validateInput: async (value) => ({ valid: true, value }),
+	validateOutput: async (value) => ({ valid: true, value }),
+	describeInput: () => ({}),
+	describeOutput: () => ({}),
+	execute: async () => ({}),
+};
 
-	test("are none while the plugins are still starting", () => {
-		const instance = createInstanceStart(
-			steps({ startPlugins: () => new Promise(() => {}) }),
-			recordingLogger().logger,
-		);
+const labelRenamed: RegisteredEvent = {
+	name: "board.LabelRenamed",
+	version: 1,
+	validatePayload: async (value) => ({ valid: true, value }),
+};
 
-		void instance.run();
+const indexLabel: RegisteredSubscription = {
+	subscriber: "search",
+	event: labelRenamed.name,
+	validatePayload: labelRenamed.validatePayload,
+	handle: async () => {},
+};
 
-		expect(instance.operations.find("board.renameLabel")).toBeUndefined();
-	});
+const archiveLabels: RegisteredJob = {
+	kind: "enqueued",
+	owner: pluginOwner("board"),
+	name: "board.archiveLabels",
+	maxAttempts: 3,
+	validatePayload: async (value) => ({ valid: true, value }),
+	run: async () => {},
+};
 
-	test("are those of the started plugins once they started", async () => {
-		const instance = createInstanceStart(
-			steps({
-				startPlugins: async () => ({
-					...pluginsWith(),
-					operations: registerOperations([renameLabel]),
-				}),
+const registries: [
+	string,
+	Partial<StartedPlugins>,
+	(instance: InstanceStart) => Record<string, unknown>,
+	Record<string, unknown>,
+	Record<string, unknown>,
+][] = [
+	[
+		"operations",
+		{ operations: registerOperations([renameLabel]) },
+		(instance) => ({
+			operation: instance.operations.find("board.renameLabel")?.name,
+		}),
+		{ operation: undefined },
+		{ operation: "board.renameLabel" },
+	],
+	[
+		"events and their subscriptions",
+		{
+			events: registerEvents({
+				active: [{ events: [labelRenamed], subscriptions: [indexLabel] }],
+				notActive: [],
 			}),
-			recordingLogger().logger,
-		);
+		},
+		(instance) => ({
+			event: instance.events.findEvent("board.LabelRenamed")?.name,
+			subscribers: instance.events.subscribersOf("board.LabelRenamed"),
+		}),
+		{ event: undefined, subscribers: [] },
+		{ event: "board.LabelRenamed", subscribers: ["search"] },
+	],
+	[
+		"jobs",
+		{ jobs: registerJobs([archiveLabels]) },
+		(instance) => ({
+			job: instance.jobs.find("board.archiveLabels")?.name,
+			names: instance.jobs.names(),
+		}),
+		{ job: undefined, names: [] },
+		{ job: "board.archiveLabels", names: ["board.archiveLabels"] },
+	],
+];
 
-		await instance.run();
+describe("the registries of an instance", () => {
+	test.each(registries)(
+		"have none of the %s of the plugins while they are still starting",
+		(_kind, _registered, seen, whileStarting) => {
+			const instance = createInstanceStart(
+				steps({ startPlugins: () => new Promise(() => {}) }),
+				recordingLogger().logger,
+			);
 
-		expect(instance.operations.find("board.renameLabel")).toBe(renameLabel);
-	});
-});
+			void instance.run();
 
-describe("events of an instance", () => {
-	const labelRenamed: RegisteredEvent = {
-		name: "board.LabelRenamed",
-		version: 1,
-		validatePayload: async (value) => ({ valid: true, value }),
-	};
-	const indexLabel: RegisteredSubscription = {
-		subscriber: "search",
-		event: labelRenamed.name,
-		validatePayload: labelRenamed.validatePayload,
-		handle: async () => {},
-	};
+			expect(seen(instance)).toEqual(whileStarting);
+		},
+	);
 
-	test("are none while the plugins are still starting", () => {
-		const instance = createInstanceStart(
-			steps({ startPlugins: () => new Promise(() => {}) }),
-			recordingLogger().logger,
-		);
-
-		void instance.run();
-
-		expect(instance.events.findEvent("board.LabelRenamed")).toBeUndefined();
-		expect(instance.events.subscriptions()).toEqual([]);
-	});
-
-	test("are those of the started plugins once they started, with their subscriptions", async () => {
-		const instance = createInstanceStart(
-			steps({
-				startPlugins: async () => ({
-					...pluginsWith(),
-					events: registerEvents({
-						active: [{ events: [labelRenamed], subscriptions: [indexLabel] }],
-						notActive: [],
-					}),
+	test.each(registries)(
+		"have the %s of the started plugins once they started",
+		async (_kind, registered, seen, _whileStarting, onceStarted) => {
+			const instance = createInstanceStart(
+				steps({
+					startPlugins: async () => ({ ...pluginsWith(), ...registered }),
 				}),
-			}),
-			recordingLogger().logger,
-		);
+				recordingLogger().logger,
+			);
 
-		await instance.run();
+			await instance.run();
 
-		expect(instance.events.findEvent("board.LabelRenamed")).toBe(labelRenamed);
-		expect(instance.events.subscriptions()).toEqual([indexLabel]);
-	});
-});
-
-describe("jobs of an instance", () => {
-	const archiveLabels: RegisteredJob = {
-		kind: "enqueued",
-		owner: pluginOwner("board"),
-		name: "board.archiveLabels",
-		maxAttempts: 3,
-		validatePayload: async (value) => ({ valid: true, value }),
-		run: async () => {},
-	};
-
-	test("are none while the plugins are still starting", () => {
-		const instance = createInstanceStart(
-			steps({ startPlugins: () => new Promise(() => {}) }),
-			recordingLogger().logger,
-		);
-
-		void instance.run();
-
-		expect(instance.jobs.find("board.archiveLabels")).toBeUndefined();
-		expect(instance.jobs.names()).toEqual([]);
-	});
-
-	test("are those of the started plugins once they started", async () => {
-		const instance = createInstanceStart(
-			steps({
-				startPlugins: async () => ({
-					...pluginsWith(),
-					jobs: registerJobs([archiveLabels]),
-				}),
-			}),
-			recordingLogger().logger,
-		);
-
-		await instance.run();
-
-		expect(instance.jobs.find("board.archiveLabels")).toBe(archiveLabels);
-		expect(instance.jobs.names()).toEqual(["board.archiveLabels"]);
-	});
+			expect(seen(instance)).toEqual(onceStarted);
+		},
+	);
 });
