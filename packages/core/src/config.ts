@@ -285,19 +285,31 @@ const CLI_CONFIG_FILE = join("workbench", "cli.json");
 
 const INSTANCE_SCHEMES = ["http", "https"] as const;
 
+const MISSING_FILE_REASON = "ENOENT";
+
 const cliConfigFile = z
 	.object({ url: z.string().optional(), token: z.string().optional() })
 	.strict();
 
 type CliConfigFile = z.infer<typeof cliConfigFile>;
 
+type FoundCliConfigFile = {
+	readonly path: string | undefined;
+	readonly content: CliConfigFile;
+};
+
 type CliConfigFileRead =
-	| {
-			readonly read: true;
-			readonly path: string | undefined;
-			readonly file: CliConfigFile;
-	  }
+	| { readonly read: true; readonly file: FoundCliConfigFile }
 	| { readonly read: false; readonly issue: CliConfigIssue };
+
+type Resolved<Value> =
+	| { readonly ok: true; readonly value: Value }
+	| { readonly ok: false; readonly issue: CliConfigIssue };
+
+type CliValue = {
+	readonly value: string;
+	readonly reportedAs: string;
+};
 
 function isInstanceUrl(value: string): boolean {
 	if (!URL.canParse(value)) return false;
@@ -319,12 +331,12 @@ function defaultCliConfigPath(source: CliConfigSource): string | undefined {
 function readCliConfigFile(source: CliConfigSource): CliConfigFileRead {
 	const chosen = readVariable(source, "WORKBENCH_CONFIG");
 	const path = chosen ?? defaultCliConfigPath(source);
-	if (path === undefined) return { read: true, path, file: {} };
+	if (path === undefined) return { read: true, file: { path, content: {} } };
 	const content = source.readFile(path);
 	switch (content.found) {
 		case "missing":
 			return chosen === undefined
-				? { read: true, path, file: {} }
+				? { read: true, file: { path, content: {} } }
 				: {
 						read: false,
 						issue: {
@@ -354,63 +366,71 @@ function parsedCliConfigFile(path: string, text: string): CliConfigFileRead {
 					"must be a JSON object with no other fields than the strings url and token",
 			},
 		};
-	return { read: true, path, file: parsed.data };
+	return { read: true, file: { path, content: parsed.data } };
 }
-
-type CliValue = {
-	readonly value: string | undefined;
-	readonly reportedAs: string;
-};
 
 function resolveCliValue(
 	source: CliConfigSource,
 	variable: string,
-	inFile: {
-		readonly path: string | undefined;
-		readonly field: string;
-		readonly value: string | undefined;
-	},
-): CliValue {
+	file: FoundCliConfigFile,
+	field: keyof CliConfigFile,
+): Resolved<CliValue> {
 	const fromEnvironment = readVariable(source, variable);
 	if (fromEnvironment !== undefined)
-		return { value: fromEnvironment, reportedAs: variable };
-	if (inFile.value !== undefined && inFile.value !== "")
 		return {
-			value: inFile.value,
-			reportedAs: `${inFile.field} in ${inFile.path}`,
+			ok: true,
+			value: { value: fromEnvironment, reportedAs: variable },
+		};
+	const fromFile = file.content[field];
+	if (fromFile !== undefined && fromFile !== "")
+		return {
+			ok: true,
+			value: { value: fromFile, reportedAs: `${field} in ${file.path}` },
 		};
 	const alternative =
-		inFile.path === undefined ? "" : `, or ${inFile.field} in ${inFile.path}`;
-	return { value: undefined, reportedAs: `${variable}${alternative}` };
+		file.path === undefined ? "" : `, or ${field} in ${file.path}`;
+	return {
+		ok: false,
+		issue: { subject: `${variable}${alternative}`, problem: "is required" },
+	};
+}
+
+function instanceUrlOf(resolved: Resolved<CliValue>): Resolved<URL> {
+	if (!resolved.ok) return resolved;
+	const { value, reportedAs } = resolved.value;
+	if (!isInstanceUrl(value))
+		return {
+			ok: false,
+			issue: {
+				subject: reportedAs,
+				problem: `must be a ${INSTANCE_SCHEMES.map((scheme) => `${scheme}://`).join(" or ")} URL with a host`,
+			},
+		};
+	return { ok: true, value: new URL(value) };
+}
+
+function tokenOf(resolved: Resolved<CliValue>): Resolved<Secret> {
+	if (!resolved.ok) return resolved;
+	return { ok: true, value: new Secret(resolved.value.value) };
 }
 
 export function loadCliConfig(source: CliConfigSource): CliConfig {
 	const configFile = readCliConfigFile(source);
 	if (!configFile.read) throw new InvalidCliConfigError([configFile.issue]);
-	const { path, file } = configFile;
-	const url = resolveCliValue(source, "WORKBENCH_URL", {
-		path,
-		field: "url",
-		value: file.url,
-	});
-	const token = resolveCliValue(source, "WORKBENCH_TOKEN", {
-		path,
-		field: "token",
-		value: file.token,
-	});
-	const issues: CliConfigIssue[] = [];
-	if (url.value === undefined)
-		issues.push({ subject: url.reportedAs, problem: "is required" });
-	else if (!isInstanceUrl(url.value))
-		issues.push({
-			subject: url.reportedAs,
-			problem: `must be a ${INSTANCE_SCHEMES.map((scheme) => `${scheme}://`).join(" or ")} URL with a host`,
-		});
-	if (token.value === undefined)
-		issues.push({ subject: token.reportedAs, problem: "is required" });
-	if (url.value === undefined || token.value === undefined || issues.length > 0)
-		throw new InvalidCliConfigError(issues);
-	return { instanceUrl: new URL(url.value), token: new Secret(token.value) };
+	const { file } = configFile;
+	const instanceUrl = instanceUrlOf(
+		resolveCliValue(source, "WORKBENCH_URL", file, "url"),
+	);
+	const token = tokenOf(
+		resolveCliValue(source, "WORKBENCH_TOKEN", file, "token"),
+	);
+	if (!instanceUrl.ok || !token.ok)
+		throw new InvalidCliConfigError(
+			[instanceUrl, token].flatMap((resolved) =>
+				resolved.ok ? [] : [resolved.issue],
+			),
+		);
+	return { instanceUrl: instanceUrl.value, token: token.value };
 }
 
 export function loadCliConfigFromEnvironment(): CliConfig {
@@ -423,6 +443,8 @@ function readCliConfigFileText(path: string): CliConfigFileContent {
 	} catch (error) {
 		const reason = systemFailureReason(error);
 		if (reason === UNKNOWN_FAILURE_REASON) throw error;
-		return reason === "ENOENT" ? { found: "missing" } : { found: "unreadable" };
+		return reason === MISSING_FILE_REASON
+			? { found: "missing" }
+			: { found: "unreadable" };
 	}
 }
