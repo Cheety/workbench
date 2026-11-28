@@ -462,6 +462,56 @@ describe("the audit of a workspace", () => {
 	});
 });
 
+describe("repeated denials", () => {
+	test("leave one entry per actor, workspace, operation and reason in each minute", async () => {
+		const clock = clockAt("2026-11-27T08:00:05.000Z");
+		const harness = await startLedger({ now: clock.now });
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
+		const strangerLists = () =>
+			harness.call({
+				actor: STRANGER,
+				workspace,
+				operation: "ledger.listEntries",
+				input: {},
+			});
+		await strangerLists();
+		clock.set("2026-11-27T08:00:59.999Z");
+		await strangerLists();
+		await harness.call({
+			actor: VIEWER,
+			workspace,
+			operation: "ledger.addEntry",
+			input: { amount: 1 },
+		});
+		await strangerLists();
+		clock.set("2026-11-27T08:01:00.000Z");
+		await strangerLists();
+
+		const listed = await listAuditEntries(harness, workspace, FIRST_TEN);
+
+		expect(listed).toEqual({
+			ok: true,
+			output: {
+				entries: [
+					expect.objectContaining({
+						occurredAt: "2026-11-27T08:01:00.000Z",
+						actor: STRANGER,
+					}),
+					expect.objectContaining({
+						occurredAt: "2026-11-27T08:00:59.999Z",
+						actor: VIEWER,
+					}),
+					expect.objectContaining({
+						occurredAt: "2026-11-27T08:00:05.000Z",
+						actor: STRANGER,
+					}),
+				],
+				nextCursor: null,
+			},
+		});
+	});
+});
+
 describe("a page of the audit", () => {
 	test("holds at most the limit and continues after the cursor of the page before, whatever order the ids have", async () => {
 		const clock = clockAt("2026-11-27T08:00:00.000Z");

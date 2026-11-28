@@ -101,17 +101,20 @@ export async function recordAuditEntry(
 	transaction: SQL,
 	entry: NewAuditEntry,
 ): Promise<void> {
-	await transaction`
-		INSERT INTO core.audit_entries (id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason)
-		VALUES (${entry.id}, ${entry.occurredAt}, ${entry.actor.kind}, ${entry.actor.id}, ${entry.apiTokenId}, ${entry.operation}, ${entry.workspace}, ${entry.outcome.result}, ${reasonOf(entry.outcome)})`;
-}
-
-function reasonOf(outcome: AuditOutcome): DenialReason | null {
-	switch (outcome.result) {
+	switch (entry.outcome.result) {
 		case "succeeded":
-			return null;
+			await transaction`
+				INSERT INTO core.audit_entries (id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason)
+				VALUES (${entry.id}, ${entry.occurredAt}, ${entry.actor.kind}, ${entry.actor.id}, ${entry.apiTokenId}, ${entry.operation}, ${entry.workspace}, 'succeeded', NULL)`;
+			return;
 		case "denied":
-			return outcome.reason;
+			await transaction`
+				INSERT INTO core.audit_entries (id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason)
+				VALUES (${entry.id}, ${entry.occurredAt}, ${entry.actor.kind}, ${entry.actor.id}, ${entry.apiTokenId}, ${entry.operation}, ${entry.workspace}, 'denied', ${entry.outcome.reason})
+				ON CONFLICT (workspace_id, actor_kind, actor_id, operation, reason, (date_trunc('minute', occurred_at AT TIME ZONE 'UTC')))
+					WHERE result = 'denied'
+					DO NOTHING`;
+			return;
 	}
 }
 
