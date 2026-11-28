@@ -10,6 +10,7 @@ import { SQL } from "bun";
 import { z } from "zod";
 import { Secret } from "./config.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
+import { IDEMPOTENCY_KEY_PATTERN } from "./idempotency-keys.ts";
 import { type PluginPackage, startPlugins } from "./kernel.ts";
 import {
 	createOperationPipeline,
@@ -507,5 +508,21 @@ describe("two calls of a mutation with the same idempotency key at the same time
 		expect(
 			await database.sql`SELECT amount FROM plugin_ledger.entries`,
 		).toEqual([{ amount: 42 }]);
+	});
+});
+
+describe("the table of idempotency keys", () => {
+	test("refuses a key by the same pattern as the pipeline", async () => {
+		const database = await createFreshDatabase();
+		cleanups.push(() => database.drop());
+		await startLedgerPipeline(database);
+
+		const [check] = await database.sql`
+			SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint
+			WHERE conrelid = 'core.idempotency_keys'::regclass AND conname = 'idempotency_keys_key_check'`;
+
+		expect(check).toEqual({
+			definition: `CHECK ((key ~ '${IDEMPOTENCY_KEY_PATTERN}'::text))`,
+		});
 	});
 });

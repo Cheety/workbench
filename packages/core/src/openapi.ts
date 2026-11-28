@@ -3,7 +3,10 @@ import { DATABASE_CAPABILITY } from "@workbench/sdk";
 import { CORE_OPERATIONS } from "./core-operations.ts";
 import type { SetTimer } from "./hook-timeout.ts";
 import { IDEMPOTENCY_KEY_HEADER, OPERATION_PATH_TEMPLATE } from "./http-api.ts";
-import { TAKES_IDEMPOTENCY_KEY } from "./idempotency-keys.ts";
+import {
+	IDEMPOTENCY_KEY_PATTERN,
+	TAKES_IDEMPOTENCY_KEY,
+} from "./idempotency-keys.ts";
 import type { JsonSchema } from "./json-schema.ts";
 import type { PluginPackage } from "./kernel.ts";
 import type { RegisteredOperation } from "./operation-registry.ts";
@@ -115,7 +118,7 @@ const IDEMPOTENCY_KEY_PARAMETER: JsonSchema = {
 	required: false,
 	description:
 		"a key of the caller under which a repeated call receives the answer of the first instead of running the mutation again",
-	schema: { type: "string", minLength: 1, maxLength: 255 },
+	schema: { type: "string", pattern: IDEMPOTENCY_KEY_PATTERN },
 };
 
 const RESPONSE_HEADERS = {

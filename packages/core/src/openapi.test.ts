@@ -146,7 +146,7 @@ describe("the OpenAPI document of the HTTP API", () => {
 				required: false,
 				description:
 					"a key of the caller under which a repeated call receives the answer of the first instead of running the mutation again",
-				schema: { type: "string", minLength: 1, maxLength: 255 },
+				schema: { type: "string", pattern: "^[ -~]{1,255}$" },
 			},
 		]);
 		expect(parametersOf("board.countLabels")).toEqual([
