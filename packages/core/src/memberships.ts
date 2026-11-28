@@ -1,14 +1,14 @@
 import {
 	ACTOR_KINDS,
 	type Actor,
-	defineOperation,
 	defineRight,
 	OperationError,
 } from "@workbench/sdk";
 import type { SQL } from "bun";
 import { z } from "zod";
+import { defineInstanceAdminWorkspaceOperation } from "./operation-registry.ts";
 import { quote } from "./quote.ts";
-import { type RoleName, roleNameSchema } from "./role-name.ts";
+import { type RoleName, roleName, roleNameSchema } from "./role-name.ts";
 import { isWorkspaceId } from "./workspaces.ts";
 
 export type NewMembership = {
@@ -92,7 +92,7 @@ const memberActor = z.object({
 	id: z.string().min(1).max(MAX_ACTOR_ID_LENGTH),
 });
 
-export const grantMembershipOperation = defineOperation({
+export const grantMembershipOperation = defineInstanceAdminWorkspaceOperation({
 	name: "grantMembership",
 	kind: "mutation",
 	target: "workspace",
@@ -118,20 +118,32 @@ export const grantMembershipOperation = defineOperation({
 			ON CONFLICT (workspace_id, actor_kind, actor_id) DO UPDATE SET role = EXCLUDED.role`;
 		return { workspace: ctx.workspace, actor, role };
 	},
+	auditSubject: ({ actor, role }) => ({ member: actor, role }),
 });
 
-export const revokeMembershipOperation = defineOperation({
+export const revokeMembershipOperation = defineInstanceAdminWorkspaceOperation({
 	name: "revokeMembership",
 	kind: "mutation",
 	target: "workspace",
 	right: membershipManage.name,
 	input: z.object({ actor: memberActor }),
-	output: z.object({ revoked: z.boolean() }),
+	output: z.object({ revoked: z.boolean(), role: z.string().nullable() }),
 	execute: async ({ actor }, ctx) => {
-		const revoked = await ctx.sql`
-			DELETE FROM core.memberships
-			WHERE workspace_id = ${ctx.workspace} AND actor_kind = ${actor.kind} AND actor_id = ${actor.id}
-			RETURNING actor_id`;
-		return { revoked: revoked.length > 0 };
+		const [revoked] = z
+			.array(membershipRow)
+			.max(1)
+			.parse(
+				await ctx.sql`
+					DELETE FROM core.memberships
+					WHERE workspace_id = ${ctx.workspace} AND actor_kind = ${actor.kind} AND actor_id = ${actor.id}
+					RETURNING role`,
+			);
+		return revoked === undefined
+			? { revoked: false, role: null }
+			: { revoked: true, role: revoked.role };
 	},
+	auditSubject: ({ actor }, { role }) => ({
+		member: actor,
+		role: role === null ? null : roleName(role),
+	}),
 });

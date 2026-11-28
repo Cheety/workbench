@@ -362,7 +362,10 @@ async function invoke(
 					if (IS_AUDITED[operation.kind])
 						await recordAuditEntry(
 							transaction,
-							newAuditEntryOf(call, operation, options, SUCCEEDED),
+							newAuditEntryOf(call, operation, options, {
+								result: "succeeded",
+								subject: operation.auditSubjectOf(input.value, executed),
+							}),
 						);
 					return executed;
 				};
@@ -489,8 +492,6 @@ const MEMBERSHIP_LOCK: Record<OperationKind, MembershipLock> = {
 	query: "none",
 	mutation: "share",
 };
-
-const SUCCEEDED: AuditOutcome = { result: "succeeded" };
 
 const IS_AUDITED: Record<OperationKind, boolean> = {
 	query: false,

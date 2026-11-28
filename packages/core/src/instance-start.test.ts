@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { NO_AUDIT_SUBJECT } from "./audit-subject.ts";
 import type { DatabaseWaitOutcome } from "./database-wait.ts";
 import {
 	type RegisteredEvent,
@@ -295,6 +296,7 @@ const renameLabel: RegisteredOperation = {
 	validateOutput: async (value) => ({ valid: true, value }),
 	describeInput: () => ({}),
 	describeOutput: () => ({}),
+	auditSubjectOf: () => NO_AUDIT_SUBJECT,
 	execute: async () => ({}),
 };
 

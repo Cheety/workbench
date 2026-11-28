@@ -6,8 +6,10 @@ import {
 } from "@workbench/sdk";
 import type { SQL } from "bun";
 import { z } from "zod";
+import type { AuditSubject } from "./audit-subject.ts";
 import { type Keyset, pageOf } from "./keyset-pages.ts";
 import { defineInstanceOperation } from "./operation-registry.ts";
+import { roleNameSchema } from "./role-name.ts";
 
 export const DENIAL_REASONS = [
 	"workspace_not_found",
@@ -20,7 +22,7 @@ export const DENIAL_REASONS = [
 export type DenialReason = (typeof DENIAL_REASONS)[number];
 
 export type AuditOutcome =
-	| { readonly result: "succeeded" }
+	| { readonly result: "succeeded"; readonly subject: AuditSubject }
 	| { readonly result: "denied"; readonly reason: DenialReason };
 
 export type NewAuditEntry = {
@@ -37,19 +39,26 @@ const MAX_LISTED_AUDIT_ENTRIES = 100;
 
 const MAX_CURSOR_LENGTH = 200;
 
+const auditedActor = z.object({ kind: z.enum(ACTOR_KINDS), id: z.string() });
+
 function auditEntryOn<Workspace extends z.ZodType<string | null>>(
 	workspace: Workspace,
 ) {
 	const fields = {
 		id: z.string(),
 		occurredAt: z.iso.datetime(),
-		actor: z.object({ kind: z.enum(ACTOR_KINDS), id: z.string() }),
+		actor: auditedActor,
 		apiTokenId: z.string().nullable(),
 		operation: z.string(),
 		workspace,
 	};
 	return z.discriminatedUnion("result", [
-		z.object({ ...fields, result: z.literal("succeeded") }),
+		z.object({
+			...fields,
+			result: z.literal("succeeded"),
+			member: auditedActor.nullable(),
+			role: z.string().nullable(),
+		}),
 		z.object({
 			...fields,
 			result: z.literal("denied"),
@@ -72,29 +81,61 @@ const auditEntryRow = z.object({
 	workspace_id: z.string().nullable(),
 	result: z.enum(["succeeded", "denied"]),
 	reason: z.enum(DENIAL_REASONS).nullable(),
+	member_kind: z.enum(ACTOR_KINDS).nullable(),
+	member_id: z.string().nullable(),
+	role_name: roleNameSchema.nullable(),
 });
 
+type AuditEntryRow = z.infer<typeof auditEntryRow>;
+
 class InconsistentAuditEntryError extends Error {
-	constructor(id: string) {
-		super(`the audit entry ${id} has a reason that does not match its result`);
+	constructor(id: string, problem: string) {
+		super(`the audit entry ${id} ${problem}`);
 		this.name = "InconsistentAuditEntryError";
 	}
 }
 
-function outcomeOf(row: z.infer<typeof auditEntryRow>): AuditOutcome {
+function memberOf(row: AuditEntryRow): Actor | null {
+	if (row.member_kind === null && row.member_id === null) return null;
+	if (row.member_kind === null || row.member_id === null)
+		throw new InconsistentAuditEntryError(row.id, "names half a member");
+	return { kind: row.member_kind, id: row.member_id };
+}
+
+type ListedOutcome =
+	| {
+			readonly result: "succeeded";
+			readonly member: Actor | null;
+			readonly role: string | null;
+	  }
+	| { readonly result: "denied"; readonly reason: DenialReason };
+
+function outcomeOf(row: AuditEntryRow): ListedOutcome {
+	const member = memberOf(row);
 	switch (row.result) {
 		case "succeeded":
-			if (row.reason !== null) throw new InconsistentAuditEntryError(row.id);
-			return { result: "succeeded" };
+			if (row.reason !== null)
+				throw new InconsistentAuditEntryError(
+					row.id,
+					"succeeded with a reason",
+				);
+			return { result: "succeeded", member, role: row.role_name };
 		case "denied":
-			if (row.reason === null) throw new InconsistentAuditEntryError(row.id);
+			if (row.reason === null)
+				throw new InconsistentAuditEntryError(
+					row.id,
+					"was denied without a reason",
+				);
+			if (member !== null || row.role_name !== null)
+				throw new InconsistentAuditEntryError(
+					row.id,
+					"was denied with a subject",
+				);
 			return { result: "denied", reason: row.reason };
 	}
 }
 
-function auditEntryOf(
-	row: z.infer<typeof auditEntryRow>,
-): z.infer<typeof instanceAuditEntry> {
+function auditEntryOf(row: AuditEntryRow): z.infer<typeof instanceAuditEntry> {
 	return {
 		id: row.id,
 		occurredAt: row.occurred_at.toISOString(),
@@ -113,8 +154,8 @@ export async function recordAuditEntry(
 	switch (entry.outcome.result) {
 		case "succeeded":
 			await transaction`
-				INSERT INTO core.audit_entries (id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason)
-				VALUES (${entry.id}, ${entry.occurredAt}, ${entry.actor.kind}, ${entry.actor.id}, ${entry.apiTokenId}, ${entry.operation}, ${entry.workspace}, 'succeeded', NULL)`;
+				INSERT INTO core.audit_entries (id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason, member_kind, member_id, role_name)
+				VALUES (${entry.id}, ${entry.occurredAt}, ${entry.actor.kind}, ${entry.actor.id}, ${entry.apiTokenId}, ${entry.operation}, ${entry.workspace}, 'succeeded', NULL, ${entry.outcome.subject.member?.kind ?? null}, ${entry.outcome.subject.member?.id ?? null}, ${entry.outcome.subject.role})`;
 			return;
 		case "denied":
 			await transaction`
@@ -174,13 +215,13 @@ export const listAuditEntries = defineOperation({
 		const page = await pageOf(auditEntries, request, (after, upTo) =>
 			after === null
 				? ctx.sql`
-					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason
+					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason, member_kind, member_id, role_name
 					FROM core.audit_entries
 					WHERE workspace_id = ${ctx.workspace}
 					ORDER BY occurred_at DESC, id DESC
 					LIMIT ${upTo}`
 				: ctx.sql`
-					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason
+					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason, member_kind, member_id, role_name
 					FROM core.audit_entries
 					WHERE workspace_id = ${ctx.workspace}
 						AND (occurred_at, id) < (${after.occurredAt}, ${after.id})
@@ -210,12 +251,12 @@ export const listInstanceAuditEntries = defineInstanceOperation({
 		const page = await pageOf(auditEntries, request, (after, upTo) =>
 			after === null
 				? ctx.sql`
-					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason
+					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason, member_kind, member_id, role_name
 					FROM core.audit_entries
 					ORDER BY occurred_at DESC, id DESC
 					LIMIT ${upTo}`
 				: ctx.sql`
-					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason
+					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason, member_kind, member_id, role_name
 					FROM core.audit_entries
 					WHERE (occurred_at, id) < (${after.occurredAt}, ${after.id})
 					ORDER BY occurred_at DESC, id DESC

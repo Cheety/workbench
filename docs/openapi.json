@@ -557,7 +557,25 @@
 															"result": {
 																"type": "string",
 																"const": "succeeded"
-															}
+															},
+															"member": {
+																"anyOf": [
+																	{
+																		"type": "object",
+																		"properties": {
+																			"kind": {
+																				"type": "string",
+																				"enum": ["user", "service_account"]
+																			},
+																			"id": { "type": "string" }
+																		},
+																		"required": ["kind", "id"],
+																		"additionalProperties": false
+																	},
+																	{ "type": "null" }
+																]
+															},
+															"role": { "type": ["string", "null"] }
 														},
 														"required": [
 															"id",
@@ -566,7 +584,9 @@
 															"apiTokenId",
 															"operation",
 															"workspace",
-															"result"
+															"result",
+															"member",
+															"role"
 														],
 														"additionalProperties": false
 													},
@@ -766,7 +786,25 @@
 															"result": {
 																"type": "string",
 																"const": "succeeded"
-															}
+															},
+															"member": {
+																"anyOf": [
+																	{
+																		"type": "object",
+																		"properties": {
+																			"kind": {
+																				"type": "string",
+																				"enum": ["user", "service_account"]
+																			},
+																			"id": { "type": "string" }
+																		},
+																		"required": ["kind", "id"],
+																		"additionalProperties": false
+																	},
+																	{ "type": "null" }
+																]
+															},
+															"role": { "type": ["string", "null"] }
 														},
 														"required": [
 															"id",
@@ -775,7 +813,9 @@
 															"apiTokenId",
 															"operation",
 															"workspace",
-															"result"
+															"result",
+															"member",
+															"role"
 														],
 														"additionalProperties": false
 													},
@@ -1034,8 +1074,11 @@
 							"application/json": {
 								"schema": {
 									"type": "object",
-									"properties": { "revoked": { "type": "boolean" } },
-									"required": ["revoked"],
+									"properties": {
+										"revoked": { "type": "boolean" },
+										"role": { "type": ["string", "null"] }
+									},
+									"required": ["revoked", "role"],
 									"additionalProperties": false
 								}
 							}

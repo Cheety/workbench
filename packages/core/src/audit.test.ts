@@ -282,6 +282,8 @@ describe("the audit of a workspace", () => {
 						operation: "ledger.addEntry",
 						workspace,
 						result: "succeeded",
+						member: null,
+						role: null,
 					},
 				],
 				nextCursor: null,

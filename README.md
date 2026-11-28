@@ -281,10 +281,10 @@ Diese Operationen des Cores laufen auf der Instanz, ohne Workspace: per HTTP als
 
 Diese laufen auf dem Workspace der Mitgliedschaft, per HTTP unter `/api/workspaces/<workspace>/operations/<operation>`:
 
-| Operation               | Art        | Wer           | Eingabe                        | Ausgabe                                            |
-| ----------------------- | ---------- | ------------- | ------------------------------ | -------------------------------------------------- |
-| `core.grantMembership`  | `mutation` | Instanz-Admin | `actor` (`kind`, `id`), `role` | `workspace`, `actor`, `role`                       |
-| `core.revokeMembership` | `mutation` | Instanz-Admin | `actor` (`kind`, `id`)         | `revoked` (`true` oder `false`, wenn es keine gab) |
+| Operation               | Art        | Wer           | Eingabe                        | Ausgabe                                                                                      |
+| ----------------------- | ---------- | ------------- | ------------------------------ | -------------------------------------------------------------------------------------------- |
+| `core.grantMembership`  | `mutation` | Instanz-Admin | `actor` (`kind`, `id`), `role` | `workspace`, `actor`, `role`                                                                 |
+| `core.revokeMembership` | `mutation` | Instanz-Admin | `actor` (`kind`, `id`)         | `revoked` (`true` oder `false`, wenn es keine gab), `role` (die entzogene Rolle oder `null`) |
 
 - Ein Akteur, der kein Instanz-Admin ist, erhält `not_instance_admin` (403), auf einem Workspace aber nur, wenn er dort Mitglied ist; ohne Mitgliedschaft erhält er `workspace_not_found` wie bei jeder Operation.
 - `core.listWorkspaces` nennt nur Workspaces, in denen der Akteur eine Mitgliedschaft hat, mit deren Rolle, sortiert nach Name und ID; auch ein Instanz-Admin sieht nur seine. `nextCursor` ist `null`, wenn nichts mehr folgt; ein ungültiger Cursor scheitert mit `core.invalid_cursor`.
@@ -292,7 +292,7 @@ Diese laufen auf dem Workspace der Mitgliedschaft, per HTTP unter `/api/workspac
 - `core.defineRole` legt eine eigene Rolle an oder ersetzt ihre Rechte vollständig; ein Mitglied mit dieser Rolle hat danach genau diese Rechte. Der Name besteht aus Kleinbuchstaben, Ziffern und Bindestrichen, beginnt mit einem Buchstaben und hat höchstens 63 Zeichen. Ein Name einer Startrolle scheitert mit `core.start_role_not_definable`, ein Recht, das keine Operation des Cores oder eines aktiven Plugins über eine Rolle vergibt (auch eines des Instanz-Admins), mit `core.unknown_right` (beide 422). Die Rechte der Startrollen kommen weiter aus den `defaultRoles` der Plugins.
 - Eine Rolle lässt sich nicht löschen, ein Workspace weder umbenennen noch löschen.
 
-Jede dieser Mutationen hinterlässt einen Audit-Eintrag, eine auf der Instanz mit `workspace` `null`, eine Änderung einer Mitgliedschaft mit ihrem Workspace, sodass auch dessen Owner sie in `core.listAuditEntries` sehen. Ein verweigerter Aufruf hinterlässt einen Eintrag `denied` mit `reason` `not_instance_admin`.
+Jede dieser Mutationen hinterlässt einen Audit-Eintrag, eine auf der Instanz mit `workspace` `null`, eine Änderung einer Mitgliedschaft mit ihrem Workspace, sodass auch dessen Owner sie in `core.listAuditEntries` sehen. Der Eintrag von `core.grantMembership` und `core.revokeMembership` nennt in `member` den Akteur der Mitgliedschaft und in `role` die vergebene oder entzogene Rolle (`null`, wenn es keine Mitgliedschaft zu entziehen gab), der von `core.defineRole` in `role` die Rolle, nie ihre Rechte. Ein verweigerter Aufruf hinterlässt einen Eintrag `denied` mit `reason` `not_instance_admin`.
 
 #### Idempotency-Keys
 
@@ -322,15 +322,18 @@ Die Query `core.listAuditEntries` liefert die Einträge des Workspaces im Pfad, 
 			"apiTokenId": "51c2…",
 			"operation": "reference.createNote",
 			"workspace": "3fa8…",
-			"result": "succeeded"
+			"result": "succeeded",
+			"member": null,
+			"role": null
 		}
 	],
 	"nextCursor": "WyIyMDI2…"
 }
 ```
 
-- `actor` nennt Art (`user`, `service_account`) und ID des Akteurs, `apiTokenId` die ID des API-Tokens, mit dem der Aufruf kam, oder `null` für einen Aufruf ohne Token (etwa über das Test-Harness). So lässt sich unterscheiden, ob ein Mensch oder ein Agent gehandelt hat. Ein Eintrag enthält nie ein Token, seinen Hash oder die Eingabe der Mutation.
+- `actor` nennt Art (`user`, `service_account`) und ID des Akteurs, `apiTokenId` die ID des API-Tokens, mit dem der Aufruf kam, oder `null` für einen Aufruf ohne Token (etwa über das Test-Harness). So lässt sich unterscheiden, ob ein Mensch oder ein Agent gehandelt hat. Ein Eintrag enthält nie ein Token oder seinen Hash und von der Eingabe einer Mutation höchstens `member` und `role`.
 - `occurredAt` ist der Zeitpunkt in UTC, auf Millisekunden genau, `workspace` das Ziel des Aufrufs, `result` `succeeded` für eine gelungene Mutation oder `denied` für einen verweigerten Zugriff.
+- Nur ein Eintrag mit `result` `succeeded` hat `member` und `role`: das Mitglied und die Rolle, die eine Mutation des Cores geändert hat (siehe [Workspaces, Mitgliedschaften und Rollen verwalten](#workspaces-mitgliedschaften-und-rollen-verwalten)), sonst `null`.
 - Nur ein Eintrag mit `result` `denied` hat `reason`, den Code, mit dem der Aufruf scheiterte: `workspace_not_found` (der Akteur hat keine Mitgliedschaft), `missing_right`, `object_not_found` (ein Objekt eines anderen Workspace), `not_object_holder` oder `not_instance_admin`.
 - `nextCursor` ist `null`, wenn keine älteren Einträge folgen. Ein Cursor ist undurchsichtig und gilt nur als Ganzes, Zeichen für Zeichen so, wie eine Seite ihn nennt; einen, der keine Position im Audit nennt, lehnt die Operation mit `core.invalid_cursor` ab (Art `rejected`, per HTTP 422). Einträge desselben Zeitpunkts ordnet ihre ID, sodass keine Seite einen Eintrag wiederholt oder auslässt, auch wenn inzwischen neue entstehen.
 - Die Operation verweist auf das Recht `core.audit.read`, das nur die Startrolle `owner` hat: Nur ein Owner des Workspace liest dessen Audit (ADR-0021). Der Instanz-Admin liest das ganze Audit unabhängig von Mitgliedschaften über `core.listInstanceAuditEntries`, mit derselben Eingabe und Ausgabe, auch die Einträge der Operationen auf der Instanz mit `workspace` `null` (ADR-0022).

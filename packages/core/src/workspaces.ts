@@ -1,6 +1,7 @@
 import { defineRight } from "@workbench/sdk";
 import type { SQL } from "bun";
 import { z } from "zod";
+import { NO_AUDIT_SUBJECT } from "./audit-subject.ts";
 import { type Keyset, pageOf } from "./keyset-pages.ts";
 import { defineInstanceOperation } from "./operation-registry.ts";
 
@@ -54,6 +55,7 @@ export const createWorkspaceOperation = defineInstanceOperation({
 		await ctx.sql`INSERT INTO core.workspaces (id, name, created_at) VALUES (${id}, ${name}, ${ctx.now()})`;
 		return { id, name };
 	},
+	auditSubject: () => NO_AUDIT_SUBJECT,
 });
 
 const listedWorkspaceRow = z.object({

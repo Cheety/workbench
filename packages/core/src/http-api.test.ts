@@ -478,6 +478,8 @@ describe("the audit read over HTTP", () => {
 					operation: "ledger.addEntry",
 					workspace: WORKSPACE,
 					result: "succeeded",
+					member: null,
+					role: null,
 				},
 			],
 			nextCursor: null,

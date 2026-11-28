@@ -10,6 +10,7 @@ import {
 	type Sql,
 	type StartRole,
 } from "@workbench/sdk";
+import { type AuditSubject, NO_AUDIT_SUBJECT } from "./audit-subject.ts";
 import { isRecord } from "./is-record.ts";
 import { type JsonSchema, jsonSchemaReaderOf } from "./json-schema.ts";
 import { describeOwner, type Owner, ownerName } from "./owner.ts";
@@ -44,6 +45,7 @@ type DescribedOperation = {
 	readonly validateOutput: Validator;
 	describeInput(): JsonSchema;
 	describeOutput(): JsonSchema;
+	auditSubjectOf(input: unknown, output: unknown): AuditSubject;
 };
 
 export type WorkspaceOperation = DescribedOperation & {
@@ -63,18 +65,33 @@ export type RegisteredOperation = WorkspaceOperation | InstanceOperation;
 
 export type OperationScope = RegisteredOperation["scope"];
 
+export type AuditedBy<Input, Output> =
+	| { readonly kind: "query" }
+	| {
+			readonly kind: "mutation";
+			auditSubject(input: Input, output: Output): AuditSubject;
+	  };
+
 export type InstanceOperationDefinition<Input, Output> = {
 	readonly name: string;
-	readonly kind: OperationKind;
 	readonly right: string;
 	readonly input: Schema<Input>;
 	readonly output: Schema<Output>;
 	execute(input: Input, ctx: InstanceContext): Promise<Output>;
-};
+} & AuditedBy<Input, Output>;
 
 export function defineInstanceOperation<Input, Output>(
 	definition: InstanceOperationDefinition<Input, Output>,
 ): InstanceOperationDefinition<Input, Output> {
+	return definition;
+}
+
+export type InstanceAdminWorkspaceOperationDefinition<Input, Output> =
+	OperationDefinition<Input, Output> & AuditedBy<Input, Output>;
+
+export function defineInstanceAdminWorkspaceOperation<Input, Output>(
+	definition: InstanceAdminWorkspaceOperationDefinition<Input, Output>,
+): InstanceAdminWorkspaceOperationDefinition<Input, Output> {
 	return definition;
 }
 
@@ -89,11 +106,10 @@ export class InvalidCoreOperationError extends Error {
 
 type CoreOperationDeclaration = {
 	readonly name: string;
-	readonly kind: OperationKind;
 	readonly right: string;
 	readonly input: unknown;
 	readonly output: unknown;
-};
+} & AuditedBy<unknown, unknown>;
 
 function describedCoreOperationOf(
 	owner: Owner,
@@ -120,7 +136,19 @@ function describedCoreOperationOf(
 		validateOutput,
 		describeInput: jsonSchemaReaderOf(definition.input, "input"),
 		describeOutput: jsonSchemaReaderOf(definition.output, "output"),
+		auditSubjectOf: auditSubjectOf(definition),
 	};
+}
+
+function auditSubjectOf(
+	definition: AuditedBy<unknown, unknown>,
+): DescribedOperation["auditSubjectOf"] {
+	switch (definition.kind) {
+		case "query":
+			return () => NO_AUDIT_SUBJECT;
+		case "mutation":
+			return (input, output) => definition.auditSubject(input, output);
+	}
 }
 
 export function instanceOperationOf(
@@ -138,7 +166,7 @@ export function instanceOperationOf(
 
 export function instanceAdminWorkspaceOperationOf(
 	owner: Owner,
-	definition: OperationDefinition<unknown, unknown>,
+	definition: InstanceAdminWorkspaceOperationDefinition<unknown, unknown>,
 ): WorkspaceOperation {
 	return {
 		...describedCoreOperationOf(owner, definition),
@@ -304,6 +332,7 @@ function readOperation(
 			validateOutput,
 			describeInput: jsonSchemaReaderOf(input, "input"),
 			describeOutput: jsonSchemaReaderOf(output, "output"),
+			auditSubjectOf: () => NO_AUDIT_SUBJECT,
 			execute: async (value, ctx) => {
 				const result: unknown = await validExecute.call(candidate, value, ctx);
 				return result;

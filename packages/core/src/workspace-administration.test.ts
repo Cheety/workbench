@@ -512,20 +512,116 @@ describe("the audit of administering workspaces", () => {
 
 		const audit = await instanceAuditOf(harness);
 
-		expect(auditPage.parse(audit).output.entries).toEqual(
-			[
-				{ operation: "core.revokeMembership", workspace },
-				{ operation: "core.grantMembership", workspace },
-				{ operation: "core.defineRole", workspace: null },
-				{ operation: "core.createWorkspace", workspace: null },
-			].map((entry) =>
-				expect.objectContaining({
-					...entry,
-					actor: ADMIN,
-					result: "succeeded",
-				}),
-			),
-		);
+		expect(audit).toEqual({
+			ok: true,
+			output: {
+				entries: [
+					{
+						id: "00000000-0000-4000-a000-000000000004",
+						occurredAt: "2026-11-26T08:00:00.000Z",
+						actor: ADMIN,
+						apiTokenId: null,
+						operation: "core.revokeMembership",
+						workspace,
+						result: "succeeded",
+						member: ALICE,
+						role: "auditor",
+					},
+					{
+						id: "00000000-0000-4000-a000-000000000003",
+						occurredAt: "2026-11-26T08:00:00.000Z",
+						actor: ADMIN,
+						apiTokenId: null,
+						operation: "core.grantMembership",
+						workspace,
+						result: "succeeded",
+						member: ALICE,
+						role: "auditor",
+					},
+					{
+						id: "00000000-0000-4000-a000-000000000002",
+						occurredAt: "2026-11-26T08:00:00.000Z",
+						actor: ADMIN,
+						apiTokenId: null,
+						operation: "core.defineRole",
+						workspace: null,
+						result: "succeeded",
+						member: null,
+						role: "auditor",
+					},
+					{
+						id: "00000000-0000-4000-a000-000000000001",
+						occurredAt: "2026-11-26T08:00:00.000Z",
+						actor: ADMIN,
+						apiTokenId: null,
+						operation: "core.createWorkspace",
+						workspace: null,
+						result: "succeeded",
+						member: null,
+						role: null,
+					},
+				],
+				nextCursor: null,
+			},
+		});
+	});
+
+	test("names the member but no role when a revoked membership did not exist", async () => {
+		const harness = await startLedger();
+		const workspace = await createWorkspaceAsAdmin(harness, "Accounts");
+		const revoked = await harness.call({
+			actor: ADMIN,
+			workspace,
+			operation: "core.revokeMembership",
+			input: { actor: BOB },
+		});
+
+		const audit = await instanceAuditOf(harness);
+
+		expect(revoked).toEqual({
+			ok: true,
+			output: { revoked: false, role: null },
+		});
+		expect(audit).toMatchObject({
+			ok: true,
+			output: {
+				entries: [
+					{
+						operation: "core.revokeMembership",
+						member: BOB,
+						role: null,
+					},
+					{ operation: "core.createWorkspace" },
+				],
+			},
+		});
+	});
+
+	test("names the member and the role of a changed membership to the owners of the workspace", async () => {
+		const harness = await startLedger();
+		const workspace = await createWorkspaceAsAdmin(harness, "Accounts");
+		await grant(harness, workspace, ALICE, "owner");
+		await grant(harness, workspace, BOB, "viewer");
+
+		const audit = await harness.call({
+			actor: ALICE,
+			workspace,
+			operation: "core.listAuditEntries",
+			input: { limit: 1, cursor: null },
+		});
+
+		expect(audit).toMatchObject({
+			ok: true,
+			output: {
+				entries: [
+					{
+						operation: "core.grantMembership",
+						member: BOB,
+						role: "viewer",
+					},
+				],
+			},
+		});
 	});
 
 	test("shows the owners of a workspace who changed its memberships", async () => {

@@ -412,6 +412,8 @@ describe("an operation called as an MCP tool", () => {
 						operation: "ledger.addEntry",
 						workspace: WORKSPACE,
 						result: "succeeded",
+						member: null,
+						role: null,
 					},
 				],
 				nextCursor: null,
