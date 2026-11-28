@@ -133,6 +133,7 @@ export const grantMembershipOperation = defineInstanceAdminWorkspaceOperation({
 		workspace: null,
 		member: actor,
 		role,
+		rights: null,
 	}),
 });
 
@@ -158,5 +159,6 @@ export const revokeMembershipOperation = defineInstanceAdminWorkspaceOperation({
 		workspace: null,
 		member: actor,
 		role,
+		rights: null,
 	}),
 });

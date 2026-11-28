@@ -589,6 +589,10 @@
 																	},
 																	{ "type": "null" }
 																]
+															},
+															"rights": {
+																"type": "array",
+																"items": { "type": "string" }
 															}
 														},
 														"required": [
@@ -826,6 +830,10 @@
 																	},
 																	{ "type": "null" }
 																]
+															},
+															"rights": {
+																"type": "array",
+																"items": { "type": "string" }
 															}
 														},
 														"required": [

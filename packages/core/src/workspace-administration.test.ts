@@ -553,6 +553,7 @@ describe("the audit of administering workspaces", () => {
 						result: "succeeded",
 						member: null,
 						role: "auditor",
+						rights: ["ledger.entry.read"],
 					},
 					{
 						id: "00000000-0000-4000-a000-000000000001",
@@ -567,6 +568,28 @@ describe("the audit of administering workspaces", () => {
 					},
 				],
 				nextCursor: null,
+			},
+		});
+	});
+
+	test("names the rights a redefinition leaves a role with, even none", async () => {
+		const harness = await startLedger();
+		await defineRoleAsAdmin(harness, "auditor", ["ledger.entry.read"]);
+		await defineRoleAsAdmin(harness, "auditor", []);
+
+		const audit = await instanceAuditOf(harness);
+
+		expect(audit).toMatchObject({
+			ok: true,
+			output: {
+				entries: [
+					{ operation: "core.defineRole", role: "auditor", rights: [] },
+					{
+						operation: "core.defineRole",
+						role: "auditor",
+						rights: ["ledger.entry.read"],
+					},
+				],
 			},
 		});
 	});

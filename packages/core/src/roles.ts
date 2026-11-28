@@ -84,5 +84,10 @@ export const defineRoleOperation = defineInstanceOperation({
 			SELECT ${name}, value FROM jsonb_array_elements_text(${JSON.stringify(rights)}::text::jsonb)`;
 		return { name, rights: rights.toSorted() };
 	},
-	auditSubject: ({ name }) => ({ workspace: null, member: null, role: name }),
+	auditSubject: (_input, { name, rights }) => ({
+		workspace: null,
+		member: null,
+		role: name,
+		rights,
+	}),
 });
