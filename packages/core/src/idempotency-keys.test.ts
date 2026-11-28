@@ -280,9 +280,10 @@ const MALFORMED_KEYS = [
 	{ variant: "longer than 255 characters", key: "k".repeat(256) },
 	{ variant: "with a control character", key: "retry\n1" },
 	{ variant: "beyond ASCII", key: "wiederholung-ä" },
+	{ variant: "with a comma", key: "retry,1" },
 ];
 
-const LONGEST_KEY = `retry ~!${"k".repeat(247)}`;
+const LONGEST_KEY = `retry ~!+-${"k".repeat(245)}`;
 
 describe("a malformed idempotency key", () => {
 	test.each(MALFORMED_KEYS)(
@@ -299,7 +300,7 @@ describe("a malformed idempotency key", () => {
 					code: "invalid_idempotency_key",
 					kind: "invalid_input",
 					detail:
-						"the idempotency key must consist of 1 to 255 visible ASCII characters or spaces",
+						"the idempotency key must consist of 1 to 255 visible ASCII characters or spaces, without a comma",
 					issues: [],
 				},
 			});
@@ -310,7 +311,7 @@ describe("a malformed idempotency key", () => {
 		},
 	);
 
-	test("of 255 visible ASCII characters and spaces is accepted", async () => {
+	test("of 255 visible ASCII characters and spaces other than a comma is accepted", async () => {
 		const harness = await startLedger();
 		const workspace = await harness.createWorkspace("Accounts");
 
@@ -727,7 +728,7 @@ describe("the table of idempotency keys", () => {
 		},
 	);
 
-	test("keeps a key of 255 visible ASCII characters and spaces, as the pipeline accepts it", async () => {
+	test("keeps a key of 255 visible ASCII characters and spaces other than a comma, as the pipeline accepts it", async () => {
 		const database = await createFreshDatabase();
 		cleanups.push(() => database.drop());
 		await startLedgerPipeline(database);

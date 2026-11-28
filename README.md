@@ -169,7 +169,7 @@ Wirft `execute`, passt die Ausgabe nicht zum Schema oder lässt sich der Audit-E
 | Code                      | Art             | Bedeutung                                                                                                                                           |
 | ------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `invalid_input`           | `invalid_input` | Die Eingabe passt nicht zum Eingabe-Schema; `issues` nennt je Befund Pfad und Meldung.                                                              |
-| `invalid_idempotency_key` | `invalid_input` | Der Idempotency-Key hat nicht 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen.                                                                   |
+| `invalid_idempotency_key` | `invalid_input` | Der Idempotency-Key hat nicht 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen ohne Komma.                                                        |
 | `idempotency_key_reused`  | `rejected`      | Der Idempotency-Key wurde schon für eine andere Operation, einen anderen Workspace oder eine andere Eingabe verwendet.                              |
 | `unknown_operation`       | `not_found`     | Weder der Core noch ein aktives Plugin hat eine Operation dieses Namens.                                                                            |
 | `workspace_not_found`     | `not_found`     | Der Workspace existiert nicht.                                                                                                                      |
@@ -196,7 +196,7 @@ Die Pipeline prüft bisher keine Rechte; das folgt mit Identität und Zugriff.
 
 #### Idempotency-Keys
 
-Ein Akteur kann einer Mutation einen Idempotency-Key mitgeben, damit eine Wiederholung, etwa nach einer Zeitüberschreitung, keinen zweiten Effekt hat (ADR-0017). Der Key ist 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen lang, sonst scheitert die Mutation mit `invalid_idempotency_key`, bevor irgendetwas läuft.
+Ein Akteur kann einer Mutation einen Idempotency-Key mitgeben, damit eine Wiederholung, etwa nach einer Zeitüberschreitung, keinen zweiten Effekt hat (ADR-0017). Der Key ist 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen ohne Komma lang, sonst scheitert die Mutation mit `invalid_idempotency_key`, bevor irgendetwas läuft.
 
 - Der erste Aufruf mit einem Key führt die Mutation aus und hält ihre Antwort in `core.idempotency_keys` fest, in ihrer Transaktion. Jeder weitere Aufruf desselben Akteurs mit demselben Key, derselben Operation, demselben Workspace und derselben Eingabe erhält dieselbe Antwort, ohne dass `execute` läuft, und hinterlässt keinen Audit-Eintrag, kein Event und keinen Job. Die Eingabe gilt als dieselbe, wenn ihr JSON dieselben Felder mit denselben Werten hat, in beliebiger Reihenfolge.
 - Nennt ein weiterer Aufruf mit demselben Key eine andere Operation, einen anderen Workspace oder eine andere Eingabe, scheitert er mit `idempotency_key_reused`, und die Mutation läuft nicht.
@@ -483,25 +483,25 @@ curl -X POST "http://127.0.0.1:3000/api/workspaces/$WORKSPACE/operations/referen
 
 - Der Pfad ist `POST /api/workspaces/{workspace}/operations/{operation}`, auch für eine Query. Der Body ist die Eingabe als JSON, höchstens 1 MiB (1048576 Bytes); die Antwort 200 enthält die Ausgabe der Operation. Eine andere Methode auf diesem Pfad beantwortet die API vor der Prüfung des Tokens mit 405 und `Allow: POST`, als Problem Details mit `code` `method_not_allowed`.
 - Jeder Aufruf braucht ein API-Token als `Authorization: Bearer <token>`; das Schema `Bearer` gilt in beliebiger Groß- und Kleinschreibung (RFC 9110). Fehlt es, steht es in einem anderen Schema, ist es unbekannt oder abgelaufen, antwortet die API mit 401 und `WWW-Authenticate: Bearer`, als Problem Details mit `code` `unauthenticated`. Die Antwort sagt nicht, welcher Fall vorlag; das Log nennt ihn im Eintrag `request not authenticated` mit `reason` (`missing_token`, `unknown_token`, `expired_token`). Der Akteur des Aufrufs ist der Service-Account des Tokens.
-- Den Idempotency-Key einer Mutation nennt der Header `Idempotency-Key` (siehe [Idempotency-Keys](#idempotency-keys)), als Text (`Idempotency-Key: retry-1`) oder als String der Structured Fields nach RFC 9651 in Anführungszeichen (`Idempotency-Key: "retry-1"`), wie im Entwurf der IETF; beide nennen denselben Key. Eine Wiederholung antwortet mit 200 und demselben Body wie der erste Aufruf. Eine Query beachtet den Header nicht.
+- Den Idempotency-Key einer Mutation nennt der Header `Idempotency-Key` (siehe [Idempotency-Keys](#idempotency-keys)), als Text (`Idempotency-Key: retry-1`) oder als String der Structured Fields nach RFC 9651 in Anführungszeichen (`Idempotency-Key: "retry-1"`), wie im Entwurf der IETF; beide nennen denselben Key. Weil ein Key kein Komma enthält, scheitert eine Mutation mit einem doppelt geschickten Header mit `invalid_idempotency_key`: Der Server sieht zwei Header als einen Wert, durch `, ` getrennt. Eine Wiederholung antwortet mit 200 und demselben Body wie der erste Aufruf. Eine Query beachtet den Header nicht.
 - Jede Datenbankanweisung einer Anfrage darf höchstens 60 s dauern (`statement_timeout`); dauert sie länger, scheitert die Anfrage.
 - Jedes Scheitern kommt als Problem Details mit `Content-Type: application/problem+json` und der Korrelations-ID in `correlationId`, mit dem Status nach der Art (siehe [Aufruf einer Operation](#aufruf-einer-operation)). Ein interner Fehler nennt nur `internal_error` und eine neutrale Meldung, nie Stacktrace, Pfad oder Query; die Details stehen unter derselben Korrelations-ID im Log.
 
-| Code                      | Status | Bedeutung                                                                                                   |
-| ------------------------- | ------ | ----------------------------------------------------------------------------------------------------------- |
-| `unauthenticated`         | 401    | Kein gültiges API-Token.                                                                                    |
-| `invalid_input`           | 400    | Der Body ist kein JSON, oder die Eingabe passt nicht zum Eingabe-Schema.                                    |
-| `route_not_found`         | 404    | Weder Methode noch Pfad passen zu einer Route.                                                              |
-| `method_not_allowed`      | 405    | Der Pfad einer Operation mit anderer Methode als `POST`.                                                    |
-| `malformed_path`          | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                                                          |
-| `invalid_workspace_id`    | 400    | Der Workspace im Pfad ist keine UUID.                                                                       |
-| `workspace_not_found`     | 404    | Kein Workspace hat diese UUID.                                                                              |
-| `unknown_operation`       | 404    | Weder der Core noch ein aktives Plugin hat eine Operation dieses Namens.                                    |
-| `body_too_large`          | 413    | Der Body ist größer als 1 MiB.                                                                              |
-| `invalid_idempotency_key` | 400    | Der Header `Idempotency-Key` hat nicht 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen.                  |
-| `idempotency_key_reused`  | 422    | Der Idempotency-Key kam schon mit einer anderen Operation, einem anderen Workspace oder einem anderen Body. |
-| `instance_not_ready`      | 503    | Die Instanz startet noch oder ihr Start ist gescheitert.                                                    |
-| `internal_error`          | 500    | Die Anfrage scheiterte aus einem internen Grund.                                                            |
+| Code                      | Status | Bedeutung                                                                                                                   |
+| ------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `unauthenticated`         | 401    | Kein gültiges API-Token.                                                                                                    |
+| `invalid_input`           | 400    | Der Body ist kein JSON, oder die Eingabe passt nicht zum Eingabe-Schema.                                                    |
+| `route_not_found`         | 404    | Weder Methode noch Pfad passen zu einer Route.                                                                              |
+| `method_not_allowed`      | 405    | Der Pfad einer Operation mit anderer Methode als `POST`.                                                                    |
+| `malformed_path`          | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                                                                          |
+| `invalid_workspace_id`    | 400    | Der Workspace im Pfad ist keine UUID.                                                                                       |
+| `workspace_not_found`     | 404    | Kein Workspace hat diese UUID.                                                                                              |
+| `unknown_operation`       | 404    | Weder der Core noch ein aktives Plugin hat eine Operation dieses Namens.                                                    |
+| `body_too_large`          | 413    | Der Body ist größer als 1 MiB.                                                                                              |
+| `invalid_idempotency_key` | 400    | Der Header `Idempotency-Key` hat nicht 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen ohne Komma, oder er kam mehrfach. |
+| `idempotency_key_reused`  | 422    | Der Idempotency-Key kam schon mit einer anderen Operation, einem anderen Workspace oder einem anderen Body.                 |
+| `instance_not_ready`      | 503    | Die Instanz startet noch oder ihr Start ist gescheitert.                                                                    |
+| `internal_error`          | 500    | Die Anfrage scheiterte aus einem internen Grund.                                                                            |
 
 #### Service-Account und API-Token anlegen
 

@@ -8,10 +8,10 @@ declare const idempotencyKeyBrand: unique symbol;
 
 export type IdempotencyKey = string & { readonly [idempotencyKeyBrand]: true };
 
-export const IDEMPOTENCY_KEY_PATTERN = "^[ -~]{1,255}$";
+export const IDEMPOTENCY_KEY_PATTERN = "^[ -+\\--~]{1,255}$";
 
 export const IDEMPOTENCY_KEY_RULE =
-	"1 to 255 visible ASCII characters or spaces";
+	"1 to 255 visible ASCII characters or spaces, without a comma";
 
 const IDEMPOTENCY_KEY = new RegExp(IDEMPOTENCY_KEY_PATTERN);
 

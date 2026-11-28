@@ -93,7 +93,7 @@ type ApiInstance = {
 	post(
 		path: string,
 		body: string,
-		headers: Record<string, string>,
+		headers: Headers | Record<string, string>,
 	): Promise<Response>;
 	send(method: string, path: string): Promise<Response>;
 };
@@ -344,6 +344,36 @@ describe("a mutation called over HTTP with an Idempotency-Key", () => {
 		);
 	});
 
+	test.each([
+		{ case: "the header twice", values: ["a", "b"] },
+		{ case: "an unquoted key with a comma", values: ["a,b"] },
+		{ case: "two structured field strings", values: ['"a", "b"'] },
+		{ case: "a quoted key with a comma", values: ['"a, b"'] },
+		{ case: "two halves of a quoted key", values: ['"a', 'b"'] },
+	])(
+		"answers 400 invalid_idempotency_key for $case, and runs nothing",
+		async ({ values }) => {
+			const api = await startApiInstance();
+			const token = await api.issueToken();
+			const headers = new Headers(bearer(token));
+			for (const value of values) headers.append("Idempotency-Key", value);
+
+			const response = await api.post(
+				operationPath("ledger.addEntry"),
+				JSON.stringify({ amount: 42 }),
+				headers,
+			);
+
+			expect(response.status).toBe(400);
+			expect(await response.json()).toEqual(
+				expect.objectContaining({ code: "invalid_idempotency_key" }),
+			);
+			expect(
+				await api.database.sql`SELECT amount FROM plugin_ledger.entries`,
+			).toEqual([]);
+		},
+	);
+
 	test("answers 400 invalid_idempotency_key when the key is empty, and runs nothing", async () => {
 		const api = await startApiInstance();
 		const token = await api.issueToken();
@@ -361,6 +391,25 @@ describe("a mutation called over HTTP with an Idempotency-Key", () => {
 		expect(
 			await api.database.sql`SELECT amount FROM plugin_ledger.entries`,
 		).toEqual([]);
+	});
+});
+
+describe("a query called over HTTP with an Idempotency-Key", () => {
+	test("ignores the header sent twice", async () => {
+		const api = await startApiInstance();
+		const token = await api.issueToken();
+		const headers = new Headers(bearer(token));
+		headers.append("Idempotency-Key", "a");
+		headers.append("Idempotency-Key", "b");
+
+		const response = await api.post(
+			operationPath("ledger.listEntries"),
+			JSON.stringify({}),
+			headers,
+		);
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ entries: [] });
 	});
 });
 
