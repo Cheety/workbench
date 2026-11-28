@@ -9,16 +9,20 @@ export type ManualTimer = {
 	expire(): void;
 };
 
-type PendingTimer = { readonly expire: () => void; readonly delayMs: number };
+type PendingTimer = {
+	readonly expire: () => void;
+	readonly deadlineMs: number;
+};
 
 export function manualTimer(): ManualTimer {
 	const delaysMs: number[] = [];
 	const pending: PendingTimer[] = [];
+	let nowMs = 0;
 	let announce: (() => void) | undefined;
 	return {
 		setTimer: (expire, delayMs) => {
 			delaysMs.push(delayMs);
-			const timer = { expire, delayMs };
+			const timer = { expire, deadlineMs: nowMs + delayMs };
 			pending.push(timer);
 			announce?.();
 			announce = undefined;
@@ -37,11 +41,14 @@ export function manualTimer(): ManualTimer {
 		expire: () => {
 			const soonest = pending.reduce<PendingTimer | undefined>(
 				(found, timer) =>
-					found === undefined || timer.delayMs < found.delayMs ? timer : found,
+					found === undefined || timer.deadlineMs < found.deadlineMs
+						? timer
+						: found,
 				undefined,
 			);
 			if (soonest === undefined) throw new Error("no timer is pending");
 			pending.splice(pending.indexOf(soonest), 1);
+			nowMs = soonest.deadlineMs;
 			soonest.expire();
 		},
 	};
