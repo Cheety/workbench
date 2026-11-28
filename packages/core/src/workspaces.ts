@@ -1,5 +1,4 @@
-import { defineRight } from "@workbench/sdk";
-import type { SQL } from "bun";
+import { defineRight, type Sql } from "@workbench/sdk";
 import { z } from "zod";
 import { NO_AUDIT_SUBJECT } from "./audit-subject.ts";
 import { type Keyset, pageOf } from "./keyset-pages.ts";
@@ -24,7 +23,7 @@ export function isWorkspaceId(value: string): boolean {
 }
 
 export async function createWorkspace(
-	sql: SQL,
+	sql: Sql,
 	workspace: NewWorkspace,
 ): Promise<void> {
 	await sql`INSERT INTO core.workspaces (id, name, created_at) VALUES (${workspace.id}, ${workspace.name}, ${workspace.createdAt})`;
@@ -52,7 +51,7 @@ export const createWorkspaceOperation = defineInstanceOperation({
 	output: workspace,
 	execute: async ({ name }, ctx) => {
 		const id = ctx.newId();
-		await ctx.sql`INSERT INTO core.workspaces (id, name, created_at) VALUES (${id}, ${name}, ${ctx.now()})`;
+		await createWorkspace(ctx.sql, { id, name, createdAt: ctx.now() });
 		return { id, name };
 	},
 	auditSubject: () => NO_AUDIT_SUBJECT,
