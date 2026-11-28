@@ -525,7 +525,7 @@ function insertingExpiredKeys(database: FreshDatabase, count: number) {
 	return database.sql`
 		INSERT INTO core.idempotency_keys (actor_kind, actor_id, key, operation, workspace_id, input_hash, created_at)
 		SELECT 'user', 'alice', 'expired-' || n, 'ledger.addEntry', ${WORKSPACE}, ${"0".repeat(64)},
-			'2026-11-26T09:00:00.000Z'::timestamptz + n * interval '1 millisecond'
+			'2026-11-26T09:00:00.000Z'::timestamptz - n * interval '1 millisecond'
 		FROM generate_series(1, ${count}::integer) AS n`;
 }
 
@@ -542,7 +542,7 @@ describe("the cron job removing expired idempotency keys", () => {
 		await jobs.runDue(NOT_STOPPED);
 
 		expect(await database.sql`SELECT key FROM core.idempotency_keys`).toEqual([
-			{ key: `expired-${MOST_REMOVED_PER_RUN + 1}` },
+			{ key: "expired-1" },
 		]);
 	});
 
