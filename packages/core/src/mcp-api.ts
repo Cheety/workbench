@@ -74,8 +74,8 @@ export async function answerMcpRequest(
 		enableJsonResponse: true,
 		maxRequestBodySize: MAX_BODY_BYTES,
 	});
-	await server.connect(transport);
 	try {
+		await server.connect(transport);
 		return await transport.handleRequest(request);
 	} finally {
 		await server.close();
@@ -148,7 +148,7 @@ async function callTool(
 		idempotencyKey: null,
 		workspace,
 		input: params.arguments?.input,
-		correlationId: correlationId,
+		correlationId,
 	});
 	if (!result.ok) return toolError(result.failure, correlationId);
 	return { content: [{ type: "text", text: JSON.stringify(result.output) }] };
