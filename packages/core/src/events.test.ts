@@ -339,6 +339,7 @@ async function startLedgerWokenByItsPipeline() {
 			}),
 		received,
 		firstReceived: firstReceived.promise,
+		deliverDue: () => delivery.deliverDue(NOT_STOPPED),
 		stopDelivering: () => loop.stop(),
 	};
 }
@@ -918,6 +919,7 @@ describe("the pipeline", () => {
 
 			const called = await ledgerAndStatistics.call(operation, amount);
 			await ledgerAndStatistics.stopDelivering();
+			await ledgerAndStatistics.deliverDue();
 
 			expect(called).toEqual({
 				ok: false,
