@@ -2,7 +2,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+	DATABASE_CAPABILITY,
+	defineOperation,
+	definePlugin,
+	OperationError,
+} from "@workbench/sdk";
 import { z } from "zod";
+import type { PluginPackage } from "./kernel.ts";
 import {
 	API_INSTANCE_WORKSPACE,
 	type ApiInstance,
@@ -26,12 +33,59 @@ afterEach(async () => {
 	for (const instance of instances.splice(0)) await instance.stop();
 });
 
-async function startReferenceInstance(): Promise<ApiInstance> {
-	const instance = await startApiInstance([
-		await pluginPackageAt(REFERENCE_DIRECTORY),
-	]);
+const closeBook = defineOperation({
+	name: "closeBook",
+	kind: "mutation",
+	target: "workspace",
+	right: "ledger.book.close",
+	input: z.object({ year: z.number().int() }),
+	output: z.object({ year: z.number().int() }),
+	execute: async ({ year }) => {
+		throw new OperationError(
+			"conflict",
+			"book_already_closed",
+			`the book of ${year} is already closed`,
+		);
+	},
+});
+
+const ledger: PluginPackage = {
+	packageName: "@workbench/plugin-ledger",
+	pluginName: "ledger",
+	version: "1.0.0",
+	loadDefinition: async () => ({
+		...definePlugin({
+			manifest: { name: "ledger", capabilities: [DATABASE_CAPABILITY] },
+		}),
+		operations: [closeBook],
+	}),
+	loadMigrations: async () => [],
+};
+
+async function startInstanceOf(
+	plugins: readonly PluginPackage[],
+): Promise<ApiInstance> {
+	const instance = await startApiInstance(plugins);
 	instances.push(instance);
 	return instance;
+}
+
+async function startReferenceInstance(): Promise<ApiInstance> {
+	return startInstanceOf([await pluginPackageAt(REFERENCE_DIRECTORY)]);
+}
+
+async function connectedClient(
+	api: ApiInstance,
+	token: string,
+): Promise<Client> {
+	const client = new Client({ name: "reference-agent", version: "1.0.0" });
+	clients.push(client);
+	await client.connect(
+		new StreamableHTTPClientTransport(new URL(`${api.url}/api/mcp`), {
+			requestInit: { headers: { Authorization: `Bearer ${token}` } },
+		}),
+	);
+	return client;
 }
 
 type Call = {
@@ -58,13 +112,7 @@ async function overMcp(
 	token: string,
 	{ operation, workspace, input }: Call,
 ): Promise<string> {
-	const client = new Client({ name: "reference-agent", version: "1.0.0" });
-	clients.push(client);
-	await client.connect(
-		new StreamableHTTPClientTransport(new URL(`${api.url}/api/mcp`), {
-			requestInit: { headers: { Authorization: `Bearer ${token}` } },
-		}),
-	);
+	const client = await connectedClient(api, token);
 	const result = await client.callTool({
 		name: operation.replace(".", "_"),
 		arguments: { workspace, input },
@@ -78,6 +126,56 @@ async function overMcp(
 		.parse(result);
 	return content[0].text;
 }
+
+describe("the reference operations listed as MCP tools", () => {
+	test("name createNote and listNotes with the input schema of the HTTP API contract under input", async () => {
+		const api = await startReferenceInstance();
+		const client = await connectedClient(api, await api.issueToken());
+
+		const { tools } = await client.listTools();
+
+		expect(tools.filter((tool) => tool.name.startsWith("reference_"))).toEqual([
+			{
+				name: "reference_createNote",
+				inputSchema: {
+					type: "object",
+					properties: {
+						workspace: { type: "string", format: "uuid" },
+						input: {
+							type: "object",
+							properties: {
+								title: { type: "string", minLength: 1, maxLength: 200 },
+							},
+							required: ["title"],
+						},
+					},
+					required: ["workspace", "input"],
+					additionalProperties: false,
+				},
+				annotations: { readOnlyHint: false },
+			},
+			{
+				name: "reference_listNotes",
+				inputSchema: {
+					type: "object",
+					properties: {
+						workspace: { type: "string", format: "uuid" },
+						input: {
+							type: "object",
+							properties: {
+								limit: { type: "integer", minimum: 1, maximum: 100 },
+							},
+							required: ["limit"],
+						},
+					},
+					required: ["workspace", "input"],
+					additionalProperties: false,
+				},
+				annotations: { readOnlyHint: true },
+			},
+		]);
+	});
+});
 
 describe("an operation of the reference plugin over MCP and over HTTP", () => {
 	test("answers the reference mutation with the same output", async () => {
@@ -156,4 +254,33 @@ describe("an operation of the reference plugin over MCP and over HTTP", () => {
 			});
 		},
 	);
+});
+
+describe("a domain error of a plugin over MCP and over HTTP", () => {
+	test("comes with the same problem details, status and stable code of the plugin", async () => {
+		const api = await startInstanceOf([ledger]);
+		const token = await api.issueToken();
+		const call = {
+			operation: "ledger.closeBook",
+			workspace: API_INSTANCE_WORKSPACE,
+			input: { year: 2025 },
+		};
+
+		const failedOverHttp = JSON.parse(await overHttp(api, token, call));
+		const failedOverMcp = JSON.parse(await overMcp(api, token, call));
+
+		expect(failedOverHttp).toEqual({
+			type: "urn:workbench:problem:ledger.book_already_closed",
+			title: "Conflict",
+			status: 409,
+			detail: "the book of 2025 is already closed",
+			code: "ledger.book_already_closed",
+			correlationId: expect.any(String),
+			issues: [],
+		});
+		expect(failedOverMcp).toEqual({
+			...failedOverHttp,
+			correlationId: expect.any(String),
+		});
+	});
 });
