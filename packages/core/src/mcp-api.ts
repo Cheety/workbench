@@ -19,9 +19,10 @@ import {
 	TAKES_IDEMPOTENCY_KEY,
 } from "./idempotency-keys.ts";
 import { INVALID_IDEMPOTENCY_KEY } from "./operation-pipeline.ts";
-import type {
-	OperationRegistry,
-	RegisteredOperation,
+import {
+	OPERATION_NAME_SEPARATOR,
+	type OperationRegistry,
+	type RegisteredOperation,
 } from "./operation-registry.ts";
 import {
 	MAX_BODY_BYTES,
@@ -38,8 +39,6 @@ export const MCP_PATH = "/api/mcp";
 const MCP_METHOD = "POST";
 
 const SERVER_INFO = { name: "workbench", version: API_VERSION };
-
-const OPERATION_NAME_SEPARATOR = ".";
 
 const TOOL_NAME_SEPARATOR = "_";
 
@@ -63,9 +62,7 @@ const IDEMPOTENCY_KEY_ARGUMENT = {
 	pattern: IDEMPOTENCY_KEY_PATTERN,
 };
 
-export type McpApi = Pick<HttpApi, "authenticate" | "pipeline"> & {
-	readonly operations: Pick<OperationRegistry, "list">;
-};
+export type McpApi = Pick<HttpApi, "authenticate" | "pipeline" | "operations">;
 
 type McpRequest = {
 	readonly api: McpApi;

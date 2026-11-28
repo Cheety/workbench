@@ -146,6 +146,21 @@ curl -si http://127.0.0.1:3123/api/mcp -H 'Accept: application/json, text/event-
 
 `tools/list` nennt `core_listAuditEntries`, `reference_createNote` und `reference_listNotes`, jedes mit `workspace` und `input` im `inputSchema`. Der erste Aufruf antwortet mit einem Textblock, der die Notiz als JSON enthält, wie der Body von `POST …/operations/reference.createNote`; der zweite mit `isError: true` und Problem Details mit `code` `invalid_input`. Ohne Token antwortet der Endpunkt mit `401 Unauthorized`.
 
+## Eine Operation per CLI aufrufen
+
+Den Server, den Workspace und das Token wie unter [Ein Event in der Outbox ansehen](#ein-event-in-der-outbox-ansehen) anlegen. Dann die Operationen listen, die Referenz-Mutation aufrufen, einmal gültig, einmal mit leerem Titel und einmal mit einer Eingabe, die kein JSON ist, und jeweils den Exit-Code ausgeben:
+
+```sh
+export WORKBENCH_URL=http://127.0.0.1:3123 WORKBENCH_TOKEN="$(cat /tmp/workbench-verify.token)"
+bun run --silent workbench operations; echo "exit $?"
+bun run --silent workbench reference create-note --workspace 00000000-0000-4000-8000-00000000aaaa --input '{"title":"Plan"}'; echo "exit $?"
+bun run --silent workbench reference create-note --workspace 00000000-0000-4000-8000-00000000aaaa --input '{"title":""}'; echo "exit $?"
+bun run --silent workbench reference create-note --workspace 00000000-0000-4000-8000-00000000aaaa --input '{title'; echo "exit $?"
+curl -s http://127.0.0.1:3123/api/operations -H "Authorization: Bearer $WORKBENCH_TOKEN"
+```
+
+Die Liste nennt `core list-audit-entries`, `reference create-note` und `reference list-notes`, je mit dem Namen der Operation und ihrer Art, wie `GET /api/operations`; `exit 0`. Der erste Aufruf gibt die Notiz als JSON aus, wie der Body von `POST …/operations/reference.createNote`, mit `exit 0`; der zweite `invalid_input: …`, darunter `title: Too small: …` und die Korrelations-ID, mit `exit 1`; der dritte `--input is not JSON` und die Zeile `usage: workbench …`, mit `exit 2`, und das Log des Servers hat dafür keinen Eintrag `request completed`. Ohne `WORKBENCH_TOKEN` und ohne `~/.config/workbench/cli.json` endet jeder Aufruf mit `invalid configuration:` und `exit 2`; `grep -c "$WORKBENCH_TOKEN" /tmp/workbench-verify.log` zählt `0`.
+
 ## Einen Ladefehler auslösen
 
 Ein Plugin in `PLUGINS`, das kein Plugin-Paket bereitstellt, ist der schnellste Ladefehler. Den Server wie oben starten, aber mit `PLUGINS=reference,missing`, dann:

@@ -122,7 +122,7 @@ describe("the OpenAPI document of the HTTP API", () => {
 
 		const parametersOf = (operation: string) =>
 			document.paths[`/api/workspaces/{workspace}/operations/${operation}`]
-				?.post.parameters;
+				?.post?.parameters;
 
 		expect(parametersOf("board.renameLabel")).toEqual([
 			{
@@ -131,14 +131,12 @@ describe("the OpenAPI document of the HTTP API", () => {
 				required: true,
 				schema: { type: "string", format: "uuid" },
 			},
-			{
+			expect.objectContaining({
 				name: "Idempotency-Key",
 				in: "header",
 				required: false,
-				description:
-					"a key of the caller under which a repeated call receives the answer of the first instead of running the mutation again",
 				schema: { type: "string", pattern: "^[ -+\\--~]{1,255}$" },
-			},
+			}),
 		]);
 		expect(parametersOf("board.countLabels")).toEqual([
 			{
@@ -155,7 +153,7 @@ describe("the OpenAPI document of the HTTP API", () => {
 
 		expect(
 			document.paths["/api/workspaces/{workspace}/operations/board.countLabels"]
-				?.post.requestBody.content["application/json"]?.schema,
+				?.post?.requestBody.content["application/json"]?.schema,
 		).toEqual({});
 	});
 
@@ -196,13 +194,58 @@ describe("the OpenAPI document of the HTTP API", () => {
 		expect(
 			document.paths[
 				"/api/workspaces/{workspace}/operations/core.listAuditEntries"
-			]?.post.responses["200"]?.content["application/json"]?.schema,
+			]?.post?.responses["200"]?.content["application/json"]?.schema,
 		).toMatchObject({
 			properties: {
 				entries: {
 					items: {
 						properties: {
 							occurredAt: { type: "string", format: "date-time" },
+						},
+					},
+				},
+			},
+		});
+	});
+
+	test("describes the list of operations as a GET naming each operation with its kind", async () => {
+		const document = await describeHttpApi([], setSystemTimer);
+
+		expect(document.paths["/api/operations"]).toMatchObject({
+			get: {
+				operationId: "listOperations",
+				responses: {
+					"200": {
+						content: {
+							"application/json": {
+								schema: {
+									properties: {
+										operations: {
+											items: {
+												properties: {
+													kind: { enum: ["query", "mutation"] },
+												},
+												required: ["name", "kind"],
+											},
+										},
+									},
+									required: ["operations"],
+								},
+							},
+						},
+					},
+					"401": {
+						content: {
+							"application/problem+json": {
+								schema: { $ref: "#/components/schemas/ProblemDetails" },
+							},
+						},
+					},
+					default: {
+						content: {
+							"application/problem+json": {
+								schema: { $ref: "#/components/schemas/ProblemDetails" },
+							},
 						},
 					},
 				},

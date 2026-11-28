@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { InvalidConfigError, loadConfig } from "./config.ts";
+import {
+	type CliConfigSource,
+	InvalidCliConfigError,
+	InvalidConfigError,
+	loadCliConfig,
+	loadConfig,
+} from "./config.ts";
 
 const DATABASE_URL =
 	"postgres://workbench:s3cr3t-pass@db.internal:5432/workbench";
@@ -280,5 +286,165 @@ describe("loadConfig", () => {
 					"must be a comma-separated list of plugin names (lowercase letters, digits and hyphens, starting with a letter)",
 			},
 		]);
+	});
+});
+
+const TOKEN = "wbt_s3cr3t-token";
+
+function filesOf(
+	files: Readonly<Record<string, string>>,
+): CliConfigSource["readFile"] {
+	return (path) => {
+		const text = files[path];
+		return text === undefined ? { found: "missing" } : { found: "text", text };
+	};
+}
+
+function captureInvalidCliConfig(
+	source: CliConfigSource,
+): InvalidCliConfigError {
+	try {
+		loadCliConfig(source);
+	} catch (error) {
+		if (error instanceof InvalidCliConfigError) return error;
+		throw error;
+	}
+	throw new Error("expected loadCliConfig to reject the configuration");
+}
+
+describe("loadCliConfig", () => {
+	test("reads the configuration file under XDG_CONFIG_HOME before the one under HOME", () => {
+		const config = loadCliConfig({
+			env: { XDG_CONFIG_HOME: "/config", HOME: "/home/ada" },
+			readFile: filesOf({
+				"/config/workbench/cli.json": JSON.stringify({
+					url: "https://workbench.example",
+					token: TOKEN,
+				}),
+				"/home/ada/.config/workbench/cli.json": JSON.stringify({
+					url: "https://other.example",
+					token: "wbt_other",
+				}),
+			}),
+		});
+
+		expect(config.instanceUrl.href).toBe("https://workbench.example/");
+		expect(config.token.reveal()).toBe(TOKEN);
+	});
+
+	test("rejects a WORKBENCH_CONFIG that names a missing file", () => {
+		const error = captureInvalidCliConfig({
+			env: { WORKBENCH_CONFIG: "/nowhere.json", WORKBENCH_TOKEN: TOKEN },
+			readFile: filesOf({}),
+		});
+
+		expect(error.issues).toEqual([
+			{
+				subject: "WORKBENCH_CONFIG",
+				problem: "names a file that does not exist",
+			},
+		]);
+	});
+
+	test.each([
+		["not JSON", "token = wbt_s3cr3t-token"],
+		["an unknown field", JSON.stringify({ token: TOKEN, user: "ada" })],
+		["a token that is not a string", JSON.stringify({ token: 42 })],
+	])(
+		"rejects a configuration file with %s and names the file, not its content",
+		(_case, content) => {
+			const error = captureInvalidCliConfig({
+				env: { HOME: "/home/ada" },
+				readFile: filesOf({ "/home/ada/.config/workbench/cli.json": content }),
+			});
+
+			expect(error.issues).toEqual([
+				{
+					subject: "/home/ada/.config/workbench/cli.json",
+					problem:
+						"must be a JSON object with no other fields than the strings url and token",
+				},
+			]);
+			expect(error.message).not.toContain(TOKEN);
+		},
+	);
+
+	test("rejects a URL that is not http or https and names where it came from, not the URL", () => {
+		const error = captureInvalidCliConfig({
+			env: { HOME: "/home/ada", WORKBENCH_TOKEN: TOKEN },
+			readFile: filesOf({
+				"/home/ada/.config/workbench/cli.json": JSON.stringify({
+					url: "ftp://workbench.example",
+				}),
+			}),
+		});
+
+		expect(error.issues).toEqual([
+			{
+				subject: "url in /home/ada/.config/workbench/cli.json",
+				problem: "must be a http:// or https:// URL with a host",
+			},
+		]);
+	});
+
+	test.each([
+		{
+			case: "a line break in WORKBENCH_TOKEN",
+			env: { WORKBENCH_TOKEN: `${TOKEN}\n` },
+			file: {},
+			subject: "WORKBENCH_TOKEN",
+		},
+		{
+			case: "a space in WORKBENCH_TOKEN",
+			env: { WORKBENCH_TOKEN: `Bearer ${TOKEN}` },
+			file: {},
+			subject: "WORKBENCH_TOKEN",
+		},
+		{
+			case: "a character beyond ASCII in the token of the file",
+			env: {},
+			file: { token: `${TOKEN}\u20ac` },
+			subject: "token in /home/ada/.config/workbench/cli.json",
+		},
+	])(
+		"rejects a token that cannot be sent as a bearer token in an HTTP header, with $case, and names its source, not the token",
+		({ env, file, subject }) => {
+			const error = captureInvalidCliConfig({
+				env: {
+					HOME: "/home/ada",
+					WORKBENCH_URL: "http://127.0.0.1:3000",
+					...env,
+				},
+				readFile: filesOf({
+					"/home/ada/.config/workbench/cli.json": JSON.stringify(file),
+				}),
+			});
+
+			expect(error.issues).toEqual([
+				{
+					subject,
+					problem: "must consist of visible ASCII characters only",
+				},
+			]);
+			expect(error.message).not.toContain(TOKEN);
+		},
+	);
+
+	test("names only the variables when neither HOME nor XDG_CONFIG_HOME is set", () => {
+		const error = captureInvalidCliConfig({ env: {}, readFile: filesOf({}) });
+
+		expect(error.issues).toEqual([
+			{ subject: "WORKBENCH_URL", problem: "is required" },
+			{ subject: "WORKBENCH_TOKEN", problem: "is required" },
+		]);
+	});
+
+	test("keeps the token out of its text", () => {
+		const config = loadCliConfig({
+			env: { WORKBENCH_URL: "http://127.0.0.1:3000", WORKBENCH_TOKEN: TOKEN },
+			readFile: filesOf({}),
+		});
+
+		expect(JSON.stringify(config)).not.toContain(TOKEN);
 	});
 });

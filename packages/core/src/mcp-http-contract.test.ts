@@ -7,12 +7,12 @@ import {
 	OperationError,
 } from "@workbench/sdk";
 import { z } from "zod";
-import { IDEMPOTENCY_KEY_PATTERN } from "./idempotency-keys.ts";
 import type { PluginPackage } from "./kernel.ts";
 import {
 	API_INSTANCE_WORKSPACE,
 	type ApiInstance,
 } from "./testing/api-instance.ts";
+import { documentedIdempotencyKeyPattern } from "./testing/documented-idempotency-key.ts";
 import { mcpTestbed } from "./testing/mcp-testbed.ts";
 import { pluginPackageAt } from "./testing/operation-harness.ts";
 
@@ -109,6 +109,9 @@ function answerOfTool(result: unknown): Answer {
 
 describe("the reference operations listed as MCP tools", () => {
 	test("name createNote and listNotes with the input schema of the HTTP API contract under input", async () => {
+		const idempotencyKeyPattern = await documentedIdempotencyKeyPattern(
+			"reference.createNote",
+		);
 		const api = await startReferenceInstance();
 		const client = await mcp.connectedClient(api.url, await api.issueToken());
 
@@ -130,7 +133,7 @@ describe("the reference operations listed as MCP tools", () => {
 						},
 						idempotencyKey: {
 							type: "string",
-							pattern: IDEMPOTENCY_KEY_PATTERN,
+							pattern: idempotencyKeyPattern,
 						},
 					},
 					required: ["workspace", "input"],

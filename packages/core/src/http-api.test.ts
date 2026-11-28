@@ -6,7 +6,9 @@ import {
 } from "@workbench/sdk";
 import { z } from "zod";
 import { apiTokenHash } from "./api-tokens.ts";
+import { setSystemTimer } from "./hook-timeout.ts";
 import type { PluginPackage } from "./kernel.ts";
+import { describeHttpApi } from "./openapi.ts";
 import {
 	API_INSTANCE_WORKSPACE,
 	type ApiInstance,
@@ -630,4 +632,94 @@ describe("a failing call over HTTP", () => {
 			}),
 		);
 	});
+});
+
+const documentedOperationList = z.object({
+	paths: z.object({
+		"/api/operations": z.object({
+			get: z.object({
+				responses: z.object({
+					"200": z.object({
+						content: z.object({
+							"application/json": z.object({
+								schema: z.record(z.string(), z.unknown()),
+							}),
+						}),
+					}),
+				}),
+			}),
+		}),
+	}),
+});
+
+describe("the operations listed over HTTP", () => {
+	test("name every operation of the core and the active plugins with its kind, sorted by name", async () => {
+		const api = await startLedgerInstance();
+		const token = await api.issueToken();
+
+		const response = await fetch(`${api.url}/api/operations`, {
+			headers: bearer(token),
+		});
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			operations: [
+				{ name: "core.listAuditEntries", kind: "query" },
+				{ name: "ledger.addEntry", kind: "mutation" },
+				{ name: "ledger.listEntries", kind: "query" },
+			],
+		});
+	});
+
+	test("match the schema of the list in the OpenAPI document", async () => {
+		const api = await startLedgerInstance();
+		const token = await api.issueToken();
+		const document = documentedOperationList.parse(
+			await describeHttpApi([ledger], setSystemTimer),
+		);
+		const documentedList = z.fromJSONSchema(
+			document.paths["/api/operations"].get.responses["200"].content[
+				"application/json"
+			].schema,
+		);
+
+		const response = await fetch(`${api.url}/api/operations`, {
+			headers: bearer(token),
+		});
+
+		expect(
+			documentedList.safeParse(await response.json()).error?.issues,
+		).toBeUndefined();
+	});
+
+	test("are not listed without a valid token", async () => {
+		const api = await startLedgerInstance();
+
+		const response = await api.send("GET", "/api/operations");
+
+		expect(response.status).toBe(401);
+		expect(response.headers.get("WWW-Authenticate")).toBe("Bearer");
+		expect(await response.json()).toMatchObject({ code: "unauthenticated" });
+	});
+
+	test.each(["POST", "DELETE"])(
+		"are answered with 405 problem details allowing GET for %s, before authentication",
+		async (method) => {
+			const api = await startLedgerInstance();
+
+			const response = await api.send(method, "/api/operations");
+
+			expect(response.status).toBe(405);
+			expect(response.headers.get("Allow")).toBe("GET");
+			expect(await response.json()).toEqual({
+				type: "urn:workbench:problem:method_not_allowed",
+				title: "Method Not Allowed",
+				status: 405,
+				detail: "the list of operations only accepts GET",
+				code: "method_not_allowed",
+				correlationId: "request-1",
+				issues: [],
+			});
+		},
+	);
 });

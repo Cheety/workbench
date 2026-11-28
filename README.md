@@ -482,26 +482,27 @@ curl -X POST "http://127.0.0.1:3000/api/workspaces/$WORKSPACE/operations/referen
 ```
 
 - Der Pfad ist `POST /api/workspaces/{workspace}/operations/{operation}`, auch für eine Query. Der Body ist die Eingabe als JSON, höchstens 1 MiB (1048576 Bytes); die Antwort 200 enthält die Ausgabe der Operation. Eine andere Methode auf diesem Pfad beantwortet die API vor der Prüfung des Tokens mit 405 und `Allow: POST`, als Problem Details mit `code` `method_not_allowed`.
+- `GET /api/operations` listet die Operationen des Cores und der aktiven Plugins, nach Namen sortiert, je mit Namen und Art: `{"operations":[{"name":"reference.createNote","kind":"mutation"}, …]}`. Er braucht wie jeder Aufruf ein API-Token; eine andere Methode beantwortet die API vor der Prüfung des Tokens mit 405 und `Allow: GET` (`method_not_allowed`).
 - Jeder Aufruf braucht ein API-Token als `Authorization: Bearer <token>`; das Schema `Bearer` gilt in beliebiger Groß- und Kleinschreibung (RFC 9110). Fehlt es, steht es in einem anderen Schema, ist es unbekannt oder abgelaufen, antwortet die API mit 401 und `WWW-Authenticate: Bearer`, als Problem Details mit `code` `unauthenticated`. Die Antwort sagt nicht, welcher Fall vorlag; das Log nennt ihn im Eintrag `request not authenticated` mit `reason` (`missing_token`, `unknown_token`, `expired_token`). Der Akteur des Aufrufs ist der Service-Account des Tokens.
 - Den Idempotency-Key einer Mutation nennt der Header `Idempotency-Key` (siehe [Idempotency-Keys](#idempotency-keys)), als Text (`Idempotency-Key: retry-1`) oder als String der Structured Fields nach RFC 9651 in Anführungszeichen (`Idempotency-Key: "retry-1"`), wie im Entwurf der IETF; beide nennen denselben Key. Weil ein Key kein Komma enthält, scheitert eine Mutation mit einem doppelt geschickten Header mit `invalid_idempotency_key`: Der Server sieht zwei Header als einen Wert, durch `, ` getrennt. Eine Wiederholung antwortet mit 200 und demselben Body wie der erste Aufruf. Eine Query beachtet den Header nicht.
 - Jede Datenbankanweisung einer Anfrage darf höchstens 60 s dauern (`statement_timeout`); dauert sie länger, scheitert die Anfrage.
 - Jedes Scheitern kommt als Problem Details mit `Content-Type: application/problem+json` und der Korrelations-ID in `correlationId`, mit dem Status nach der Art (siehe [Aufruf einer Operation](#aufruf-einer-operation)). Ein interner Fehler nennt nur `internal_error` und eine neutrale Meldung, nie Stacktrace, Pfad oder Query; die Details stehen unter derselben Korrelations-ID im Log.
 
-| Code                      | Status | Bedeutung                                                                                                                   |
-| ------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `unauthenticated`         | 401    | Kein gültiges API-Token.                                                                                                    |
-| `invalid_input`           | 400    | Der Body ist kein JSON, oder die Eingabe passt nicht zum Eingabe-Schema.                                                    |
-| `route_not_found`         | 404    | Weder Methode noch Pfad passen zu einer Route.                                                                              |
-| `method_not_allowed`      | 405    | Der Pfad einer Operation oder der MCP-Endpunkt mit anderer Methode als `POST`.                                              |
-| `malformed_path`          | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                                                                          |
-| `invalid_workspace_id`    | 400    | Der Workspace im Pfad oder im Argument `workspace` eines MCP-Tools ist keine UUID.                                          |
-| `workspace_not_found`     | 404    | Kein Workspace hat diese UUID.                                                                                              |
-| `unknown_operation`       | 404    | Weder der Core noch ein aktives Plugin hat eine Operation dieses Namens.                                                    |
-| `body_too_large`          | 413    | Der Body ist größer als 1 MiB.                                                                                              |
-| `invalid_idempotency_key` | 400    | Der Header `Idempotency-Key` hat nicht 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen ohne Komma, oder er kam mehrfach. |
-| `idempotency_key_reused`  | 422    | Der Idempotency-Key kam schon mit einer anderen Operation, einem anderen Workspace oder einem anderen Body.                 |
-| `instance_not_ready`      | 503    | Die Instanz startet noch oder ihr Start ist gescheitert.                                                                    |
-| `internal_error`          | 500    | Die Anfrage scheiterte aus einem internen Grund.                                                                            |
+| Code                      | Status | Bedeutung                                                                                                                       |
+| ------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `unauthenticated`         | 401    | Kein gültiges API-Token.                                                                                                        |
+| `invalid_input`           | 400    | Der Body ist kein JSON, oder die Eingabe passt nicht zum Eingabe-Schema.                                                        |
+| `route_not_found`         | 404    | Weder Methode noch Pfad passen zu einer Route.                                                                                  |
+| `method_not_allowed`      | 405    | Der Pfad einer Operation oder der MCP-Endpunkt mit anderer Methode als `POST`, die Liste der Operationen mit anderer als `GET`. |
+| `malformed_path`          | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                                                                              |
+| `invalid_workspace_id`    | 400    | Der Workspace im Pfad oder im Argument `workspace` eines MCP-Tools ist keine UUID.                                              |
+| `workspace_not_found`     | 404    | Kein Workspace hat diese UUID.                                                                                                  |
+| `unknown_operation`       | 404    | Weder der Core noch ein aktives Plugin hat eine Operation dieses Namens.                                                        |
+| `body_too_large`          | 413    | Der Body ist größer als 1 MiB.                                                                                                  |
+| `invalid_idempotency_key` | 400    | Der Header `Idempotency-Key` hat nicht 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen ohne Komma, oder er kam mehrfach.     |
+| `idempotency_key_reused`  | 422    | Der Idempotency-Key kam schon mit einer anderen Operation, einem anderen Workspace oder einem anderen Body.                     |
+| `instance_not_ready`      | 503    | Die Instanz startet noch oder ihr Start ist gescheitert.                                                                        |
+| `internal_error`          | 500    | Die Anfrage scheiterte aus einem internen Grund.                                                                                |
 
 #### Service-Account und API-Token anlegen
 
@@ -535,7 +536,7 @@ Scope (Operationen, Workspaces), Widerruf und Rechte folgen mit Identität und Z
 bun run openapi
 ```
 
-Jede Operation erscheint mit ihrem Namen als `operationId`, Ein- und Ausgabe-Schema als JSON Schema und Problem Details für jedes Scheitern. Die Schemas kommen aus [Standard JSON Schema](https://standardschema.dev) (`~standard.jsonSchema`, etwa von zod 4); ein Schema ohne diese Erweiterung erscheint als `{}`. `bun run check` scheitert, wenn die Datei nicht zu den Operationen passt; dann `bun run openapi` ausführen und das Ergebnis committen.
+Die Liste der Operationen erscheint als `listOperations`. Jede Operation erscheint mit ihrem Namen als `operationId`, Ein- und Ausgabe-Schema als JSON Schema und Problem Details für jedes Scheitern. Die Schemas kommen aus [Standard JSON Schema](https://standardschema.dev) (`~standard.jsonSchema`, etwa von zod 4); ein Schema ohne diese Erweiterung erscheint als `{}`. `bun run check` scheitert, wenn die Datei nicht zu den Operationen passt; dann `bun run openapi` ausführen und das Ergebnis committen.
 
 ### MCP
 
@@ -551,6 +552,47 @@ claude mcp add --transport http workbench "http://127.0.0.1:3000/api/mcp" --head
 - Das Ergebnis eines Tools ist ein Textblock mit der Ausgabe als JSON, mit denselben Feldern und Werten wie der Body der HTTP-API. Scheitert ein Aufruf, ist das Ergebnis ein Tool-Fehler (`isError: true`), dessen Text die Problem Details der HTTP-API mit demselben `code` sind (siehe die Tabelle unter [HTTP-API](#http-api)); fehlt `workspace` oder ist es keine UUID, ist der Code `invalid_workspace_id`.
 - Den [Idempotency-Key](#idempotency-keys) einer Mutation nennt das Argument `idempotencyKey`, ein String; das Eingabe-Schema eines Tools nennt es nur an einer Mutation. Es ist derselbe Key wie im Header `Idempotency-Key` der HTTP-API: Ein Aufruf über MCP mit dem Key eines Aufrufs über HTTP desselben Akteurs erhält dessen Antwort. Ist das Argument bei einer Mutation kein gültiger Key, auch kein String, scheitert der Aufruf als Tool-Fehler mit `invalid_idempotency_key`; eine Query beachtet es nicht.
 - Der Body einer Anfrage ist höchstens 1 MiB groß; einen größeren lehnt der Endpunkt mit 413 als Fehler von JSON-RPC ab.
+
+### CLI
+
+Jede Operation des Cores und der aktiven Plugins ist auch auf der Kommandozeile erreichbar, als dünner Client der [HTTP-API](#http-api) einer laufenden Instanz (ADR-0019). Das Kommando braucht nur Bun und das Repository, keinen Zugang zur Datenbank:
+
+```sh
+export WORKBENCH_URL=http://127.0.0.1:3000
+bun run workbench operations
+bun run workbench reference create-note --workspace "$WORKSPACE" --input '{"title":"Plan"}'
+```
+
+- `workbench operations` listet die Operationen der Instanz aus `GET /api/operations`, je Zeile das CLI-Kommando, den Namen der Operation und ihre Art, durch Tabulatoren getrennt, etwa `reference create-note`, `reference.createNote`, `mutation`.
+- `workbench <plugin> <operation> --workspace <uuid> --input <json>` ruft eine Operation auf. `<operation>` ist ihr Name in kebab-case, aus `createNote` wird `create-note`; der Name selbst (`createNote`, `reference.createNote`) ist kein Kommando. `--input` ist die Eingabe als JSON, wie der Body der HTTP-API. Den [Idempotency-Key](#idempotency-keys) einer Mutation nennt `--idempotency-key <key>`; er ist derselbe Key wie im Header `Idempotency-Key`.
+- Gelingt der Aufruf, schreibt das Kommando die Ausgabe als eine Zeile JSON auf die Standardausgabe, mit denselben Feldern und Werten wie der Body der HTTP-API, und endet mit Exit-Code 0.
+- Scheitert er, schreibt es auf die Standardfehlerausgabe in der ersten Zeile `<code>: <detail>` aus den Problem Details der HTTP-API, mit demselben `code` (siehe die Tabelle unter [HTTP-API](#http-api)), darunter je Befund des Eingabe-Schemas eine eingerückte Zeile `<pfad>: <meldung>` und zuletzt `correlation id: <id>`, und endet mit Exit-Code 1:
+
+  ```text
+  invalid_input: the input does not match the input schema of the operation
+    title: Too small: expected string to have >=1 characters
+  correlation id: 4f0c…
+  ```
+
+- Ein Steuerzeichen (C0, DEL, C1) in einem Text der Instanz, etwa eine Escape-Sequenz oder ein Zeilenumbruch in `detail`, in einer Meldung oder einem Pfad eines Befunds, schreibt das Kommando auf die Standardfehlerausgabe sichtbar als `\x<hex>`, aus ESC wird `\x1b`, sodass eine Antwort weder das Terminal steuern noch eine Zeile vortäuschen kann. In der JSON-Ausgabe stehen sie als `\u<hex>`, aus U+009B wird `\u009b`; das JSON hat dieselben Werte wie der Body der HTTP-API.
+- Ist die Instanz nicht erreichbar oder antwortet sie nicht binnen 120 s, meldet das Kommando `the instance at <origin> cannot be reached`; antwortet dort etwas anderes als die Instanz, etwa ein Proxy, `the instance answered with HTTP <status> and an unexpected body`, jeweils mit Exit-Code 1.
+- Ein ungültiger Aufruf endet mit Exit-Code 2, bevor etwas die Instanz erreicht: ein unbekanntes Kommando oder eine unbekannte Option, ein fehlendes `--workspace` oder `--input`, eine Eingabe, die kein JSON ist (`--input is not JSON`), ein Idempotency-Key, den die Instanz nicht annähme (`--idempotency-key must be 1 to 255 visible ASCII characters or spaces, without a comma`). Die Standardfehlerausgabe nennt den Grund und darunter `usage: workbench …`, aber keinen übergebenen Wert.
+
+Das API-Token kommt nie als Argument, damit es in keiner Prozessliste, Shell-History und keinem Log steht; eine Option `--token` gibt es nicht. Token und Adresse der Instanz kommen aus der Umgebung oder aus einer Konfigurationsdatei, die Umgebung geht je Wert vor:
+
+| Variable           | Feld der Datei | Bedeutung                                                                                                                                                        |
+| ------------------ | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WORKBENCH_URL`    | `url`          | Adresse der Instanz, `http://` oder `https://` mit Host; das Kommando nutzt nur ihren Origin. Pflicht.                                                           |
+| `WORKBENCH_TOKEN`  | `token`        | Das API-Token. Pflicht. Secret.                                                                                                                                  |
+| `WORKBENCH_CONFIG` | –              | Pfad der Konfigurationsdatei. Ohne Angabe `$XDG_CONFIG_HOME/workbench/cli.json`, sonst `$HOME/.config/workbench/cli.json`; fehlt diese Datei, gilt sie als leer. |
+
+Die Konfigurationsdatei ist ein JSON-Objekt mit höchstens den Feldern `url` und `token`, beide Strings:
+
+```json
+{ "url": "https://workbench.example", "token": "wbt_…" }
+```
+
+Fehlt ein Pflichtwert, ist die Adresse ungültig, besteht das Token nicht nur aus sichtbaren ASCII-Zeichen (`must consist of visible ASCII characters only`, etwa mit Zeilenumbruch oder Leerzeichen, sodass es sich nicht als Bearer-Token senden ließe), fehlt die Datei aus `WORKBENCH_CONFIG`, lässt sich eine Datei nicht lesen (`<datei> cannot be read`, etwa ein Verzeichnis oder ohne Leserecht) oder ist sie kein solches Objekt, endet das Kommando mit Exit-Code 2 und `invalid configuration:`, darunter je Befund eine Zeile, die Variable, Feld oder Datei nennt, nie einen Wert, etwa `WORKBENCH_TOKEN, or token in /home/ada/.config/workbench/cli.json is required`.
 
 ### Contract
 

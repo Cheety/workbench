@@ -6,13 +6,13 @@ import {
 	OperationError,
 } from "@workbench/sdk";
 import { z } from "zod";
-import { IDEMPOTENCY_KEY_PATTERN } from "./idempotency-keys.ts";
 import type { PluginPackage } from "./kernel.ts";
 import { OPENAPI_DOCUMENT_PATH } from "./openapi.ts";
 import {
 	API_INSTANCE_WORKSPACE,
 	type ApiInstance,
 } from "./testing/api-instance.ts";
+import { documentedIdempotencyKeyPattern } from "./testing/documented-idempotency-key.ts";
 import { MCP_PATH, mcpTestbed } from "./testing/mcp-testbed.ts";
 
 const IN_A_MONTH = new Date("2026-12-26T08:00:00.000Z");
@@ -133,6 +133,9 @@ describe("the MCP server of the instance", () => {
 
 describe("the operations listed as MCP tools", () => {
 	test("name each operation of the core and the active plugins with its input schema inside a workspace", async () => {
+		const idempotencyKeyPattern = await documentedIdempotencyKeyPattern(
+			"reference.createNote",
+		);
 		const api = await startLedgerInstance();
 		const client = await mcp.connectedClient(api.url, await api.issueToken());
 
@@ -160,7 +163,7 @@ describe("the operations listed as MCP tools", () => {
 						},
 						required: ["amount"],
 					},
-					idempotencyKey: { type: "string", pattern: IDEMPOTENCY_KEY_PATTERN },
+					idempotencyKey: { type: "string", pattern: idempotencyKeyPattern },
 				},
 				required: ["workspace", "input"],
 				additionalProperties: false,
