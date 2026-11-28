@@ -23,6 +23,15 @@ const REFERENCE_MIGRATIONS_DIRECTORY = new URL(
 	import.meta.url,
 ).pathname;
 
+const REFERENCE_SCHEMA = "plugin_reference";
+
+async function referenceMigrationsOnDisk(): Promise<string[]> {
+	const names = await Array.fromAsync(
+		new Glob("*.sql").scan(REFERENCE_MIGRATIONS_DIRECTORY),
+	);
+	return names.toSorted();
+}
+
 const instances: Subprocess[] = [];
 const databases: FreshDatabase[] = [];
 let occupiedPort: TCPSocketListener | undefined;
@@ -319,7 +328,7 @@ describe("plugins of an instance", () => {
 });
 
 describe("migrations at start", () => {
-	test("create the core schema and the table of the reference plugin on a fresh database before reporting ready", async () => {
+	test("create the core schema and the tables of the reference plugin on a fresh database before reporting ready", async () => {
 		const database = await freshDatabase();
 		const instance = spawnInstance({
 			DATABASE_URL: database.url,
@@ -332,21 +341,21 @@ describe("migrations at start", () => {
 			`http://127.0.0.1:${serverStarted(startup).port}/health/ready`,
 		);
 
-		expect(startup).toContainEqual(
-			expect.objectContaining({
-				message: "migration applied",
-				schema: "plugin_reference",
-			}),
-		);
+		const appliedToReference = startup
+			.filter(
+				(entry) =>
+					entry.message === "migration applied" &&
+					entry.schema === REFERENCE_SCHEMA,
+			)
+			.map((entry) => entry.migration);
+		const referenceTables =
+			await database.sql`SELECT table_name FROM information_schema.tables WHERE table_schema = ${REFERENCE_SCHEMA}`;
 		expect(ready.status).toBe(200);
+		expect(appliedToReference).toEqual(await referenceMigrationsOnDisk());
+		expect(referenceTables).not.toBeEmpty();
 		expect(
-			await database.sql`SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema IN ('core', 'plugin_reference')`,
-		).toEqual(
-			expect.arrayContaining([
-				{ table_schema: "core", table_name: "migrations" },
-				{ table_schema: "plugin_reference", table_name: "notes" },
-			]),
-		);
+			await database.sql`SELECT table_name FROM information_schema.tables WHERE table_schema = 'core'`,
+		).toContainEqual({ table_name: "migrations" });
 	});
 
 	test("apply each migration once when two instances start against the same fresh database", async () => {
@@ -438,9 +447,17 @@ describe("migrations at start", () => {
 
 	test("report not ready and log why when a migration fails", async () => {
 		const database = await freshDatabase();
-		await database.sql.unsafe(
-			"CREATE SCHEMA plugin_reference; CREATE TABLE plugin_reference.notes (id bigint);",
-		);
+		const [firstMigration] = await referenceMigrationsOnDisk();
+		await database.sql.begin(async (transaction) => {
+			await transaction.unsafe(
+				`CREATE SCHEMA ${REFERENCE_SCHEMA}; SET LOCAL search_path TO ${REFERENCE_SCHEMA}`,
+			);
+			await transaction.unsafe(
+				await Bun.file(
+					`${REFERENCE_MIGRATIONS_DIRECTORY}${firstMigration}`,
+				).text(),
+			);
+		});
 		const instance = spawnInstance({
 			DATABASE_URL: database.url,
 			PORT: "0",
@@ -458,8 +475,8 @@ describe("migrations at start", () => {
 			expect.objectContaining({
 				level: "error",
 				message: "migration failed",
-				schema: "plugin_reference",
-				migration: "0001_create_notes.sql",
+				schema: REFERENCE_SCHEMA,
+				migration: firstMigration,
 			}),
 		);
 		expect(startup).toContainEqual(

@@ -1,4 +1,4 @@
-import type { Actor } from "@workbench/sdk";
+import type { Actor, OperationKind } from "@workbench/sdk";
 import { SQL } from "bun";
 import { authenticateToken } from "../api-tokens.ts";
 import { Secret } from "../config.ts";
@@ -38,16 +38,22 @@ export type IdentifiedToken = {
 };
 
 export class UnidentifiedApiTokenError extends Error {
-	constructor(idsIssued: number) {
+	constructor(tokensFound: number) {
 		super(
-			`creating a service account issued ${idsIssued} ids, expected one for the service account and one for its API token`,
+			`the new service account has ${tokensFound} API tokens, expected exactly one`,
 		);
 		this.name = "UnidentifiedApiTokenError";
 	}
 }
 
+export type OperationListed = {
+	readonly name: string;
+	readonly kind: OperationKind;
+};
+
 export type ApiInstance = {
 	readonly url: string;
+	readonly registeredOperations: readonly OperationListed[];
 	readonly database: FreshDatabase;
 	readonly logEntries: readonly LogEntry[];
 	refuseAuthenticationDatabase(): void;
@@ -167,29 +173,24 @@ async function startedApiInstance(
 	const url = `http://127.0.0.1:${server.port}`;
 	const issueAccount = async (): Promise<IdentifiedToken> => {
 		issuedTokens += 1;
-		const idsOfTheAccount: string[] = [];
 		const issued = await createServiceAccount(
 			database.sql,
 			{ name: `agent ${issuedTokens}`, validDays: 30 },
 			{
 				now: () => clock,
-				newId: () => {
-					const id = newId();
-					idsOfTheAccount.push(id);
-					return id;
-				},
+				newId,
 				newToken: () => new Secret(`wbt_test-token-${issuedTokens}`),
 			},
 		);
-		const [apiTokenId, ...unexpected] = idsOfTheAccount.filter(
-			(id) => id !== issued.serviceAccountId,
-		);
-		if (apiTokenId === undefined || unexpected.length > 0)
-			throw new UnidentifiedApiTokenError(idsOfTheAccount.length);
+		const tokens: { id: string }[] =
+			await database.sql`SELECT id FROM core.api_tokens WHERE service_account_id = ${issued.serviceAccountId}`;
+		const [apiToken, ...unexpected] = tokens;
+		if (apiToken === undefined || unexpected.length > 0)
+			throw new UnidentifiedApiTokenError(tokens.length);
 		return {
 			token: issued.token.reveal(),
 			serviceAccountId: issued.serviceAccountId,
-			apiTokenId,
+			apiTokenId: apiToken.id,
 		};
 	};
 	const issueIdentifiedToken = async (
@@ -206,6 +207,9 @@ async function startedApiInstance(
 	};
 	return {
 		url,
+		registeredOperations: running.operations
+			.list()
+			.map(({ name, kind }) => ({ name, kind })),
 		database,
 		logEntries: entries,
 		refuseAuthenticationDatabase: () => authenticationGate.refuse(),

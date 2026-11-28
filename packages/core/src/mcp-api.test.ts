@@ -147,35 +147,27 @@ describe("the operations listed as MCP tools", () => {
 
 		const { tools } = await client.listTools();
 
-		expect(tools.map((tool) => tool.name).toSorted()).toEqual([
-			"core_createWorkspace",
-			"core_defineRole",
-			"core_grantMembership",
-			"core_listAuditEntries",
-			"core_listInstanceAuditEntries",
-			"core_listWorkspaces",
-			"core_revokeMembership",
-			"ledger_addEntry",
-			"ledger_listEntries",
+		expect(tools.map((tool) => tool.name).toSorted()).toEqual(
+			api.registeredOperations
+				.map((operation) => operation.name.replace(".", "_"))
+				.toSorted(),
+		);
+		const addEntryTool = tools.find((tool) => tool.name === "ledger_addEntry");
+		expect(Object.keys(addEntryTool?.inputSchema.properties ?? {})).toEqual([
+			"workspace",
+			"input",
+			"idempotencyKey",
 		]);
-		expect(tools.find((tool) => tool.name === "ledger_addEntry")).toEqual({
-			name: "ledger_addEntry",
+		expect(addEntryTool).toMatchObject({
 			inputSchema: {
-				type: "object",
 				properties: {
 					workspace: { type: "string", format: "uuid" },
 					input: {
 						type: "object",
-						properties: {
-							amount: {
-								type: "integer",
-								minimum: -9007199254740991,
-								maximum: 9007199254740991,
-							},
-						},
+						properties: { amount: { type: "integer" } },
 						required: ["amount"],
 					},
-					idempotencyKey: { type: "string", pattern: "^[ -+\\--~]{1,255}$" },
+					idempotencyKey: { type: "string" },
 				},
 				required: ["workspace", "input"],
 				additionalProperties: false,

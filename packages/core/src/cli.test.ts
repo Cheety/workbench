@@ -282,23 +282,21 @@ describe("the command line listing the operations", () => {
 
 		const run = await runCli(["operations"], await accessTo(api));
 
-		expect(run).toEqual({
-			exitCode: 0,
-			stdout: [
-				"core create-workspace\tcore.createWorkspace\tmutation",
-				"core define-role\tcore.defineRole\tmutation",
-				"core grant-membership\tcore.grantMembership\tmutation",
-				"core list-audit-entries\tcore.listAuditEntries\tquery",
-				"core list-instance-audit-entries\tcore.listInstanceAuditEntries\tquery",
-				"core list-workspaces\tcore.listWorkspaces\tquery",
-				"core revoke-membership\tcore.revokeMembership\tmutation",
-				"reference create-note\treference.createNote\tmutation",
-				"reference list-notes\treference.listNotes\tquery",
-				"reference rename-note\treference.renameNote\tmutation",
-				"",
-			].join("\n"),
-			stderr: "",
-		});
+		const lines = run.stdout.split("\n");
+		expect(run.exitCode).toBe(0);
+		expect(run.stderr).toBe("");
+		expect(lines.at(-1)).toBe("");
+		expect(lines.slice(0, -1).map((line) => line.split("\t").slice(1))).toEqual(
+			api.registeredOperations
+				.toSorted((a, b) => a.name.localeCompare(b.name))
+				.map(({ name, kind }) => [name, kind]),
+		);
+		expect(lines).toContain(
+			"reference create-note\treference.createNote\tmutation",
+		);
+		expect(lines).toContain(
+			"core list-instance-audit-entries\tcore.listInstanceAuditEntries\tquery",
+		);
 	});
 });
 
@@ -932,18 +930,25 @@ describe("an instance the command line cannot reach", () => {
 });
 
 describe("a request that fetch refuses to send", () => {
-	test("is thrown on as it came instead of being reported as an instance that cannot be reached", async () => {
-		const refused = new TypeError("Header 'Authorization' has invalid value");
-		const refusingFetch: Fetch = () => Promise.reject(refused);
+	test("is thrown on as it came, writing nothing, instead of being reported as an instance that cannot be reached", async () => {
+		const written: string[] = [];
 
-		const running = runCliInProcess(
-			["operations"],
-			"http://127.0.0.1:1",
-			manualTimer(),
-			refusingFetch,
-		);
+		const running = runCommandLine({
+			args: ["operations"],
+			loadConfig: () => ({
+				instanceUrl: new URL("http://127.0.0.1:1"),
+				token: new Secret("wbt_refused\r\nX-Forged: yes"),
+			}),
+			output: {
+				writeOutput: (text) => written.push(text),
+				writeError: (text) => written.push(text),
+			},
+			deadline: { ms: REQUEST_DEADLINE_MS, setTimer: manualTimer().setTimer },
+			fetch,
+		});
 
-		await expect(running).rejects.toBe(refused);
+		await expect(running).rejects.toBeInstanceOf(TypeError);
+		expect(written).toEqual([]);
 	});
 });
 
