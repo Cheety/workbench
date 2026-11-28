@@ -9,7 +9,8 @@ import {
 } from "@workbench/sdk";
 import type { SQL } from "bun";
 import {
-	type AuditResult,
+	type AuditOutcome,
+	type DenialReason,
 	type NewAuditEntry,
 	recordAuditEntry,
 } from "./audit.ts";
@@ -134,12 +135,6 @@ const NOT_OBJECT_HOLDER: OperationFailure = {
 	detail: "the object belongs to another actor",
 	issues: [],
 };
-
-type DenialReason =
-	| "workspace_not_found"
-	| "missing_right"
-	| "object_not_found"
-	| "not_object_holder";
 
 const DENIALS: Record<DenialReason, OperationFailure> = {
 	workspace_not_found: WORKSPACE_NOT_FOUND,
@@ -267,7 +262,7 @@ async function invoke(
 					if (IS_AUDITED[operation.kind])
 						await recordAuditEntry(
 							transaction,
-							newAuditEntryOf(call, operation, options, "succeeded"),
+							newAuditEntryOf(call, operation, options, SUCCEEDED),
 						);
 					return executed;
 				};
@@ -291,7 +286,7 @@ async function invoke(
 		return { ok: true, output };
 	} catch (error) {
 		if (error instanceof CallFailedError && error.denial !== null)
-			return deny(call, operation, options, error.failure);
+			return deny(call, operation, options, error.denial);
 		return failed(logAndMapFailure(error, logger, operation.owner));
 	}
 }
@@ -300,13 +295,13 @@ async function deny(
 	call: OperationCall,
 	operation: RegisteredOperation,
 	options: OperationPipelineOptions,
-	failure: OperationFailure,
+	reason: DenialReason,
 ): Promise<OperationResult> {
 	try {
 		await options.sql.begin((transaction) =>
 			recordAuditEntry(
 				transaction,
-				newAuditEntryOf(call, operation, options, "denied"),
+				newAuditEntryOf(call, operation, options, { result: "denied", reason }),
 			),
 		);
 	} catch (error) {
@@ -318,7 +313,7 @@ async function deny(
 			),
 		);
 	}
-	return failed(failure);
+	return failed(DENIALS[reason]);
 }
 
 function loggerOf(
@@ -357,6 +352,8 @@ const MEMBERSHIP_LOCK: Record<OperationKind, MembershipLock> = {
 	query: "none",
 	mutation: "share",
 };
+
+const SUCCEEDED: AuditOutcome = { result: "succeeded" };
 
 const IS_AUDITED: Record<OperationKind, boolean> = {
 	query: false,
@@ -530,7 +527,7 @@ function newAuditEntryOf(
 	call: OperationCall,
 	operation: RegisteredOperation,
 	sources: Pick<OperationPipelineOptions, "now" | "newAuditEntryId">,
-	result: AuditResult,
+	outcome: AuditOutcome,
 ): NewAuditEntry {
 	return {
 		id: sources.newAuditEntryId(),
@@ -539,7 +536,7 @@ function newAuditEntryOf(
 		apiTokenId: call.apiTokenId,
 		operation: operation.name,
 		workspace: call.workspace,
-		result,
+		outcome,
 	};
 }
 

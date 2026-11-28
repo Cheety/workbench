@@ -158,44 +158,95 @@
 										"entries": {
 											"type": "array",
 											"items": {
-												"type": "object",
-												"properties": {
-													"id": { "type": "string" },
-													"occurredAt": {
-														"type": "string",
-														"format": "date-time",
-														"pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-													},
-													"actor": {
+												"oneOf": [
+													{
 														"type": "object",
 														"properties": {
-															"kind": {
+															"id": { "type": "string" },
+															"occurredAt": {
 																"type": "string",
-																"enum": ["user", "service_account"]
+																"format": "date-time",
+																"pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
 															},
-															"id": { "type": "string" }
+															"actor": {
+																"type": "object",
+																"properties": {
+																	"kind": {
+																		"type": "string",
+																		"enum": ["user", "service_account"]
+																	},
+																	"id": { "type": "string" }
+																},
+																"required": ["kind", "id"],
+																"additionalProperties": false
+															},
+															"apiTokenId": { "type": ["string", "null"] },
+															"operation": { "type": "string" },
+															"workspace": { "type": "string" },
+															"result": {
+																"type": "string",
+																"const": "succeeded"
+															}
 														},
-														"required": ["kind", "id"],
+														"required": [
+															"id",
+															"occurredAt",
+															"actor",
+															"apiTokenId",
+															"operation",
+															"workspace",
+															"result"
+														],
 														"additionalProperties": false
 													},
-													"apiTokenId": { "type": ["string", "null"] },
-													"operation": { "type": "string" },
-													"workspace": { "type": "string" },
-													"result": {
-														"type": "string",
-														"enum": ["succeeded", "denied"]
+													{
+														"type": "object",
+														"properties": {
+															"id": { "type": "string" },
+															"occurredAt": {
+																"type": "string",
+																"format": "date-time",
+																"pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+															},
+															"actor": {
+																"type": "object",
+																"properties": {
+																	"kind": {
+																		"type": "string",
+																		"enum": ["user", "service_account"]
+																	},
+																	"id": { "type": "string" }
+																},
+																"required": ["kind", "id"],
+																"additionalProperties": false
+															},
+															"apiTokenId": { "type": ["string", "null"] },
+															"operation": { "type": "string" },
+															"workspace": { "type": "string" },
+															"result": { "type": "string", "const": "denied" },
+															"reason": {
+																"type": "string",
+																"enum": [
+																	"workspace_not_found",
+																	"missing_right",
+																	"object_not_found",
+																	"not_object_holder"
+																]
+															}
+														},
+														"required": [
+															"id",
+															"occurredAt",
+															"actor",
+															"apiTokenId",
+															"operation",
+															"workspace",
+															"result",
+															"reason"
+														],
+														"additionalProperties": false
 													}
-												},
-												"required": [
-													"id",
-													"occurredAt",
-													"actor",
-													"apiTokenId",
-													"operation",
-													"workspace",
-													"result"
-												],
-												"additionalProperties": false
+												]
 											}
 										},
 										"nextCursor": { "type": ["string", "null"] }

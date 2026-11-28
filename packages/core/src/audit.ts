@@ -8,9 +8,18 @@ import {
 import type { SQL } from "bun";
 import { z } from "zod";
 
-export const AUDIT_RESULTS = ["succeeded", "denied"] as const;
+export const DENIAL_REASONS = [
+	"workspace_not_found",
+	"missing_right",
+	"object_not_found",
+	"not_object_holder",
+] as const;
 
-export type AuditResult = (typeof AUDIT_RESULTS)[number];
+export type DenialReason = (typeof DENIAL_REASONS)[number];
+
+export type AuditOutcome =
+	| { readonly result: "succeeded" }
+	| { readonly result: "denied"; readonly reason: DenialReason };
 
 export type NewAuditEntry = {
 	readonly id: string;
@@ -19,22 +28,30 @@ export type NewAuditEntry = {
 	readonly apiTokenId: string | null;
 	readonly operation: string;
 	readonly workspace: string;
-	readonly result: AuditResult;
+	readonly outcome: AuditOutcome;
 };
 
 const MAX_LISTED_AUDIT_ENTRIES = 100;
 
 const MAX_CURSOR_LENGTH = 200;
 
-const auditEntry = z.object({
+const auditEntryFields = {
 	id: z.string(),
 	occurredAt: z.iso.datetime(),
 	actor: z.object({ kind: z.enum(ACTOR_KINDS), id: z.string() }),
 	apiTokenId: z.string().nullable(),
 	operation: z.string(),
 	workspace: z.string(),
-	result: z.enum(AUDIT_RESULTS),
-});
+};
+
+const auditEntry = z.discriminatedUnion("result", [
+	z.object({ ...auditEntryFields, result: z.literal("succeeded") }),
+	z.object({
+		...auditEntryFields,
+		result: z.literal("denied"),
+		reason: z.enum(DENIAL_REASONS),
+	}),
+]);
 
 const auditEntryRow = z.object({
 	id: z.string(),
@@ -44,8 +61,27 @@ const auditEntryRow = z.object({
 	api_token_id: z.string().nullable(),
 	operation: z.string(),
 	workspace_id: z.string(),
-	result: z.enum(AUDIT_RESULTS),
+	result: z.enum(["succeeded", "denied"]),
+	reason: z.enum(DENIAL_REASONS).nullable(),
 });
+
+class InconsistentAuditEntryError extends Error {
+	constructor(id: string) {
+		super(`the audit entry ${id} has a reason that does not match its result`);
+		this.name = "InconsistentAuditEntryError";
+	}
+}
+
+function outcomeOf(row: z.infer<typeof auditEntryRow>): AuditOutcome {
+	switch (row.result) {
+		case "succeeded":
+			if (row.reason !== null) throw new InconsistentAuditEntryError(row.id);
+			return { result: "succeeded" };
+		case "denied":
+			if (row.reason === null) throw new InconsistentAuditEntryError(row.id);
+			return { result: "denied", reason: row.reason };
+	}
+}
 
 function auditEntryOf(
 	row: z.infer<typeof auditEntryRow>,
@@ -57,7 +93,7 @@ function auditEntryOf(
 		apiTokenId: row.api_token_id,
 		operation: row.operation,
 		workspace: row.workspace_id,
-		result: row.result,
+		...outcomeOf(row),
 	};
 }
 
@@ -66,8 +102,17 @@ export async function recordAuditEntry(
 	entry: NewAuditEntry,
 ): Promise<void> {
 	await transaction`
-		INSERT INTO core.audit_entries (id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result)
-		VALUES (${entry.id}, ${entry.occurredAt}, ${entry.actor.kind}, ${entry.actor.id}, ${entry.apiTokenId}, ${entry.operation}, ${entry.workspace}, ${entry.result})`;
+		INSERT INTO core.audit_entries (id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason)
+		VALUES (${entry.id}, ${entry.occurredAt}, ${entry.actor.kind}, ${entry.actor.id}, ${entry.apiTokenId}, ${entry.operation}, ${entry.workspace}, ${entry.outcome.result}, ${reasonOf(entry.outcome)})`;
+}
+
+function reasonOf(outcome: AuditOutcome): DenialReason | null {
+	switch (outcome.result) {
+		case "succeeded":
+			return null;
+		case "denied":
+			return outcome.reason;
+	}
 }
 
 type AuditPosition = {
@@ -138,13 +183,13 @@ export const listAuditEntries = defineOperation({
 		const rows =
 			after === null
 				? await ctx.sql`
-					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result
+					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason
 					FROM core.audit_entries
 					WHERE workspace_id = ${ctx.workspace}
 					ORDER BY occurred_at DESC, id DESC
 					LIMIT ${upTo}`
 				: await ctx.sql`
-					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result
+					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason
 					FROM core.audit_entries
 					WHERE workspace_id = ${ctx.workspace}
 						AND (occurred_at, id) < (${after.occurredAt}, ${after.id})

@@ -386,38 +386,44 @@ describe("the audit of a workspace", () => {
 			VIEWER,
 			"ledger.addEntry",
 			{ amount: 42 },
+			"missing_right",
 		],
 		[
 			"a query of an actor without membership",
 			STRANGER,
 			"ledger.listEntries",
 			{},
+			"workspace_not_found",
 		],
-	])("names %s as denied", async (_case, actor, operation, input) => {
-		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
-		await harness.call({ actor, workspace, operation, input });
+	])(
+		"names %s as denied with its reason",
+		async (_case, actor, operation, input, reason) => {
+			const harness = await startLedger();
+			const workspace = await harness.createWorkspace("Accounts", MEMBERS);
+			await harness.call({ actor, workspace, operation, input });
 
-		const listed = await listAuditEntries(harness, workspace, FIRST_TEN);
+			const listed = await listAuditEntries(harness, workspace, FIRST_TEN);
 
-		expect(listed).toEqual({
-			ok: true,
-			output: {
-				entries: [
-					{
-						id: expect.any(String),
-						occurredAt: "2026-11-26T08:00:00.000Z",
-						actor,
-						apiTokenId: null,
-						operation,
-						workspace,
-						result: "denied",
-					},
-				],
-				nextCursor: null,
-			},
-		});
-	});
+			expect(listed).toEqual({
+				ok: true,
+				output: {
+					entries: [
+						{
+							id: expect.any(String),
+							occurredAt: "2026-11-26T08:00:00.000Z",
+							actor,
+							apiTokenId: null,
+							operation,
+							workspace,
+							result: "denied",
+							reason,
+						},
+					],
+					nextCursor: null,
+				},
+			});
+		},
+	);
 
 	test("is closed to a member whose role is not owner", async () => {
 		const harness = await startLedger();

@@ -203,9 +203,20 @@ describe("the OpenAPI document of the HTTP API", () => {
 			properties: {
 				entries: {
 					items: {
-						properties: {
-							occurredAt: { type: "string", format: "date-time" },
-						},
+						oneOf: [
+							{
+								properties: {
+									occurredAt: { type: "string", format: "date-time" },
+									result: { const: "succeeded" },
+								},
+							},
+							{
+								properties: {
+									occurredAt: { type: "string", format: "date-time" },
+									result: { const: "denied" },
+								},
+							},
+						],
 					},
 				},
 			},
