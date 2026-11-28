@@ -6,24 +6,14 @@ import { createPostgresCheck, type DatabaseStatus } from "./postgres.ts";
 import { PostgresGate } from "./testing/postgres.ts";
 import { recordingLogger } from "./testing/recording-logger.ts";
 
-function answering(...statuses: DatabaseStatus[]) {
-	let checks = 0;
-	return {
-		check: async (): Promise<DatabaseStatus> => {
-			const status = statuses[Math.min(checks, statuses.length - 1)];
-			checks += 1;
-			if (status === undefined) throw new Error("no status given");
-			return status;
-		},
-		checks: () => checks,
-	};
-}
-
 const UNREACHABLE: DatabaseStatus = {
 	reachable: false,
 	reason: "ERR_POSTGRES_CONNECTION_REFUSED",
 };
-const REACHABLE: DatabaseStatus = { reachable: true };
+
+function checkThrough(through: PostgresGate) {
+	return createPostgresCheck({ url: new Secret(through.url), timeoutMs: 5000 });
+}
 
 function immediateTimers() {
 	const delaysMs: number[] = [];
@@ -44,11 +34,13 @@ describe("waiting for the database", () => {
 	});
 
 	test("goes on at once when the database is reachable", async () => {
-		const database = answering(REACHABLE);
+		const forwarding = PostgresGate.create();
+		gate = forwarding;
+		forwarding.forward();
 		const timers = immediateTimers();
 
 		const outcome = await untilDatabaseReachable({
-			check: database.check,
+			check: checkThrough(forwarding),
 			retryDelayMs: () => 100,
 			setTimer: timers.setTimer,
 			stopSignal: new AbortController().signal,
@@ -72,10 +64,7 @@ describe("waiting for the database", () => {
 		const { logger, entries } = recordingLogger();
 
 		const outcome = await untilDatabaseReachable({
-			check: createPostgresCheck({
-				url: new Secret(refusing.url),
-				timeoutMs: 5000,
-			}),
+			check: checkThrough(refusing),
 			retryDelayMs: (attempt) => 100 * (attempt + 1),
 			setTimer,
 			stopSignal: new AbortController().signal,
@@ -102,7 +91,9 @@ describe("waiting for the database", () => {
 	});
 
 	test("stops waiting and stops the clock when it is told to stop", async () => {
-		const database = answering(UNREACHABLE);
+		const refusing = PostgresGate.create();
+		gate = refusing;
+		const { logger, entries } = recordingLogger();
 		const stop = new AbortController();
 		let cancelled = 0;
 		const setTimer: SetTimer = () => {
@@ -113,16 +104,22 @@ describe("waiting for the database", () => {
 		};
 
 		const outcome = await untilDatabaseReachable({
-			check: database.check,
+			check: checkThrough(refusing),
 			retryDelayMs: () => 100,
 			setTimer,
 			stopSignal: stop.signal,
-			logger: recordingLogger().logger,
+			logger,
 		});
 
 		expect(outcome).toBe("stopped");
-		expect(database.checks()).toBe(1);
 		expect(cancelled).toBe(1);
+		expect(entries).toEqual([
+			expect.objectContaining({
+				level: "warn",
+				message: "database unreachable, retrying",
+				retryInMs: 100,
+			}),
+		]);
 	});
 
 	test("does not wait for the retry delay when it is told to stop while checking", async () => {
@@ -148,12 +145,14 @@ describe("waiting for the database", () => {
 	});
 
 	test("does not check at all when it is told to stop beforehand", async () => {
-		const database = answering(REACHABLE);
+		const forwarding = PostgresGate.create();
+		gate = forwarding;
+		forwarding.forward();
 		const stop = new AbortController();
 		stop.abort();
 
 		const outcome = await untilDatabaseReachable({
-			check: database.check,
+			check: checkThrough(forwarding),
 			retryDelayMs: () => 100,
 			setTimer: immediateTimers().setTimer,
 			stopSignal: stop.signal,
@@ -161,7 +160,7 @@ describe("waiting for the database", () => {
 		});
 
 		expect(outcome).toBe("stopped");
-		expect(database.checks()).toBe(0);
+		expect(forwarding.acceptedConnections).toBe(0);
 	});
 });
 
