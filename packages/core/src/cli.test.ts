@@ -32,7 +32,7 @@ const UNKNOWN_WORKSPACE = "00000000-0000-4000-8000-00000000bbbb";
 
 const REQUEST_DEADLINE_MS = 120_000;
 
-const BODY_PART_BYTES = 32 * 1024 * 1024;
+const BODY_PART = '{"operations":';
 
 const closeBook = defineOperation({
 	name: "closeBook",
@@ -925,16 +925,12 @@ describe("an instance that does not answer before the deadline of the command li
 	});
 
 	test("is reported as unreachable with exit code 1 when its body stops before it ends", async () => {
-		const sentPart = Promise.withResolvers<void>();
 		const sockets: Socket[] = [];
 		const stalling = createServer((socket) => {
 			sockets.push(socket);
 			socket.once("data", () => {
 				socket.write(
-					`HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${2 * BODY_PART_BYTES}\r\n\r\n`,
-				);
-				socket.write(Buffer.alloc(BODY_PART_BYTES, " "), () =>
-					sentPart.resolve(),
+					`HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${2 * BODY_PART.length}\r\n\r\n${BODY_PART}`,
 				);
 			});
 		});
@@ -944,15 +940,21 @@ describe("an instance that does not answer before the deadline of the command li
 		const address = stalling.address();
 		if (address === null || typeof address === "string")
 			throw new Error("the stalling server listens on no port");
+		const headersReceived = Promise.withResolvers<void>();
+		const fetchTellingHeaders: Fetch = async (url, init) => {
+			const response = await fetch(url, init);
+			headersReceived.resolve();
+			return response;
+		};
 		const timer = manualTimer();
 		try {
 			const running = runCliInProcess(
 				["operations"],
 				`http://127.0.0.1:${address.port}`,
 				timer,
-				fetch,
+				fetchTellingHeaders,
 			);
-			await sentPart.promise;
+			await headersReceived.promise;
 
 			timer.expire();
 
