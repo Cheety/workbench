@@ -1,7 +1,8 @@
-import type { Actor, StartRole } from "@workbench/sdk";
+import type { Actor } from "@workbench/sdk";
 import { Secret } from "../config.ts";
 import { createEventDelivery } from "../event-outbox.ts";
 import { setSystemTimer } from "../hook-timeout.ts";
+import { instanceAdminCheck } from "../instance-admins.ts";
 import { createJobQueue } from "../job-queue.ts";
 import {
 	type PluginPackage,
@@ -41,16 +42,17 @@ export type OperationHarnessOptions = {
 	readonly newAuditEntryId?: () => string;
 	readonly random?: () => number;
 	readonly newCorrelationId?: () => string;
+	readonly instanceAdmins?: readonly Actor[];
 };
 
 export type HarnessMember = {
 	readonly actor: Actor;
-	readonly role: StartRole;
+	readonly role: string;
 };
 
 export type HarnessCall = {
 	readonly actor: Actor;
-	readonly workspace: string;
+	readonly workspace: string | null;
 	readonly operation: string;
 	readonly input: unknown;
 	readonly idempotencyKey?: string;
@@ -174,6 +176,7 @@ function harnessOf(
 		newJobId,
 		jobsCommitted: () => {},
 		random,
+		isInstanceAdmin: instanceAdminCheck(options.instanceAdmins ?? []),
 		logger,
 	});
 	const delivery = createEventDelivery({

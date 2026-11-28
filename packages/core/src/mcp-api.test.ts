@@ -148,7 +148,13 @@ describe("the operations listed as MCP tools", () => {
 		const { tools } = await client.listTools();
 
 		expect(tools.map((tool) => tool.name).toSorted()).toEqual([
+			"core_createWorkspace",
+			"core_defineRole",
+			"core_grantMembership",
 			"core_listAuditEntries",
+			"core_listInstanceAuditEntries",
+			"core_listWorkspaces",
+			"core_revokeMembership",
 			"ledger_addEntry",
 			"ledger_listEntries",
 		]);
@@ -175,6 +181,25 @@ describe("the operations listed as MCP tools", () => {
 				additionalProperties: false,
 			},
 			annotations: { readOnlyHint: false },
+		});
+	});
+
+	test("name an operation on the instance without a workspace argument", async () => {
+		const api = await startLedgerInstance();
+		const client = await mcp.connectedClient(
+			api.url,
+			await api.issueToken("owner"),
+		);
+
+		const { tools } = await client.listTools();
+
+		expect(
+			tools.find((tool) => tool.name === "core_listWorkspaces")?.inputSchema,
+		).toEqual({
+			type: "object",
+			properties: { input: expect.any(Object) },
+			required: ["input"],
+			additionalProperties: false,
 		});
 	});
 
@@ -391,6 +416,42 @@ describe("an operation called as an MCP tool", () => {
 				],
 				nextCursor: null,
 			},
+		});
+	});
+});
+
+describe("an operation on the instance called as an MCP tool", () => {
+	test("lets an instance admin create a workspace without naming one", async () => {
+		const api = await startLedgerInstance();
+		const admin = await api.issueInstanceAdminToken();
+		const client = await mcp.connectedClient(api.url, admin.token);
+
+		const result = await client.callTool({
+			name: "core_createWorkspace",
+			arguments: { input: { name: "Finance" } },
+		});
+
+		expect(textOf(result)).toEqual({
+			isError: false,
+			json: { id: expect.any(String), name: "Finance" },
+		});
+	});
+
+	test("answers workspace_not_expected when the call names a workspace", async () => {
+		const api = await startLedgerInstance();
+		const client = await mcp.connectedClient(
+			api.url,
+			await api.issueToken("owner"),
+		);
+
+		const result = await client.callTool({
+			name: "core_listWorkspaces",
+			arguments: { workspace: WORKSPACE, input: { limit: 10, cursor: null } },
+		});
+
+		expect(textOf(result)).toMatchObject({
+			isError: true,
+			json: { code: "workspace_not_expected" },
 		});
 	});
 });

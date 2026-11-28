@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Actor } from "@workbench/sdk";
 import { z } from "zod";
 import { UNKNOWN_FAILURE_REASON } from "./failure-reason.ts";
 import { parseJsonText } from "./json-text.ts";
@@ -36,6 +37,7 @@ export type Config = {
 	readonly readinessTimeoutMs: number;
 	readonly pluginHookTimeoutMs: number;
 	readonly enabledPlugins: readonly string[];
+	readonly instanceAdmins: readonly Actor[];
 };
 
 export type ConfigSource = {
@@ -99,6 +101,11 @@ const pluginNames = z
 	.transform((value) => value.split(",").map((name) => name.trim()))
 	.pipe(z.array(z.string().refine(isPluginName)));
 
+const serviceAccountIds = z
+	.string()
+	.transform((value) => value.split(",").map((id) => id.trim()))
+	.pipe(z.array(z.uuid()));
+
 const schema = z.object({
 	DATABASE_URL: z.string().refine(isPostgresUrl),
 	PORT: integerIn(PORT_RANGE).default(DEFAULT_PORT),
@@ -110,6 +117,7 @@ const schema = z.object({
 		DEFAULT_PLUGIN_HOOK_TIMEOUT_MS,
 	),
 	PLUGINS: pluginNames.default([]),
+	INSTANCE_ADMIN_SERVICE_ACCOUNTS: serviceAccountIds.default([]),
 });
 
 type Variable = keyof z.input<typeof schema>;
@@ -122,6 +130,8 @@ const EXPECTATIONS: Record<Variable, string> = {
 	PLUGIN_HOOK_TIMEOUT_MS: integerExpectation(PLUGIN_HOOK_TIMEOUT_MS_RANGE),
 	PLUGINS:
 		"must be a comma-separated list of plugin names (lowercase letters, digits and hyphens, starting with a letter)",
+	INSTANCE_ADMIN_SERVICE_ACCOUNTS:
+		"must be a comma-separated list of service account IDs (UUIDs)",
 };
 
 type ValueOrigin = "variable" | "secretFile";
@@ -194,6 +204,10 @@ function resolveVariables(
 		READINESS_TIMEOUT_MS: resolvePlain(source, "READINESS_TIMEOUT_MS"),
 		PLUGIN_HOOK_TIMEOUT_MS: resolvePlain(source, "PLUGIN_HOOK_TIMEOUT_MS"),
 		PLUGINS: resolvePlain(source, "PLUGINS"),
+		INSTANCE_ADMIN_SERVICE_ACCOUNTS: resolvePlain(
+			source,
+			"INSTANCE_ADMIN_SERVICE_ACCOUNTS",
+		),
 	};
 }
 
@@ -239,6 +253,10 @@ export function loadConfig(source: ConfigSource): Config {
 		readinessTimeoutMs: parsed.data.READINESS_TIMEOUT_MS,
 		pluginHookTimeoutMs: parsed.data.PLUGIN_HOOK_TIMEOUT_MS,
 		enabledPlugins: parsed.data.PLUGINS,
+		instanceAdmins: parsed.data.INSTANCE_ADMIN_SERVICE_ACCOUNTS.map((id) => ({
+			kind: "service_account",
+			id,
+		})),
 	};
 }
 

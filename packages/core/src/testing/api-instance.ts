@@ -1,9 +1,10 @@
-import type { StartRole } from "@workbench/sdk";
+import type { Actor } from "@workbench/sdk";
 import { SQL } from "bun";
 import { authenticateToken } from "../api-tokens.ts";
 import { Secret } from "../config.ts";
 import { setSystemTimer } from "../hook-timeout.ts";
 import type { HttpApi } from "../http-api.ts";
+import { instanceAdminCheck } from "../instance-admins.ts";
 import { type PluginPackage, startPlugins } from "../kernel.ts";
 import { grantMembership } from "../memberships.ts";
 import { createOperationPipeline } from "../operation-pipeline.ts";
@@ -49,8 +50,9 @@ export type ApiInstance = {
 	readonly database: FreshDatabase;
 	readonly logEntries: readonly LogEntry[];
 	refuseAuthenticationDatabase(): void;
-	issueToken(role: StartRole): Promise<string>;
-	issueIdentifiedToken(role: StartRole): Promise<IdentifiedToken>;
+	issueToken(role: string): Promise<string>;
+	issueIdentifiedToken(role: string): Promise<IdentifiedToken>;
+	issueInstanceAdminToken(): Promise<IdentifiedToken>;
 	setClock(now: Date): void;
 	post(
 		path: string,
@@ -125,6 +127,8 @@ async function startedApiInstance(
 		return `00000000-0000-4000-8000-${String(issuedIds).padStart(12, "0")}`;
 	};
 	let clock = NOW;
+	const instanceAdmins: Actor[] = [];
+	const isInstanceAdmin = instanceAdminCheck(instanceAdmins);
 	let issuedTokens = 0;
 	let issuedCorrelationIds = 0;
 	const api: HttpApi = {
@@ -142,6 +146,7 @@ async function startedApiInstance(
 			newJobId: newId,
 			jobsCommitted: () => {},
 			random: () => 0.5,
+			isInstanceAdmin,
 			logger,
 		}),
 		operations: running.operations,
@@ -159,9 +164,7 @@ async function startedApiInstance(
 	});
 	cleanups.push(() => server.stop());
 	const url = `http://127.0.0.1:${server.port}`;
-	const issueIdentifiedToken = async (
-		role: StartRole,
-	): Promise<IdentifiedToken> => {
+	const issueAccount = async (): Promise<IdentifiedToken> => {
 		issuedTokens += 1;
 		const idsOfTheAccount: string[] = [];
 		const issued = await createServiceAccount(
@@ -182,17 +185,23 @@ async function startedApiInstance(
 		);
 		if (apiTokenId === undefined || unexpected.length > 0)
 			throw new UnidentifiedApiTokenError(idsOfTheAccount.length);
+		return {
+			token: issued.token.reveal(),
+			serviceAccountId: issued.serviceAccountId,
+			apiTokenId,
+		};
+	};
+	const issueIdentifiedToken = async (
+		role: string,
+	): Promise<IdentifiedToken> => {
+		const issued = await issueAccount();
 		await grantMembership(database.sql, {
 			workspace: API_INSTANCE_WORKSPACE,
 			actor: { kind: "service_account", id: issued.serviceAccountId },
 			role,
 			createdAt: clock,
 		});
-		return {
-			token: issued.token.reveal(),
-			serviceAccountId: issued.serviceAccountId,
-			apiTokenId,
-		};
+		return issued;
 	};
 	return {
 		url,
@@ -201,6 +210,14 @@ async function startedApiInstance(
 		refuseAuthenticationDatabase: () => authenticationGate.refuse(),
 		issueToken: async (role) => (await issueIdentifiedToken(role)).token,
 		issueIdentifiedToken,
+		issueInstanceAdminToken: async () => {
+			const issued = await issueAccount();
+			instanceAdmins.push({
+				kind: "service_account",
+				id: issued.serviceAccountId,
+			});
+			return issued;
+		},
 		setClock: (now) => {
 			clock = now;
 		},

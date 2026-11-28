@@ -10,6 +10,7 @@ import { UNKNOWN_FAILURE_REASON } from "./failure-reason.ts";
 import { type HookTimeout, setSystemTimer } from "./hook-timeout.ts";
 import {
 	IDEMPOTENCY_KEY_HEADER,
+	INSTANCE_OPERATION_PATH_TEMPLATE,
 	OPERATION_LIST_PATH,
 	OPERATION_PATH_TEMPLATE,
 } from "./http-api.ts";
@@ -29,7 +30,7 @@ import { systemFailureReason } from "./system-error.ts";
 
 const USAGE = [
 	"usage: workbench operations",
-	"       workbench <plugin> <operation> --workspace <uuid> --input <json> [--idempotency-key <key>]",
+	"       workbench <plugin> <operation> [--workspace <uuid>] --input <json> [--idempotency-key <key>]",
 ].join("\n");
 
 const LISTING_CLI_COMMAND = "operations";
@@ -53,7 +54,7 @@ type Invocation =
 	| {
 			readonly action: "call";
 			readonly operation: string;
-			readonly workspace: string;
+			readonly workspace: string | null;
 			readonly input: string;
 			readonly idempotencyKey: IdempotencyKey | undefined;
 	  };
@@ -131,8 +132,6 @@ function readInvocation(args: readonly string[]): ParsedInvocation {
 	)
 		return { ok: false, problem: "the command is not valid" };
 	const { workspace, input } = values;
-	if (workspace === undefined)
-		return { ok: false, problem: "--workspace is required" };
 	if (input === undefined) return { ok: false, problem: "--input is required" };
 	if (!parseJsonText(input).parsed)
 		return { ok: false, problem: "--input is not JSON" };
@@ -154,7 +153,7 @@ function readInvocation(args: readonly string[]): ParsedInvocation {
 				plugin,
 				name: camelCaseOf(operation),
 			}),
-			workspace,
+			workspace: workspace ?? null,
 			input,
 			idempotencyKey: parsedKey?.key,
 		},
@@ -228,12 +227,16 @@ function operationPathOf({
 	workspace,
 	operation,
 }: {
-	readonly workspace: string;
+	readonly workspace: string | null;
 	readonly operation: string;
 }): string {
-	return OPERATION_PATH_TEMPLATE.replace("{workspace}", () =>
-		encodeURIComponent(workspace),
-	).replace("{operation}", () => encodeURIComponent(operation));
+	const template =
+		workspace === null
+			? INSTANCE_OPERATION_PATH_TEMPLATE
+			: OPERATION_PATH_TEMPLATE.replace("{workspace}", () =>
+					encodeURIComponent(workspace),
+				);
+	return template.replace("{operation}", () => encodeURIComponent(operation));
 }
 
 function findListing(body: unknown): string | undefined {

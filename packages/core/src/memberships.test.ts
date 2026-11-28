@@ -130,6 +130,7 @@ async function startBellPipeline(
 		eventsCommitted: () => {},
 		jobsCommitted: () => {},
 		random: () => 0.5,
+		isInstanceAdmin: () => false,
 		logger,
 	});
 }
@@ -167,6 +168,37 @@ describe("the membership checked for a mutation", () => {
 		behind.open();
 
 		expect(revoked).toStartWith("could not obtain lock on row");
+		expect(await ringing).toEqual({ ok: true, output: { rung: true } });
+	});
+
+	test("keeps its role from being redefined while the mutation runs", async () => {
+		const database = await createFreshDatabase();
+		cleanups.push(() => database.drop());
+		const behind = gate();
+		const pipeline = await startBellPipeline(database, bellRungBehind(behind));
+		const ringing: Promise<OperationResult> = pipeline.invoke({
+			operation: "bell.ringBell",
+			actor: ALICE,
+			apiTokenId: null,
+			idempotencyKey: null,
+			workspace: WORKSPACE,
+			input: {},
+			correlationId: "call-1",
+		});
+		await behind.entered;
+
+		const redefined = await database.sql
+			.begin(
+				(transaction) => transaction`
+					SELECT name FROM core.roles WHERE name = 'owner' FOR UPDATE NOWAIT`,
+			)
+			.then(
+				() => "redefined",
+				(error: unknown) => (error instanceof Error ? error.message : error),
+			);
+		behind.open();
+
+		expect(redefined).toStartWith("could not obtain lock on row");
 		expect(await ringing).toEqual({ ok: true, output: { rung: true } });
 	});
 });

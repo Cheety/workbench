@@ -285,7 +285,13 @@ describe("the command line listing the operations", () => {
 		expect(run).toEqual({
 			exitCode: 0,
 			stdout: [
+				"core create-workspace\tcore.createWorkspace\tmutation",
+				"core define-role\tcore.defineRole\tmutation",
+				"core grant-membership\tcore.grantMembership\tmutation",
 				"core list-audit-entries\tcore.listAuditEntries\tquery",
+				"core list-instance-audit-entries\tcore.listInstanceAuditEntries\tquery",
+				"core list-workspaces\tcore.listWorkspaces\tquery",
+				"core revoke-membership\tcore.revokeMembership\tmutation",
 				"reference create-note\treference.createNote\tmutation",
 				"reference list-notes\treference.listNotes\tquery",
 				"reference rename-note\treference.renameNote\tmutation",
@@ -293,6 +299,47 @@ describe("the command line listing the operations", () => {
 			].join("\n"),
 			stderr: "",
 		});
+	});
+});
+
+describe("an operation on the instance on the command line", () => {
+	test("is called without a workspace and lists the workspaces of the actor", async () => {
+		const api = await startReferenceInstance();
+
+		const run = await runCli(
+			[
+				"core",
+				"list-workspaces",
+				"--input",
+				JSON.stringify({ limit: 10, cursor: null }),
+			],
+			await accessTo(api),
+		);
+
+		expect(run.exitCode).toBe(0);
+		expect(JSON.parse(run.stdout)).toEqual({
+			workspaces: [
+				{ id: API_INSTANCE_WORKSPACE, name: "Accounts", role: "owner" },
+			],
+			nextCursor: null,
+		});
+	});
+
+	test("answers workspace_required with exit code 1 for an operation on a workspace called without one", async () => {
+		const api = await startReferenceInstance();
+
+		const run = await runCli(
+			[
+				"reference",
+				"create-note",
+				"--input",
+				JSON.stringify({ title: "Plan" }),
+			],
+			await accessTo(api),
+		);
+
+		expect(run.exitCode).toBe(1);
+		expect(run.stderr).toStartWith("workspace_required: ");
 	});
 });
 
@@ -649,10 +696,6 @@ describe("an input on the command line", () => {
 				"--input",
 				"{}",
 			],
-		},
-		{
-			case: "no workspace",
-			args: ["reference", "create-note", "--input", "{}"],
 		},
 		{
 			case: "no input",

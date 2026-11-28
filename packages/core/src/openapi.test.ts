@@ -179,6 +179,68 @@ describe("the OpenAPI document of the HTTP API", () => {
 		},
 	);
 
+	test("describes an operation on the instance as a POST without a workspace in its path", async () => {
+		const document = await describeHttpApi([], setSystemTimer);
+
+		expect(
+			document.paths["/api/operations/core.createWorkspace"]?.post,
+		).toMatchObject({
+			operationId: "core.createWorkspace",
+			parameters: [expect.objectContaining({ name: "Idempotency-Key" })],
+			responses: {
+				"403": {
+					content: {
+						"application/problem+json": {
+							schema: {
+								allOf: [
+									{ $ref: "#/components/schemas/ProblemDetails" },
+									{ properties: { code: { enum: ["not_instance_admin"] } } },
+								],
+							},
+						},
+					},
+				},
+			},
+		});
+		expect(Object.keys(document.paths)).not.toContain(
+			"/api/workspaces/{workspace}/operations/core.createWorkspace",
+		);
+	});
+
+	test("names not_instance_admin, but not missing_right, for an operation on a workspace that only an instance admin calls", async () => {
+		const document = await describeHttpApi([], setSystemTimer);
+
+		expect(
+			document.paths[
+				"/api/workspaces/{workspace}/operations/core.grantMembership"
+			]?.post?.responses,
+		).toMatchObject({
+			"403": {
+				content: {
+					"application/problem+json": {
+						schema: {
+							allOf: [
+								{ $ref: "#/components/schemas/ProblemDetails" },
+								{ properties: { code: { enum: ["not_instance_admin"] } } },
+							],
+						},
+					},
+				},
+			},
+		});
+	});
+
+	test("names no denied call for the list of workspaces, which every actor calls", async () => {
+		const document = await describeHttpApi([], setSystemTimer);
+
+		expect(
+			Object.keys(
+				document.paths["/api/operations/core.listWorkspaces"]?.post
+					?.responses ?? {},
+			),
+		).toEqual(["200", "401", "default"]);
+	});
+
 	test("offers a mutation, but not a query, an optional Idempotency-Key header", async () => {
 		const document = await describeHttpApi([board], setSystemTimer);
 

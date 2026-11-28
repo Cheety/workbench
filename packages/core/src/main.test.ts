@@ -503,6 +503,54 @@ describe("HTTP API of an instance", () => {
 		expect(listed.status).toBe(200);
 		expect(await listed.json()).toEqual({ notes: [note] });
 	});
+
+	test("lets the instance admin the instance config names define a role with a right of the reference plugin", async () => {
+		const database = await freshDatabase();
+		const command = Bun.spawn(
+			[
+				process.execPath,
+				CREATE_SERVICE_ACCOUNT,
+				"--name",
+				"admin",
+				"--valid-days",
+				"1",
+			],
+			{
+				env: { PATH: process.env.PATH ?? "", DATABASE_URL: database.url },
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const admin = z
+			.object({ serviceAccount: z.string(), token: z.string() })
+			.parse(JSON.parse(await new Response(command.stdout).text()));
+		const instance = spawnInstance({
+			DATABASE_URL: database.url,
+			PORT: "0",
+			PLUGINS: "reference",
+			INSTANCE_ADMIN_SERVICE_ACCOUNTS: admin.serviceAccount,
+		});
+		const started = serverStarted(
+			await readLog(instance.stdout).until("instance started"),
+		);
+
+		const defined = await fetch(
+			`http://127.0.0.1:${started.port}/api/operations/core.defineRole`,
+			{
+				method: "POST",
+				headers: { Authorization: `Bearer ${admin.token}` },
+				body: JSON.stringify({
+					name: "reader",
+					rights: ["reference.note.read"],
+				}),
+			},
+		);
+
+		expect(await defined.json()).toEqual({
+			name: "reader",
+			rights: ["reference.note.read"],
+		});
+	});
 });
 
 describe("MCP endpoint of an instance", () => {

@@ -287,6 +287,49 @@ describe("loadConfig", () => {
 			},
 		]);
 	});
+
+	test("names no instance admin when INSTANCE_ADMIN_SERVICE_ACCOUNTS is not set", () => {
+		const config = loadConfig({
+			env: { DATABASE_URL },
+			readSecretFile: noSecretFiles,
+		});
+
+		expect(config.instanceAdmins).toEqual([]);
+	});
+
+	test("reads INSTANCE_ADMIN_SERVICE_ACCOUNTS as service accounts that are instance admins", () => {
+		const config = loadConfig({
+			env: {
+				DATABASE_URL,
+				INSTANCE_ADMIN_SERVICE_ACCOUNTS:
+					"7d4b8c1e-2f3a-4b5c-8d6e-9f0a1b2c3d4e, 51c2a3b4-c5d6-4e7f-8a9b-0c1d2e3f4a5b",
+			},
+			readSecretFile: noSecretFiles,
+		});
+
+		expect(config.instanceAdmins).toEqual([
+			{ kind: "service_account", id: "7d4b8c1e-2f3a-4b5c-8d6e-9f0a1b2c3d4e" },
+			{ kind: "service_account", id: "51c2a3b4-c5d6-4e7f-8a9b-0c1d2e3f4a5b" },
+		]);
+	});
+
+	test.each([
+		["a name instead of an ID", "admin"],
+		["an empty entry", "7d4b8c1e-2f3a-4b5c-8d6e-9f0a1b2c3d4e,,"],
+	])("rejects INSTANCE_ADMIN_SERVICE_ACCOUNTS with %s", (_case, value) => {
+		const error = captureInvalidConfig({
+			DATABASE_URL,
+			INSTANCE_ADMIN_SERVICE_ACCOUNTS: value,
+		});
+
+		expect(error.issues).toEqual([
+			{
+				variable: "INSTANCE_ADMIN_SERVICE_ACCOUNTS",
+				problem:
+					"must be a comma-separated list of service account IDs (UUIDs)",
+			},
+		]);
+	});
 });
 
 const TOKEN = "wbt_s3cr3t-token";

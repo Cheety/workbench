@@ -341,6 +341,7 @@ async function startLedgerWokenByItsPipeline() {
 		jobs: plugins.jobs,
 		newJobId: () => crypto.randomUUID(),
 		jobsCommitted: () => {},
+		isInstanceAdmin: () => false,
 	});
 	return {
 		call: (operation: string, amount: number) =>
@@ -425,6 +426,7 @@ async function startInstanceOn(
 		jobs: plugins.jobs,
 		newJobId: () => crypto.randomUUID(),
 		jobsCommitted: () => {},
+		isInstanceAdmin: () => false,
 	});
 	const delivery = createEventDelivery({
 		...sources,

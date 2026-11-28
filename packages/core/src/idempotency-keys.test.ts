@@ -494,6 +494,7 @@ async function startLedgerPipeline(
 		newJobId: () => crypto.randomUUID(),
 		eventsCommitted: () => {},
 		jobsCommitted: () => {},
+		isInstanceAdmin: () => false,
 		random: () => 0.5,
 		logger,
 	});

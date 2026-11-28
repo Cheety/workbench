@@ -340,6 +340,7 @@ async function startBillingPipeline(jobsCommitted: () => void) {
 		eventsCommitted: () => {},
 		jobsCommitted,
 		random: () => 0.5,
+		isInstanceAdmin: () => false,
 		logger,
 	});
 }

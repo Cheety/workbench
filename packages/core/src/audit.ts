@@ -7,12 +7,14 @@ import {
 } from "@workbench/sdk";
 import type { SQL } from "bun";
 import { z } from "zod";
+import { defineInstanceOperation } from "./operation-registry.ts";
 
 export const DENIAL_REASONS = [
 	"workspace_not_found",
 	"missing_right",
 	"object_not_found",
 	"not_object_holder",
+	"not_instance_admin",
 ] as const;
 
 export type DenialReason = (typeof DENIAL_REASONS)[number];
@@ -27,7 +29,7 @@ export type NewAuditEntry = {
 	readonly actor: Actor;
 	readonly apiTokenId: string | null;
 	readonly operation: string;
-	readonly workspace: string;
+	readonly workspace: string | null;
 	readonly outcome: AuditOutcome;
 };
 
@@ -35,23 +37,30 @@ const MAX_LISTED_AUDIT_ENTRIES = 100;
 
 const MAX_CURSOR_LENGTH = 200;
 
-const auditEntryFields = {
-	id: z.string(),
-	occurredAt: z.iso.datetime(),
-	actor: z.object({ kind: z.enum(ACTOR_KINDS), id: z.string() }),
-	apiTokenId: z.string().nullable(),
-	operation: z.string(),
-	workspace: z.string(),
-};
+function auditEntryOn<Workspace extends z.ZodType<string | null>>(
+	workspace: Workspace,
+) {
+	const fields = {
+		id: z.string(),
+		occurredAt: z.iso.datetime(),
+		actor: z.object({ kind: z.enum(ACTOR_KINDS), id: z.string() }),
+		apiTokenId: z.string().nullable(),
+		operation: z.string(),
+		workspace,
+	};
+	return z.discriminatedUnion("result", [
+		z.object({ ...fields, result: z.literal("succeeded") }),
+		z.object({
+			...fields,
+			result: z.literal("denied"),
+			reason: z.enum(DENIAL_REASONS),
+		}),
+	]);
+}
 
-const auditEntry = z.discriminatedUnion("result", [
-	z.object({ ...auditEntryFields, result: z.literal("succeeded") }),
-	z.object({
-		...auditEntryFields,
-		result: z.literal("denied"),
-		reason: z.enum(DENIAL_REASONS),
-	}),
-]);
+const workspaceAuditEntry = auditEntryOn(z.string());
+
+const instanceAuditEntry = auditEntryOn(z.string().nullable());
 
 const auditEntryRow = z.object({
 	id: z.string(),
@@ -60,7 +69,7 @@ const auditEntryRow = z.object({
 	actor_id: z.string(),
 	api_token_id: z.string().nullable(),
 	operation: z.string(),
-	workspace_id: z.string(),
+	workspace_id: z.string().nullable(),
 	result: z.enum(["succeeded", "denied"]),
 	reason: z.enum(DENIAL_REASONS).nullable(),
 });
@@ -85,7 +94,7 @@ function outcomeOf(row: z.infer<typeof auditEntryRow>): AuditOutcome {
 
 function auditEntryOf(
 	row: z.infer<typeof auditEntryRow>,
-): z.infer<typeof auditEntry> {
+): z.infer<typeof instanceAuditEntry> {
 	return {
 		id: row.id,
 		occurredAt: row.occurred_at.toISOString(),
@@ -167,17 +176,42 @@ export const auditRead = defineRight({
 	defaultRoles: ["owner"],
 });
 
+export const instanceAuditRead = defineRight({
+	name: "core.instance-audit.read",
+	defaultRoles: [],
+});
+
+const auditPageInput = z.object({
+	limit: z.number().int().min(1).max(MAX_LISTED_AUDIT_ENTRIES),
+	cursor: z.string().max(MAX_CURSOR_LENGTH).nullable(),
+});
+
+type AuditPage = {
+	readonly rows: readonly z.infer<typeof auditEntryRow>[];
+	readonly nextCursor: string | null;
+};
+
+function auditPageOf(rows: readonly unknown[], limit: number): AuditPage {
+	const found = z.array(auditEntryRow).parse(rows);
+	const page = found.slice(0, limit);
+	const last = page.at(-1);
+	return {
+		rows: page,
+		nextCursor:
+			found.length > limit && last !== undefined
+				? cursorAfter({ occurredAt: last.occurred_at, id: last.id })
+				: null,
+	};
+}
+
 export const listAuditEntries = defineOperation({
 	name: "listAuditEntries",
 	kind: "query",
 	target: "workspace",
 	right: auditRead.name,
-	input: z.object({
-		limit: z.number().int().min(1).max(MAX_LISTED_AUDIT_ENTRIES),
-		cursor: z.string().max(MAX_CURSOR_LENGTH).nullable(),
-	}),
+	input: auditPageInput,
 	output: z.object({
-		entries: z.array(auditEntry),
+		entries: z.array(workspaceAuditEntry),
 		nextCursor: z.string().nullable(),
 	}),
 	execute: async ({ limit, cursor }, ctx) => {
@@ -198,15 +232,46 @@ export const listAuditEntries = defineOperation({
 						AND (occurred_at, id) < (${after.occurredAt}, ${after.id})
 					ORDER BY occurred_at DESC, id DESC
 					LIMIT ${upTo}`;
-		const found = z.array(auditEntryRow).parse(rows);
-		const page = found.slice(0, limit);
-		const last = page.at(-1);
+		const page = auditPageOf(rows, limit);
 		return {
-			entries: page.map(auditEntryOf),
-			nextCursor:
-				found.length > limit && last !== undefined
-					? cursorAfter({ occurredAt: last.occurred_at, id: last.id })
-					: null,
+			entries: page.rows.map((row) => ({
+				...auditEntryOf(row),
+				workspace: ctx.workspace,
+			})),
+			nextCursor: page.nextCursor,
+		};
+	},
+});
+
+export const listInstanceAuditEntries = defineInstanceOperation({
+	name: "listInstanceAuditEntries",
+	kind: "query",
+	right: instanceAuditRead.name,
+	input: auditPageInput,
+	output: z.object({
+		entries: z.array(instanceAuditEntry),
+		nextCursor: z.string().nullable(),
+	}),
+	execute: async ({ limit, cursor }, ctx) => {
+		const upTo = limit + 1;
+		const after = cursor === null ? null : positionOf(cursor);
+		const rows =
+			after === null
+				? await ctx.sql`
+					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason
+					FROM core.audit_entries
+					ORDER BY occurred_at DESC, id DESC
+					LIMIT ${upTo}`
+				: await ctx.sql`
+					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason
+					FROM core.audit_entries
+					WHERE (occurred_at, id) < (${after.occurredAt}, ${after.id})
+					ORDER BY occurred_at DESC, id DESC
+					LIMIT ${upTo}`;
+		const page = auditPageOf(rows, limit);
+		return {
+			entries: page.rows.map(auditEntryOf),
+			nextCursor: page.nextCursor,
 		};
 	},
 });

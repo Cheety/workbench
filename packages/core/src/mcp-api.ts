@@ -18,10 +18,14 @@ import {
 	IDEMPOTENCY_KEY_PATTERN,
 	TAKES_IDEMPOTENCY_KEY,
 } from "./idempotency-keys.ts";
-import { INVALID_IDEMPOTENCY_KEY } from "./operation-pipeline.ts";
+import {
+	INVALID_IDEMPOTENCY_KEY,
+	WORKSPACE_NOT_EXPECTED,
+} from "./operation-pipeline.ts";
 import {
 	OPERATION_NAME_SEPARATOR,
 	type OperationRegistry,
+	type OperationScope,
 	type RegisteredOperation,
 } from "./operation-registry.ts";
 import {
@@ -119,19 +123,34 @@ function findOperationOfTool(
 		.find((operation) => toolNameOf(operation.name) === toolName);
 }
 
+const SCOPE_ARGUMENTS: Record<
+	OperationScope,
+	{
+		readonly properties: Readonly<Record<string, unknown>>;
+		readonly required: readonly string[];
+	}
+> = {
+	workspace: {
+		properties: { workspace: { type: "string", format: "uuid" } },
+		required: ["workspace"],
+	},
+	instance: { properties: {}, required: [] },
+};
+
 function toolOf(operation: RegisteredOperation): Tool {
+	const scope = SCOPE_ARGUMENTS[operation.scope];
 	return {
 		name: toolNameOf(operation.name),
 		inputSchema: {
 			type: "object",
 			properties: {
-				workspace: { type: "string", format: "uuid" },
+				...scope.properties,
 				input: operation.describeInput(),
 				...(TAKES_IDEMPOTENCY_KEY[operation.kind]
 					? { idempotencyKey: IDEMPOTENCY_KEY_ARGUMENT }
 					: {}),
 			},
-			required: ["workspace", "input"],
+			required: [...scope.required, "input"],
 			additionalProperties: false,
 		},
 		annotations: { readOnlyHint: IS_READ_ONLY[operation.kind] },
@@ -145,12 +164,14 @@ async function callTool(
 		readonly arguments?: Readonly<Record<string, unknown>> | undefined;
 	},
 ): Promise<CallToolResult> {
-	const workspace = params.arguments?.workspace;
-	if (typeof workspace !== "string" || !isWorkspaceId(workspace))
-		return toolError(INVALID_WORKSPACE_ARGUMENT, correlationId);
 	const operation = findOperationOfTool(api.operations, params.name);
 	if (operation === undefined)
 		return toolError(unknownTool(params.name), correlationId);
+	const workspace = workspaceArgumentOf(
+		operation.scope,
+		params.arguments?.workspace,
+	);
+	if (!workspace.valid) return toolError(workspace.problem, correlationId);
 	const key = params.arguments?.idempotencyKey ?? null;
 	const idempotencyKey = typeof key === "string" ? key : null;
 	if (key !== idempotencyKey && TAKES_IDEMPOTENCY_KEY[operation.kind])
@@ -160,12 +181,32 @@ async function callTool(
 		actor: authentication.actor,
 		apiTokenId: authentication.apiTokenId,
 		idempotencyKey,
-		workspace,
+		workspace: workspace.workspace,
 		input: params.arguments?.input,
 		correlationId,
 	});
 	if (!result.ok) return toolError(result.failure, correlationId);
 	return { content: [{ type: "text", text: JSON.stringify(result.output) }] };
+}
+
+type WorkspaceArgument =
+	| { readonly valid: true; readonly workspace: string | null }
+	| { readonly valid: false; readonly problem: Problem };
+
+function workspaceArgumentOf(
+	scope: OperationScope,
+	argument: unknown,
+): WorkspaceArgument {
+	switch (scope) {
+		case "instance":
+			return argument === undefined
+				? { valid: true, workspace: null }
+				: { valid: false, problem: WORKSPACE_NOT_EXPECTED };
+		case "workspace":
+			return typeof argument === "string" && isWorkspaceId(argument)
+				? { valid: true, workspace: argument }
+				: { valid: false, problem: INVALID_WORKSPACE_ARGUMENT };
+	}
 }
 
 function unknownTool(toolName: string): Problem {
