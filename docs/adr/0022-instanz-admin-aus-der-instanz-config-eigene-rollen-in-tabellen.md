@@ -34,7 +34,7 @@ Eine Mutation liest Mitgliedschaft und Rolle mit `FOR SHARE`, `defineRole` sperr
 
 ## Audit
 
-Jede gelungene Mutation auf der Instanz hinterlässt einen Audit-Eintrag ohne Workspace (`workspace` `null`), ein verweigerter Aufruf eines Nicht-Admins einen Eintrag `denied` mit `reason` `not_instance_admin`. `core.audit_entries.workspace_id` und `core.idempotency_keys.workspace_id` dürfen dafür leer sein. Der Teilindex, der Verweigerungen auf eine je Minute begrenzt, behandelt einen leeren Workspace mit `NULLS NOT DISTINCT` als gleich, sonst wüchse das Audit mit jedem Versuch eines Nicht-Admins. Gelesen wird das ganze Audit über `core.listInstanceAuditEntries`, nur vom Instanz-Admin; `core.listAuditEntries` bleibt bei den Ownern des Workspace.
+Jede gelungene Mutation auf der Instanz hinterlässt einen Audit-Eintrag ohne Workspace (`workspace` `null`), außer `core.createWorkspace`: Sein Eintrag nennt den angelegten Workspace, damit das Audit der Instanz zeigt, welcher Workspace entstand, und dessen Owner die Anlage in `core.listAuditEntries` sehen. Ein verweigerter Aufruf eines Nicht-Admins einen Eintrag `denied` mit `reason` `not_instance_admin`. `core.audit_entries.workspace_id` und `core.idempotency_keys.workspace_id` dürfen dafür leer sein. Der Teilindex, der Verweigerungen auf eine je Minute begrenzt, behandelt einen leeren Workspace mit `NULLS NOT DISTINCT` als gleich, sonst wüchse das Audit mit jedem Versuch eines Nicht-Admins. Gelesen wird das ganze Audit über `core.listInstanceAuditEntries`, nur vom Instanz-Admin; `core.listAuditEntries` bleibt bei den Ownern des Workspace.
 
 ## Consequences
 

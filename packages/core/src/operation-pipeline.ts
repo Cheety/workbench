@@ -731,9 +731,18 @@ function newAuditEntryOf(
 		actor: call.actor,
 		apiTokenId: call.apiTokenId,
 		operation: operation.name,
-		workspace: call.workspace,
+		workspace: call.workspace ?? auditedWorkspaceOf(outcome),
 		outcome,
 	};
+}
+
+function auditedWorkspaceOf(outcome: AuditOutcome): string | null {
+	switch (outcome.result) {
+		case "succeeded":
+			return outcome.subject.workspace;
+		case "denied":
+			return null;
+	}
 }
 
 async function executeOnWorkspace(

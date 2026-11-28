@@ -53,7 +53,10 @@ export const createWorkspaceOperation = defineInstanceOperation({
 		await createWorkspace(ctx.sql, { id, name, createdAt: ctx.now() });
 		return { id, name };
 	},
-	auditSubject: () => NO_AUDIT_SUBJECT,
+	auditSubject: (_input, { id }) => ({
+		...NO_AUDIT_SUBJECT,
+		workspace: id,
+	}),
 });
 
 const listedWorkspaceRow = z.object({

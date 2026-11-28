@@ -335,6 +335,11 @@ describe("a custom role", () => {
 				workspace,
 				result: "succeeded",
 			}),
+			expect.objectContaining({
+				operation: "core.createWorkspace",
+				workspace,
+				result: "succeeded",
+			}),
 		]);
 	});
 
@@ -555,7 +560,7 @@ describe("the audit of administering workspaces", () => {
 						actor: ADMIN,
 						apiTokenId: null,
 						operation: "core.createWorkspace",
-						workspace: null,
+						workspace,
 						result: "succeeded",
 						member: null,
 						role: null,
@@ -639,6 +644,12 @@ describe("the audit of administering workspaces", () => {
 		expect(auditPage.parse(audit).output.entries).toEqual([
 			expect.objectContaining({
 				operation: "core.grantMembership",
+				workspace,
+				actor: ADMIN,
+				result: "succeeded",
+			}),
+			expect.objectContaining({
+				operation: "core.createWorkspace",
 				workspace,
 				actor: ADMIN,
 				result: "succeeded",

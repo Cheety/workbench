@@ -129,7 +129,11 @@ export const grantMembershipOperation = defineInstanceAdminWorkspaceOperation({
 			ON CONFLICT (workspace_id, actor_kind, actor_id) DO UPDATE SET role = EXCLUDED.role`;
 		return { workspace: ctx.workspace, actor, role };
 	},
-	auditSubject: ({ actor, role }) => ({ member: actor, role }),
+	auditSubject: ({ actor, role }) => ({
+		workspace: null,
+		member: actor,
+		role,
+	}),
 });
 
 export const revokeMembershipOperation = defineInstanceAdminWorkspaceOperation({
@@ -150,5 +154,9 @@ export const revokeMembershipOperation = defineInstanceAdminWorkspaceOperation({
 			? { revoked: false, role: null }
 			: { revoked: true, role: revoked.role };
 	},
-	auditSubject: ({ actor }, { role }) => ({ member: actor, role }),
+	auditSubject: ({ actor }, { role }) => ({
+		workspace: null,
+		member: actor,
+		role,
+	}),
 });
