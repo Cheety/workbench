@@ -714,6 +714,50 @@ describe("the API tokens of an actor", () => {
 		expect(stillWorking.status).toBe(200);
 	});
 
+	test("revokes a revoked token again and answers with the time of the first revocation", async () => {
+		const api = await startLedgerInstance();
+		const owner = await api.issueToken("owner");
+		const scoped = await createToken(api, owner, {
+			operations: null,
+			workspaces: null,
+			validDays: 7,
+		});
+		await api.post(
+			onInstance("core.revokeApiToken"),
+			JSON.stringify({ id: scoped.id }),
+			bearer(owner),
+		);
+		api.setClock(IN_A_WEEK);
+
+		const again = await api.post(
+			onInstance("core.revokeApiToken"),
+			JSON.stringify({ id: scoped.id }),
+			bearer(owner),
+		);
+
+		expect(again.status).toBe(200);
+		expect(await again.json()).toEqual({
+			id: scoped.id,
+			revokedAt: NOW.toISOString(),
+		});
+	});
+
+	test("cannot revoke a token that does not exist", async () => {
+		const api = await startLedgerInstance();
+		const owner = await api.issueToken("owner");
+
+		const revoked = await api.post(
+			onInstance("core.revokeApiToken"),
+			JSON.stringify({ id: "00000000-0000-4000-8000-00000000dddd" }),
+			bearer(owner),
+		);
+
+		expect(revoked.status).toBe(404);
+		expect(await revoked.json()).toMatchObject({
+			code: "core.api_token_not_found",
+		});
+	});
+
 	test("creates a token with each call even under the same Idempotency-Key and keeps no answer holding it", async () => {
 		const api = await startLedgerInstance();
 		const owner = await api.issueToken("owner");
