@@ -7,6 +7,7 @@ import {
 } from "@workbench/sdk";
 import type { SQL } from "bun";
 import { z } from "zod";
+import { quote } from "./quote.ts";
 import { roleName } from "./roles.ts";
 import { isWorkspaceId } from "./workspaces.ts";
 
@@ -109,7 +110,7 @@ export const grantMembershipOperation = defineOperation({
 			throw new OperationError(
 				"not_found",
 				"unknown_role",
-				`no role is named "${role}"`,
+				`no role is named ${quote(role)}`,
 			);
 		await ctx.sql`
 			INSERT INTO core.memberships (workspace_id, actor_kind, actor_id, role, created_at)
