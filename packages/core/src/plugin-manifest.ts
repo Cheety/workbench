@@ -9,10 +9,10 @@ import {
 import { isRecord } from "./is-record.ts";
 import { type RegisteredJob, readJobs } from "./job-registry.ts";
 import {
-	CORE_OWNER_NAME,
 	type RegisteredOperation,
 	readOperations,
 } from "./operation-registry.ts";
+import { CORE_OWNER_NAME, pluginOwner } from "./owner.ts";
 import { isPluginName } from "./plugin-name.ts";
 import { quote } from "./quote.ts";
 import type { Migration } from "./schema-migrations.ts";
@@ -71,7 +71,7 @@ export function validatePlugin(
 		offeredCapabilities,
 	);
 	const operations = readOperations(
-		{ kind: "plugin", name: declaredName },
+		pluginOwner(declaredName),
 		definition.operations,
 	);
 	const events = readEvents(declaredName, definition.events);
@@ -80,7 +80,7 @@ export function validatePlugin(
 		definition.subscriptions,
 		capabilities.value,
 	);
-	const jobs = readJobs(declaredName, {
+	const jobs = readJobs(pluginOwner(declaredName), {
 		jobs: definition.jobs,
 		cronJobs: definition.cronJobs,
 	});

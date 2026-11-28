@@ -47,6 +47,7 @@ export type HarnessCall = {
 	readonly workspace: string;
 	readonly operation: string;
 	readonly input: unknown;
+	readonly idempotencyKey?: string;
 };
 
 export type OperationHarness = {
@@ -198,10 +199,11 @@ function harnessOf(
 			await createWorkspace(database.sql, { id, name, createdAt: now() });
 			return id;
 		},
-		call: (call) =>
+		call: ({ idempotencyKey, ...call }) =>
 			pipeline.invoke({
 				...call,
 				apiTokenId: null,
+				idempotencyKey: idempotencyKey ?? null,
 				correlationId: newCorrelationId(),
 			}),
 		deliverEvents: () => delivery.deliverDue(NOT_STOPPED),

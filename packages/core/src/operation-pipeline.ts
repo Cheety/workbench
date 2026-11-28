@@ -10,21 +10,23 @@ import { type NewAuditEntry, recordAuditEntry } from "./audit.ts";
 import { recordEvent } from "./event-outbox.ts";
 import type { EventRegistry } from "./event-registry.ts";
 import { describeThrown } from "./failure-reason.ts";
+import {
+	IDEMPOTENCY_KEY_RULE,
+	type IdempotencyKey,
+	IdempotencyKeyReusedError,
+	parseIdempotencyKey,
+	runIdempotently,
+	TAKES_IDEMPOTENCY_KEY,
+} from "./idempotency-keys.ts";
 import { enqueueJob } from "./job-queue.ts";
 import type { JobRegistry } from "./job-registry.ts";
 import type { Logger } from "./logger.ts";
-import {
-	type OperationOwner,
-	type OperationRegistry,
-	ownerName,
-	type RegisteredOperation,
+import type {
+	OperationRegistry,
+	RegisteredOperation,
 } from "./operation-registry.ts";
+import { type Owner, ownerName, schemaOf } from "./owner.ts";
 import { quote } from "./quote.ts";
-import {
-	CORE_SCHEMA,
-	pluginSchemaName,
-	type SchemaName,
-} from "./schema-name.ts";
 import type { ValidationIssue } from "./schema-validation.ts";
 import { statementsIn } from "./transaction-statements.ts";
 import { workspaceExists } from "./workspaces.ts";
@@ -33,6 +35,7 @@ export type OperationCall = {
 	readonly operation: string;
 	readonly actor: Actor;
 	readonly apiTokenId: string | null;
+	readonly idempotencyKey: string | null;
 	readonly workspace: string;
 	readonly input: unknown;
 	readonly correlationId: string;
@@ -75,6 +78,21 @@ const INTERNAL_ERROR: OperationFailure = {
 	code: "internal_error",
 	kind: "internal",
 	detail: "the operation failed for an internal reason",
+	issues: [],
+};
+
+const INVALID_IDEMPOTENCY_KEY: OperationFailure = {
+	code: "invalid_idempotency_key",
+	kind: "invalid_input",
+	detail: `the idempotency key must consist of ${IDEMPOTENCY_KEY_RULE}`,
+	issues: [],
+};
+
+const IDEMPOTENCY_KEY_REUSED: OperationFailure = {
+	code: "idempotency_key_reused",
+	kind: "rejected",
+	detail:
+		"the idempotency key was already used with another operation, workspace or input",
 	issues: [],
 };
 
@@ -149,6 +167,8 @@ async function invoke(
 		correlationId: call.correlationId,
 		operation: operation.name,
 	});
+	const key = idempotencyKeyOf(call, operation.kind);
+	if (!key.valid) return failed(INVALID_IDEMPOTENCY_KEY);
 	try {
 		const input = await operation.validateInput(call.input);
 		if (!input.valid)
@@ -165,20 +185,35 @@ async function invoke(
 			options.sql,
 			async (transaction) => {
 				await requireWorkspace(transaction, call.workspace);
-				const executed = await execute(
-					operation,
-					input.value,
-					contextOf(call, transaction, options, {
-						publish: publisher.publishIn(transaction),
-						enqueue: enqueuer.enqueueIn(transaction),
-					}),
-				);
-				if (IS_AUDITED[operation.kind])
-					await recordAuditEntry(
-						transaction,
-						newAuditEntryOf(call, operation, options),
+				const run = async (): Promise<unknown> => {
+					const executed = await execute(
+						operation,
+						input.value,
+						contextOf(call, transaction, options, {
+							publish: publisher.publishIn(transaction),
+							enqueue: enqueuer.enqueueIn(transaction),
+						}),
 					);
-				return executed;
+					if (IS_AUDITED[operation.kind])
+						await recordAuditEntry(
+							transaction,
+							newAuditEntryOf(call, operation, options),
+						);
+					return executed;
+				};
+				if (key.key === null) return run();
+				return runIdempotently(
+					transaction,
+					{
+						actor: call.actor,
+						key: key.key,
+						operation: operation.name,
+						workspace: call.workspace,
+						input: call.input,
+						calledAt: options.now(),
+					},
+					run,
+				);
 			},
 		);
 		if (publisher.hasPublished()) options.eventsCommitted();
@@ -189,12 +224,25 @@ async function invoke(
 	}
 }
 
+type IdempotencyKeyOfCall =
+	| { readonly valid: true; readonly key: IdempotencyKey | null }
+	| { readonly valid: false };
+
+function idempotencyKeyOf(
+	call: OperationCall,
+	kind: OperationKind,
+): IdempotencyKeyOfCall {
+	if (call.idempotencyKey === null || !TAKES_IDEMPOTENCY_KEY[kind])
+		return { valid: true, key: null };
+	return parseIdempotencyKey(call.idempotencyKey);
+}
+
 const BEGIN_TRANSACTION: Record<
 	OperationKind,
 	(sql: SQL, body: (transaction: SQL) => Promise<unknown>) => Promise<unknown>
 > = {
 	query: (sql, body) => sql.begin("read only", body),
-	mutation: (sql, body) => sql.begin(body),
+	mutation: (sql, body) => sql.begin("isolation level read committed", body),
 };
 
 const IS_AUDITED: Record<OperationKind, boolean> = {
@@ -223,15 +271,6 @@ function inTransaction(
 		return run(transaction);
 	};
 	return BEGIN_TRANSACTION[operation.kind](sql, body);
-}
-
-function schemaOf(owner: OperationOwner): SchemaName {
-	switch (owner.kind) {
-		case "core":
-			return CORE_SCHEMA;
-		case "plugin":
-			return pluginSchemaName(owner.name);
-	}
 }
 
 async function requireWorkspace(
@@ -306,7 +345,7 @@ function enqueuerOf(
 				throw new JobEnqueuedByQueryError(operation.name);
 			await enqueueJob(transaction, sources.jobs, {
 				id: sources.newJobId(),
-				plugin: ownerName(operation.owner),
+				owner: operation.owner,
 				definition,
 				payload,
 				enqueuedAt: sources.now(),
@@ -361,9 +400,10 @@ async function runExecute(
 function logAndMapFailure(
 	error: unknown,
 	logger: Logger,
-	owner: OperationOwner,
+	owner: Owner,
 ): OperationFailure {
 	if (error instanceof WorkspaceNotFoundError) return WORKSPACE_NOT_FOUND;
+	if (error instanceof IdempotencyKeyReusedError) return IDEMPOTENCY_KEY_REUSED;
 	if (error instanceof OperationError)
 		return {
 			code: `${ownerName(owner)}.${error.code}`,

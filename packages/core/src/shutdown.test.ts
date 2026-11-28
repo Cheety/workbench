@@ -432,23 +432,26 @@ describe("failed plugin start", () => {
 		]);
 	});
 
-	test("reports nothing for plugins that started and leaves their deactivation to them", async () => {
+	test("reports nothing when plugins started, and the shutdown exits with 0 once they deactivated cleanly", async () => {
 		const { logger, entries } = recordingLogger();
-		const journal: string[] = [];
-
-		const plugins = await reportFailedStart(
-			Promise.resolve({
-				deactivate: async () => {
-					journal.push("plugins deactivated");
-					return "clean" as const;
-				},
-			}),
+		const plugins = reportFailedStart(
+			Promise.resolve({ deactivate: async () => "clean" as const }),
 			logger,
 		);
-		const outcome = await plugins.deactivate();
 
-		expect(outcome).toBe("clean");
-		expect(journal).toEqual(["plugins deactivated"]);
+		const exitCode = await shutDownInstance(
+			{
+				stopStartingPlugins: () => {},
+				eventDelivery: { stop: async () => {} },
+				jobQueue: { stop: async () => {} },
+				database: { close: async () => {} },
+				server: { stop: async () => {} },
+				plugins,
+			},
+			logger,
+		);
+
+		expect(exitCode).toBe(0);
 		expect(entries).toEqual([]);
 	});
 });

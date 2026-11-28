@@ -731,6 +731,7 @@ describe("the pipeline", () => {
 				operation,
 				actor: ALICE,
 				apiTokenId: null,
+				idempotencyKey: null,
 				workspace: WORKSPACE,
 				input: { amount },
 				correlationId: "request-1",

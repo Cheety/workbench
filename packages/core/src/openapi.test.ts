@@ -70,14 +70,6 @@ describe("the OpenAPI document of the HTTP API", () => {
 				"/api/workspaces/{workspace}/operations/board.renameLabel": {
 					post: {
 						operationId: "board.renameLabel",
-						parameters: [
-							{
-								name: "workspace",
-								in: "path",
-								required: true,
-								schema: { type: "string", format: "uuid" },
-							},
-						],
 						requestBody: {
 							required: true,
 							content: {
@@ -123,6 +115,39 @@ describe("the OpenAPI document of the HTTP API", () => {
 				},
 			},
 		});
+	});
+
+	test("offers a mutation, but not a query, an optional Idempotency-Key header", async () => {
+		const document = await describeHttpApi([board], setSystemTimer);
+
+		const parametersOf = (operation: string) =>
+			document.paths[`/api/workspaces/{workspace}/operations/${operation}`]
+				?.post.parameters;
+
+		expect(parametersOf("board.renameLabel")).toEqual([
+			{
+				name: "workspace",
+				in: "path",
+				required: true,
+				schema: { type: "string", format: "uuid" },
+			},
+			{
+				name: "Idempotency-Key",
+				in: "header",
+				required: false,
+				description:
+					"a key of the caller under which a repeated call receives the answer of the first instead of running the mutation again",
+				schema: { type: "string", pattern: "^[ -+\\--~]{1,255}$" },
+			},
+		]);
+		expect(parametersOf("board.countLabels")).toEqual([
+			{
+				name: "workspace",
+				in: "path",
+				required: true,
+				schema: { type: "string", format: "uuid" },
+			},
+		]);
 	});
 
 	test("admits any JSON for a schema that cannot describe itself as JSON Schema", async () => {

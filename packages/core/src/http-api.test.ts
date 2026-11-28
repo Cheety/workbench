@@ -4,6 +4,7 @@ import {
 	defineOperation,
 	definePlugin,
 } from "@workbench/sdk";
+import { SQL } from "bun";
 import { z } from "zod";
 import { apiTokenHash, authenticateToken } from "./api-tokens.ts";
 import { Secret } from "./config.ts";
@@ -18,7 +19,11 @@ import {
 } from "./schema-migrations.ts";
 import { type RunningServer, startServer } from "./server.ts";
 import { createServiceAccount } from "./service-accounts.ts";
-import { createFreshDatabase, type FreshDatabase } from "./testing/postgres.ts";
+import {
+	createFreshDatabase,
+	type FreshDatabase,
+	PostgresGate,
+} from "./testing/postgres.ts";
 import { type LogEntry, recordingLogger } from "./testing/recording-logger.ts";
 import { createWorkspace } from "./workspaces.ts";
 
@@ -82,12 +87,13 @@ const ledger: PluginPackage = {
 type ApiInstance = {
 	readonly database: FreshDatabase;
 	readonly logEntries: readonly LogEntry[];
+	refuseAuthenticationDatabase(): void;
 	issueToken(): Promise<string>;
 	setClock(now: Date): void;
 	post(
 		path: string,
 		body: string,
-		headers: Record<string, string>,
+		headers: Headers | Record<string, string>,
 	): Promise<Response>;
 	send(method: string, path: string): Promise<Response>;
 };
@@ -102,6 +108,16 @@ async function startApiInstance(): Promise<ApiInstance> {
 	const { logger, entries } = recordingLogger();
 	const database = await createFreshDatabase();
 	cleanups.push(() => database.drop());
+	const authenticationGate = PostgresGate.create(database.url);
+	authenticationGate.forward();
+	const authenticationSql = new SQL(authenticationGate.url, {
+		max: 1,
+		connectionTimeout: 10,
+	});
+	cleanups.push(async () => {
+		await authenticationSql.close();
+		authenticationGate.close();
+	});
 	const runner: MigrationRunner = {
 		databaseUrl: new Secret(database.url),
 		connectionTimeoutMs: 10_000,
@@ -145,7 +161,8 @@ async function startApiInstance(): Promise<ApiInstance> {
 		},
 		startupStatus: () => "started",
 		api: {
-			authenticate: (token) => authenticateToken(database.sql, token, clock),
+			authenticate: (token) =>
+				authenticateToken(authenticationSql, token, clock),
 			pipeline: createOperationPipeline({
 				sql: database.sql,
 				registry: plugins.operations,
@@ -167,6 +184,7 @@ async function startApiInstance(): Promise<ApiInstance> {
 	return {
 		database,
 		logEntries: entries,
+		refuseAuthenticationDatabase: () => authenticationGate.refuse(),
 		issueToken: async () => {
 			issuedTokens += 1;
 			const issued = await createServiceAccount(
@@ -256,6 +274,142 @@ describe("an operation called over HTTP", () => {
 		expect(await response.json()).toEqual({
 			entries: [{ id, amount: 42 }],
 		});
+	});
+});
+
+describe("a mutation called over HTTP with an Idempotency-Key", () => {
+	test("is run once, and a repeated call receives the same body", async () => {
+		const api = await startApiInstance();
+		const token = await api.issueToken();
+		const headers = { ...bearer(token), "Idempotency-Key": "retry-1" };
+		const first = await api.post(
+			operationPath("ledger.addEntry"),
+			JSON.stringify({ amount: 42 }),
+			headers,
+		);
+
+		const repeated = await api.post(
+			operationPath("ledger.addEntry"),
+			JSON.stringify({ amount: 42 }),
+			headers,
+		);
+
+		expect(repeated.status).toBe(200);
+		expect(await repeated.text()).toBe(await first.text());
+		expect(
+			await api.database.sql`SELECT amount FROM plugin_ledger.entries`,
+		).toEqual([{ amount: 42 }]);
+	});
+
+	test("reads a key quoted as a structured field string as the key inside the quotes", async () => {
+		const api = await startApiInstance();
+		const token = await api.issueToken();
+		const first = await api.post(
+			operationPath("ledger.addEntry"),
+			JSON.stringify({ amount: 42 }),
+			{ ...bearer(token), "Idempotency-Key": 'retry "1"' },
+		);
+
+		const repeated = await api.post(
+			operationPath("ledger.addEntry"),
+			JSON.stringify({ amount: 42 }),
+			{ ...bearer(token), "Idempotency-Key": '"retry \\"1\\""' },
+		);
+
+		expect(await repeated.text()).toBe(await first.text());
+		expect(
+			await api.database.sql`SELECT amount FROM plugin_ledger.entries`,
+		).toEqual([{ amount: 42 }]);
+	});
+
+	test("answers 422 idempotency_key_reused when the key comes again with another body", async () => {
+		const api = await startApiInstance();
+		const token = await api.issueToken();
+		const headers = { ...bearer(token), "Idempotency-Key": "retry-1" };
+		await api.post(
+			operationPath("ledger.addEntry"),
+			JSON.stringify({ amount: 42 }),
+			headers,
+		);
+
+		const repeated = await api.post(
+			operationPath("ledger.addEntry"),
+			JSON.stringify({ amount: 43 }),
+			headers,
+		);
+
+		expect(repeated.status).toBe(422);
+		expect(await repeated.json()).toEqual(
+			expect.objectContaining({ code: "idempotency_key_reused" }),
+		);
+	});
+
+	test.each([
+		{ case: "the header twice", values: ["a", "b"] },
+		{ case: "an unquoted key with a comma", values: ["a,b"] },
+		{ case: "two structured field strings", values: ['"a", "b"'] },
+		{ case: "a quoted key with a comma", values: ['"a, b"'] },
+		{ case: "two halves of a quoted key", values: ['"a', 'b"'] },
+	])(
+		"answers 400 invalid_idempotency_key for $case, and runs nothing",
+		async ({ values }) => {
+			const api = await startApiInstance();
+			const token = await api.issueToken();
+			const headers = new Headers(bearer(token));
+			for (const value of values) headers.append("Idempotency-Key", value);
+
+			const response = await api.post(
+				operationPath("ledger.addEntry"),
+				JSON.stringify({ amount: 42 }),
+				headers,
+			);
+
+			expect(response.status).toBe(400);
+			expect(await response.json()).toEqual(
+				expect.objectContaining({ code: "invalid_idempotency_key" }),
+			);
+			expect(
+				await api.database.sql`SELECT amount FROM plugin_ledger.entries`,
+			).toEqual([]);
+		},
+	);
+
+	test("answers 400 invalid_idempotency_key when the key is empty, and runs nothing", async () => {
+		const api = await startApiInstance();
+		const token = await api.issueToken();
+
+		const response = await api.post(
+			operationPath("ledger.addEntry"),
+			JSON.stringify({ amount: 42 }),
+			{ ...bearer(token), "Idempotency-Key": "" },
+		);
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual(
+			expect.objectContaining({ code: "invalid_idempotency_key" }),
+		);
+		expect(
+			await api.database.sql`SELECT amount FROM plugin_ledger.entries`,
+		).toEqual([]);
+	});
+});
+
+describe("a query called over HTTP with an Idempotency-Key", () => {
+	test("ignores the header sent twice", async () => {
+		const api = await startApiInstance();
+		const token = await api.issueToken();
+		const headers = new Headers(bearer(token));
+		headers.append("Idempotency-Key", "a");
+		headers.append("Idempotency-Key", "b");
+
+		const response = await api.post(
+			operationPath("ledger.listEntries"),
+			JSON.stringify({}),
+			headers,
+		);
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ entries: [] });
 	});
 });
 
@@ -580,14 +734,15 @@ describe("a failing call over HTTP", () => {
 		);
 	});
 
-	test("answers an internal error neutrally when authentication itself fails", async () => {
+	test("answers an internal error neutrally when the database is unreachable during authentication", async () => {
 		const api = await startApiInstance();
-		await api.database.sql`DROP TABLE core.api_tokens CASCADE`;
+		const token = await api.issueToken();
+		api.refuseAuthenticationDatabase();
 
 		const response = await api.post(
 			operationPath("ledger.addEntry"),
 			JSON.stringify({ amount: 42 }),
-			bearer("wbt_any"),
+			bearer(token),
 		);
 
 		expect(response.status).toBe(500);
@@ -601,15 +756,11 @@ describe("a failing call over HTTP", () => {
 			correlationId: "request-1",
 			issues: [],
 		});
-		expect(body).not.toContain("api_tokens");
 		expect(api.logEntries).toContainEqual(
 			expect.objectContaining({
 				level: "error",
 				message: "request failed",
 				correlationId: "request-1",
-				error: expect.objectContaining({
-					message: expect.stringContaining("api_tokens"),
-				}),
 			}),
 		);
 	});

@@ -7,16 +7,13 @@ import {
 } from "@workbench/sdk";
 import { isRecord } from "./is-record.ts";
 import { type JsonSchema, jsonSchemaReaderOf } from "./json-schema.ts";
+import { describeOwner, type Owner, ownerName } from "./owner.ts";
 import { quote } from "./quote.ts";
 import { type Validator, validatorOf } from "./schema-validation.ts";
 
-export type OperationOwner =
-	| { readonly kind: "core" }
-	| { readonly kind: "plugin"; readonly name: string };
-
 export type RegisteredOperation = {
 	readonly name: string;
-	readonly owner: OperationOwner;
+	readonly owner: Owner;
 	readonly kind: OperationKind;
 	readonly target: OperationTarget;
 	readonly right: string;
@@ -40,28 +37,8 @@ const OPERATION_NAME = /^[a-z]+(?:[A-Z][a-z0-9]*)+$/;
 
 const RIGHT_NAME = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*$/;
 
-export const CORE_OWNER_NAME = "core";
-
-export function ownerName(owner: OperationOwner): string {
-	switch (owner.kind) {
-		case "core":
-			return CORE_OWNER_NAME;
-		case "plugin":
-			return owner.name;
-	}
-}
-
-function describeOwner(owner: OperationOwner): string {
-	switch (owner.kind) {
-		case "core":
-			return "the core";
-		case "plugin":
-			return `plugin ${quote(owner.name)}`;
-	}
-}
-
 export function readOperations(
-	owner: OperationOwner,
+	owner: Owner,
 	declared: unknown,
 ): OperationsRead {
 	if (declared === undefined) return { value: [], problems: [] };
@@ -93,7 +70,7 @@ type OperationRead =
 	| { readonly valid: false; readonly problems: readonly string[] };
 
 function readOperation(
-	owner: OperationOwner,
+	owner: Owner,
 	position: number,
 	candidate: unknown,
 ): OperationRead {

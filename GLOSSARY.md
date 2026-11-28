@@ -83,7 +83,7 @@ Hintergrundarbeit eines Plugins, die eine Mutation oder ein Zeitplan einreiht un
 _Avoid_: Task, Hintergrundaufgabe, Worker
 
 **Cron-Job**:
-Ein Job, den keine Mutation einreiht, sondern ein Zeitplan, den das Plugin deklariert; er läuft für eine Fälligkeit höchstens einmal und für jede, solange nicht mehr als zehn verstreichen, ohne dass der Core sie einreiht.
+Ein Job, den keine Mutation einreiht, sondern ein Zeitplan, den ein Plugin oder der Core deklariert; er läuft für eine Fälligkeit höchstens einmal und für jede, solange nicht mehr als zehn verstreichen, ohne dass der Core sie einreiht.
 _Avoid_: Scheduled Task, Timer, Geplanter Job
 
 **Fälligkeit**:
@@ -133,6 +133,10 @@ _Avoid_: Geteiltes Layout, Layout-Vorlage
 **Operation**:
 Eine fachliche Aktion auf dem Server mit Eingabe-Schema, Autorisierung und Ergebnis; jede Operation ist über UI, HTTP-API, MCP und CLI erreichbar.
 _Avoid_: Action, Endpoint, Use Case (in der Plugin-Sprache)
+
+**Idempotency-Key**:
+Ein vom Akteur gewählter Schlüssel, unter dem der Core die Antwort einer gelungenen Mutation mindestens 24 Stunden lang festhält, damit ein wiederholter Aufruf mit demselben Schlüssel und derselben Eingabe sie nicht noch einmal ausführt, sondern dieselbe Antwort erhält.
+_Avoid_: Request-ID, Dedup-Key, Korrelations-ID (die ordnet nur Log-Einträge einer Anfrage zu)
 
 **Command**:
 Ein Eintrag in Command-Palette, Menü oder Tastenkürzel im Client, der eine Operation aufruft oder eine reine Client-Aktion ausführt.

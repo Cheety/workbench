@@ -11,6 +11,7 @@ import { Secret } from "./config.ts";
 import { type HookTimeout, setSystemTimer } from "./hook-timeout.ts";
 import { createJobQueue, enqueueJob } from "./job-queue.ts";
 import { type JobRegistry, readJobs, registerJobs } from "./job-registry.ts";
+import { pluginOwner } from "./owner.ts";
 import { startPollLoop } from "./poll-loop.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
@@ -52,7 +53,8 @@ function registryOf<Payload = { cardId: string }>(
 	...definitions: readonly JobDefinition<Payload>[]
 ): JobRegistry {
 	return registerJobs(
-		readJobs("mailer", { jobs: definitions, cronJobs: undefined }).value,
+		readJobs(pluginOwner("mailer"), { jobs: definitions, cronJobs: undefined })
+			.value,
 	);
 }
 
@@ -108,7 +110,7 @@ async function enqueueReminder(
 	await sql.begin((transaction) =>
 		enqueueJob(transaction, jobs, {
 			id,
-			plugin: "mailer",
+			owner: pluginOwner("mailer"),
 			definition: sendingReminders(async () => {}),
 			payload: { cardId: "card-1" },
 			enqueuedAt: NOW,
@@ -176,7 +178,7 @@ async function enqueue<Payload>(
 	await sql.begin((transaction) =>
 		enqueueJob(transaction, registryOf(definition), {
 			id: JOB,
-			plugin: "mailer",
+			owner: pluginOwner("mailer"),
 			definition,
 			payload,
 			enqueuedAt: NOW,
@@ -248,6 +250,22 @@ function cancellationBehindAGate(database: FreshDatabase): {
 		gate.close();
 	});
 	return { gate, cancellation };
+}
+
+function unreachablePostgres(database: FreshDatabase): {
+	readonly sql: SQL;
+	readonly cancellation: SQL;
+} {
+	const gate = PostgresGate.create(database.url);
+	gate.refuse();
+	const sql = new SQL(gate.url, { max: 1, connectionTimeout: 1 });
+	const cancellation = new SQL(gate.url, { max: 1, connectionTimeout: 1 });
+	cleanups.push(async () => {
+		await cancellation.close();
+		await sql.close();
+		gate.close();
+	});
+	return { sql, cancellation };
 }
 
 async function refuseNewConnections(database: FreshDatabase): Promise<void> {
@@ -1052,7 +1070,7 @@ describe("a job that fails", () => {
 
 function everyMinute(run: Date[]): JobRegistry {
 	return registerJobs(
-		readJobs("mailer", {
+		readJobs(pluginOwner("mailer"), {
 			jobs: undefined,
 			cronJobs: [
 				defineCronJob({
@@ -1214,7 +1232,7 @@ describe("a cron job of an instance with two processes", () => {
 		cleanups.push(() => second.close());
 		const run: Date[] = [];
 		const jobs = registerJobs(
-			readJobs("mailer", {
+			readJobs(pluginOwner("mailer"), {
 				jobs: undefined,
 				cronJobs: [
 					defineCronJob({
@@ -1281,7 +1299,7 @@ describe("a cron job of an instance with two processes", () => {
 	test("is not enqueued by a mutation under the name of a job", async () => {
 		const database = await migratedDatabase();
 		const jobs = registerJobs(
-			readJobs("mailer", {
+			readJobs(pluginOwner("mailer"), {
 				jobs: undefined,
 				cronJobs: [
 					defineCronJob({
@@ -1557,11 +1575,12 @@ describe("the job loop on the queue", () => {
 	});
 
 	test("tells the operator when a run of the queue fails as a whole, and waits for the next interval", async () => {
-		const database = await freshDatabase();
+		const database = await migratedDatabase();
 		const jobs = registryOf(sendingReminders(async () => {}));
+		const unreachable = unreachablePostgres(database);
 		const { queue, entries } = queueOf({
-			sql: database.sql,
-			cancellation: database.cancellation,
+			sql: unreachable.sql,
+			cancellation: unreachable.cancellation,
 			jobs,
 		});
 		const timer = manualTimer();
@@ -1593,9 +1612,10 @@ describe("the job loop on the queue", () => {
 describe("the job queue", () => {
 	test("asks Postgres for nothing until the core schema exists", async () => {
 		const database = await freshDatabase();
+		const unreachable = unreachablePostgres(database);
 		const { queue } = queueOf({
-			sql: database.sql,
-			cancellation: database.cancellation,
+			sql: unreachable.sql,
+			cancellation: unreachable.cancellation,
 			jobs: registryOf(sendingReminders(async () => {})),
 			hasCoreSchema: () => false,
 		});

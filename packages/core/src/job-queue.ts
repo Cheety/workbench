@@ -16,16 +16,16 @@ import {
 	type RegisteredJob,
 } from "./job-registry.ts";
 import type { Logger } from "./logger.ts";
+import { type Owner, ownerName, schemaOf } from "./owner.ts";
 import { quote } from "./quote.ts";
-import { pluginSchemaName } from "./schema-name.ts";
 import type { ValidationIssue } from "./schema-validation.ts";
 import { storedPayloadOf } from "./stored-payload.ts";
 import { runInTransactionWithin } from "./transaction-deadline.ts";
 
 export class UndeclaredJobError extends Error {
-	constructor(plugin: string, job: string) {
+	constructor(enqueuer: string, job: string) {
 		super(
-			`${quote(plugin)} enqueued the job ${quote(job)}, which it does not declare among its jobs`,
+			`${quote(enqueuer)} enqueued the job ${quote(job)}, which it does not declare among its jobs`,
 		);
 		this.name = "UndeclaredJobError";
 	}
@@ -45,7 +45,7 @@ export class InvalidJobPayloadError extends Error {
 
 export type JobEnqueueing = {
 	readonly id: string;
-	readonly plugin: string;
+	readonly owner: Owner;
 	readonly definition: JobDefinition<unknown>;
 	readonly payload: unknown;
 	readonly enqueuedAt: Date;
@@ -57,10 +57,11 @@ export async function enqueueJob(
 	jobs: JobRegistry,
 	enqueueing: JobEnqueueing,
 ): Promise<void> {
-	const name = jobName(enqueueing.plugin, enqueueing.definition);
+	const enqueuer = ownerName(enqueueing.owner);
+	const name = jobName(enqueuer, enqueueing.definition);
 	const job = jobs.find(name);
 	if (job === undefined || job.kind !== "enqueued")
-		throw new UndeclaredJobError(enqueueing.plugin, name);
+		throw new UndeclaredJobError(enqueuer, name);
 	const payload = await storedPayloadOf(
 		enqueueing.payload,
 		job.validatePayload,
@@ -403,9 +404,7 @@ async function run(
 		"now" | "newId" | "random" | "runTimeout" | "cancellation" | "logger"
 	>,
 ): Promise<void> {
-	await transaction.unsafe(
-		`SET LOCAL search_path TO "${pluginSchemaName(job.plugin)}"`,
-	);
+	await transaction.unsafe(`SET LOCAL search_path TO "${schemaOf(job.owner)}"`);
 	const outcome = await runInTransactionWithin(
 		transaction,
 		async ({ sql, expired }) => {

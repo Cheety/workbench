@@ -2,7 +2,11 @@ import { fileURLToPath } from "node:url";
 import { DATABASE_CAPABILITY } from "@workbench/sdk";
 import { CORE_OPERATIONS } from "./core-operations.ts";
 import type { SetTimer } from "./hook-timeout.ts";
-import { OPERATION_PATH_TEMPLATE } from "./http-api.ts";
+import { IDEMPOTENCY_KEY_HEADER, OPERATION_PATH_TEMPLATE } from "./http-api.ts";
+import {
+	IDEMPOTENCY_KEY_PATTERN,
+	TAKES_IDEMPOTENCY_KEY,
+} from "./idempotency-keys.ts";
 import type { JsonSchema } from "./json-schema.ts";
 import type { PluginPackage } from "./kernel.ts";
 import type { RegisteredOperation } from "./operation-registry.ts";
@@ -101,6 +105,22 @@ const CORRELATION_ID_HEADER_SCHEMA: JsonSchema = {
 	schema: { type: "string", pattern: VALID_CORRELATION_ID.source },
 };
 
+const WORKSPACE_PARAMETER: JsonSchema = {
+	name: "workspace",
+	in: "path",
+	required: true,
+	schema: { type: "string", format: "uuid" },
+};
+
+const IDEMPOTENCY_KEY_PARAMETER: JsonSchema = {
+	name: IDEMPOTENCY_KEY_HEADER,
+	in: "header",
+	required: false,
+	description:
+		"a key of the caller under which a repeated call receives the answer of the first instead of running the mutation again",
+	schema: { type: "string", pattern: IDEMPOTENCY_KEY_PATTERN },
+};
+
 const RESPONSE_HEADERS = {
 	[CORRELATION_ID_HEADER]: { $ref: CORRELATION_ID_REF },
 };
@@ -155,12 +175,10 @@ function describeOperation(operation: RegisteredOperation): OpenApiOperation {
 	return {
 		operationId: operation.name,
 		parameters: [
-			{
-				name: "workspace",
-				in: "path",
-				required: true,
-				schema: { type: "string", format: "uuid" },
-			},
+			WORKSPACE_PARAMETER,
+			...(TAKES_IDEMPOTENCY_KEY[operation.kind]
+				? [IDEMPOTENCY_KEY_PARAMETER]
+				: []),
 		],
 		requestBody: {
 			required: true,

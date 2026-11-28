@@ -21,7 +21,7 @@ Die Integrationstests laufen gegen ein echtes Postgres 17. Lokal startet es so:
 docker compose -f compose.dev.yaml up --detach --wait
 ```
 
-Die Datenbank lauscht auf `127.0.0.1:54329`, hält ihre Daten nur im Arbeitsspeicher und wird mit `docker compose -f compose.dev.yaml down` wieder entfernt. Eine andere Datenbank lässt sich über `TEST_DATABASE_URL` angeben. `compose.dev.yaml` dient nur der Entwicklung und ist keine Deployment-Datei.
+Die Datenbank lauscht auf `127.0.0.1:54329`, hält ihre Daten nur im Arbeitsspeicher und wird mit `docker compose -f compose.dev.yaml down` wieder entfernt. Sie bietet TLS mit einem selbst signierten Zertifikat für `localhost` an, das der Container bei jedem Start neu erzeugt und für sich behält; die Tests der Verbindung, die Anweisungen abbricht, lesen es per `pg_read_file` vom Server und scheitern mit `TestDatabaseWithoutTlsError`, wenn der Server kein TLS anbietet. Ein Container, der vor dieser Einstellung gestartet wurde, muss einmal mit `docker compose -f compose.dev.yaml up --detach --wait --force-recreate` neu erzeugt werden. Eine andere Datenbank lässt sich über `TEST_DATABASE_URL` angeben. `compose.dev.yaml` dient nur der Entwicklung und ist keine Deployment-Datei.
 
 ## Prüfbefehl
 
@@ -124,7 +124,7 @@ Seine SQL-Migrationen liegen in einem Verzeichnis des Plugin-Pakets, das die `pa
 - Jede Datei mit der Endung `.sql` ist eine Migration. Ihr Name besteht aus vier Ziffern, einem Unterstrich und Kleinbuchstaben, Ziffern oder Unterstrichen, z. B. `0001_create_notes.sql`; die Migrationen laufen in der Reihenfolge ihrer Namen. Andere Dateien bleiben unbeachtet.
 - Jede Migration läuft in einer eigenen Transaktion mit dem Schema des Plugins als `search_path`; Tabellen werden daher ohne Schema angelegt.
 - Angewandte Migrationen hält die Tabelle `core.migrations` fest (Schema, Dateiname, Zeitpunkt); ein erneuter Start wendet nur neue Migrationen an. Eine angewandte Migration wird nie geändert, sondern durch eine neue ergänzt.
-- Die Migrationen des Schemas `core` liegen in `packages/core/migrations` und laufen genauso, mit `core` als `search_path`. Sie legen `core.workspaces` an, die Tabelle der Workspaces (ADR-0002), `core.service_accounts` und `core.api_tokens` für die Service-Accounts und ihre API-Tokens (siehe [HTTP-API](#http-api)) `core.audit_entries` für das [Audit](#audit) sowie `core.events` und `core.event_deliveries`, die Outbox der [Events](#events), und `core.jobs`, die Job-Queue der [Jobs](#jobs). Schlägt eine davon fehl, meldet das Log `instance failed to start` mit `reason` `core_schema_not_migrated`, und die Instanz lädt keine Plugins.
+- Die Migrationen des Schemas `core` liegen in `packages/core/migrations` und laufen genauso, mit `core` als `search_path`. Sie legen `core.workspaces` an, die Tabelle der Workspaces (ADR-0002), `core.service_accounts` und `core.api_tokens` für die Service-Accounts und ihre API-Tokens (siehe [HTTP-API](#http-api)) `core.audit_entries` für das [Audit](#audit) sowie `core.events` und `core.event_deliveries`, die Outbox der [Events](#events), `core.jobs`, die Job-Queue der [Jobs](#jobs), und `core.idempotency_keys` für die [Idempotency-Keys](#idempotency-keys). Schlägt eine davon fehl, meldet das Log `instance failed to start` mit `reason` `core_schema_not_migrated`, und die Instanz lädt keine Plugins.
 - Jeder Migrationslauf (erst `core`, dann die Schemas der Plugins) hält dieselbe Postgres-Advisory-Lock. Starten zwei Prozesse gleichzeitig, wartet der zweite (Log-Eintrag `migration lock held by another run, waiting`) und wendet nichts doppelt an. Ein Signal beendet das Warten; eine laufende Migration läuft zu Ende, weitere beginnen nicht. Jede Anweisung eines Laufs darf höchstens 60 s dauern, das Warten auf Tabellensperren eingeschlossen; dauert sie länger, schlägt die Migration fehl (`migration failed`) und der Lauf gibt die Lock frei (Begründung in ADR-0008).
 - Schlägt eine Migration fehl, wird sie zurückgerollt; die folgenden Migrationen desselben Schemas laufen nicht, die anderer Schemas schon. Das Log nennt Schema, Migration und Fehler (`migration failed`), das Plugin wird nicht geladen (`migration_failed`), und die Instanz meldet nicht „bereit“.
 - Nennt die `package.json` Migrationen, deklariert das Manifest aber nicht `database`, ist das Manifest ungültig.
@@ -166,13 +166,15 @@ Ein Akteur ruft eine Operation mit ihrem Namen, einem Workspace und einer Eingab
 
 Wirft `execute`, passt die Ausgabe nicht zum Schema oder lässt sich der Audit-Eintrag nicht schreiben, wird die Transaktion zurückgerollt, samt der Events, die die Mutation publiziert, und der Jobs, die sie eingereiht hat. Ein fachlicher Fehler ist ein `OperationError` aus `@workbench/sdk` mit Art (`not_found`, `conflict`, `rejected`), Code (Kleinbuchstaben, Ziffern, Unterstriche) und einer Meldung für den Aufrufer; der Aufrufer erhält den Code als `<plugin>.<code>`, von einer Operation des Cores als `core.<code>`. Jeder andere Fehler erreicht den Aufrufer nur als `internal_error`.
 
-| Code                  | Art             | Bedeutung                                                                                                                                           |
-| --------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `invalid_input`       | `invalid_input` | Die Eingabe passt nicht zum Eingabe-Schema; `issues` nennt je Befund Pfad und Meldung.                                                              |
-| `unknown_operation`   | `not_found`     | Weder der Core noch ein aktives Plugin hat eine Operation dieses Namens.                                                                            |
-| `workspace_not_found` | `not_found`     | Der Workspace existiert nicht.                                                                                                                      |
-| `internal_error`      | `internal`      | `execute` warf einen anderen Fehler als `OperationError`, die Ausgabe passt nicht zum Schema, oder die Pipeline scheiterte außerhalb von `execute`. |
-| `<plugin>.<code>`     | aus dem Fehler  | `execute` warf einen `OperationError`.                                                                                                              |
+| Code                      | Art             | Bedeutung                                                                                                                                           |
+| ------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `invalid_input`           | `invalid_input` | Die Eingabe passt nicht zum Eingabe-Schema; `issues` nennt je Befund Pfad und Meldung.                                                              |
+| `invalid_idempotency_key` | `invalid_input` | Der Idempotency-Key hat nicht 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen ohne Komma.                                                        |
+| `idempotency_key_reused`  | `rejected`      | Der Idempotency-Key wurde schon für eine andere Operation, einen anderen Workspace oder eine andere Eingabe verwendet.                              |
+| `unknown_operation`       | `not_found`     | Weder der Core noch ein aktives Plugin hat eine Operation dieses Namens.                                                                            |
+| `workspace_not_found`     | `not_found`     | Der Workspace existiert nicht.                                                                                                                      |
+| `internal_error`          | `internal`      | `execute` warf einen anderen Fehler als `OperationError`, die Ausgabe passt nicht zum Schema, oder die Pipeline scheiterte außerhalb von `execute`. |
+| `<plugin>.<code>`         | aus dem Fehler  | `execute` warf einen `OperationError`.                                                                                                              |
 
 Ein `internal_error` steht mit `correlationId`, `operation` und `reason` im Log als Eintrag `operation failed`: `execute_threw`, wenn `execute` warf, mit dem Fehler in `error`; `invalid_output` mit den Befunden des Ausgabe-Schemas in `issues`; oder `pipeline_failed`, wenn die Pipeline außerhalb von `execute` scheiterte (etwa ein Schema, das wirft oder ein Ergebnis liefert, das nicht Standard Schema entspricht, ein unerreichbares Postgres beim Öffnen der Transaktion oder beim Prüfen des Workspace, ein Audit-Eintrag, der sich nicht schreiben lässt, ein gescheitertes Festschreiben), mit dem Fehler in `error`.
 
@@ -190,7 +192,19 @@ Jedes Scheitern lässt sich als Problem Details nach RFC 9457 abbilden (`toProbl
 }
 ```
 
-Die Pipeline prüft bisher weder Rechte noch Idempotency-Keys; das folgt mit Identität und Zugriff.
+Die Pipeline prüft bisher keine Rechte; das folgt mit Identität und Zugriff.
+
+#### Idempotency-Keys
+
+Ein Akteur kann einer Mutation einen Idempotency-Key mitgeben, damit eine Wiederholung, etwa nach einer Zeitüberschreitung, keinen zweiten Effekt hat (ADR-0017). Der Key ist 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen ohne Komma lang, sonst scheitert die Mutation mit `invalid_idempotency_key`, bevor irgendetwas läuft.
+
+- Der erste Aufruf mit einem Key führt die Mutation aus und hält ihre Antwort in `core.idempotency_keys` fest, in ihrer Transaktion. Jeder weitere Aufruf desselben Akteurs mit demselben Key, derselben Operation, demselben Workspace und derselben Eingabe erhält dieselbe Antwort, ohne dass `execute` läuft, und hinterlässt keinen Audit-Eintrag, kein Event und keinen Job. Die Eingabe gilt als dieselbe, wenn ihr JSON dieselben Felder mit denselben Werten hat, in beliebiger Reihenfolge.
+- Nennt ein weiterer Aufruf mit demselben Key eine andere Operation, einen anderen Workspace oder eine andere Eingabe, scheitert er mit `idempotency_key_reused`, und die Mutation läuft nicht.
+- Kommt ein zweiter Aufruf mit demselben Key, während der erste noch läuft, wartet er auf ihn und antwortet wie er; scheitert der erste, führt der zweite die Mutation aus.
+- Keys sind je Akteur getrennt: Derselbe Key zweier Akteure, auch eines Nutzers und eines Service-Accounts mit derselben ID, sind zwei Keys.
+- Scheitert die Mutation, bleibt der Key frei: Ein weiterer Aufruf mit ihm führt sie erneut aus.
+- Eine Query beachtet den Key nicht, auch nicht seine Form, und läuft bei jedem Aufruf.
+- Ein Key gilt mindestens 24 Stunden ab seinem ersten Aufruf. Danach löscht ihn der Cron-Job des Cores `core.removeExpiredIdempotencyKeys`, der alle zehn Minuten (`*/10 * * * *`) läuft und je Lauf höchstens 10 000 abgelaufene Keys löscht; mit ihm verschwindet die festgehaltene Antwort. Bis er gelöscht ist, gilt ein abgelaufener Key weiter, danach führt ein Aufruf mit ihm die Mutation wieder aus.
 
 ### Audit
 
@@ -385,7 +399,7 @@ Die Job-Queue `core.jobs` zeigt den Stand jedes Jobs: `state` ist `pending`, `co
 UPDATE core.jobs SET state = 'pending', settled_at = NULL, attempts = 0, next_attempt_at = now() WHERE id = '…';
 ```
 
-Abgeschlossene Jobs bleiben nicht für immer in `core.jobs`: Der Core löscht einen erledigten Job (`completed`) 7 Tage und einen Job im Dead-Letter (`dead`) 30 Tage nach `settled_at`. Von Hand wieder einreihen lässt sich ein Job im Dead-Letter also nur innerhalb dieser 30 Tage; danach ist er samt Payload fort. Ein offener Job (`pending`) wird nie gelöscht, wie lange er auch liegt, und je Cron-Job bleibt die Zeile mit der jüngsten Fälligkeit stehen, weil der Core an sie anschließt. Die Fristen sind fest und rechnen mit der Uhr der Instanz. Jeder Prozess sieht dafür einmal je Stunde am Ende eines Durchgangs nach und löscht höchstens 1000 Zeilen auf einmal; waren es 1000, macht er im nächsten Durchgang weiter, bis nichts mehr übrig ist. Hat er etwas gelöscht, steht mit `LOG_LEVEL=debug` der Eintrag `settled jobs removed` mit der Zahl `removed` im Log. Gelöscht wird auch in einer Instanz, in der kein aktives Plugin einen Job deklariert, sobald das Core-Schema migriert ist.
+Abgeschlossene Jobs bleiben nicht für immer in `core.jobs`: Der Core löscht einen erledigten Job (`completed`) 7 Tage und einen Job im Dead-Letter (`dead`) 30 Tage nach `settled_at`. Von Hand wieder einreihen lässt sich ein Job im Dead-Letter also nur innerhalb dieser 30 Tage; danach ist er samt Payload fort. Ein offener Job (`pending`) wird nie gelöscht, wie lange er auch liegt, und je Cron-Job bleibt die Zeile mit der jüngsten Fälligkeit stehen, weil der Core an sie anschließt. Die Fristen sind fest und rechnen mit der Uhr der Instanz. Jeder Prozess sieht dafür einmal je Stunde am Ende eines Durchgangs nach und löscht höchstens 1000 Zeilen auf einmal; waren es 1000, macht er im nächsten Durchgang weiter, bis nichts mehr übrig ist. Hat er etwas gelöscht, steht mit `LOG_LEVEL=debug` der Eintrag `settled jobs removed` mit der Zahl `removed` im Log. Gelöscht wird auch in einer Instanz, in der kein aktives Plugin einen Job deklariert, sobald das Core-Schema migriert ist. Außerdem steht dort immer der Cron-Job des Cores `core.removeExpiredIdempotencyKeys` (siehe [Idempotency-Keys](#idempotency-keys)); Namen `core.<name>` gehören dem Core.
 
 - Beginnt ein Versuch, zählt der Core ihn sofort und stellt den Job für die Wiederzustellungsfrist zurück: die Frist eines Versuchs (`PLUGIN_HOOK_TIMEOUT_MS`) plus 60 s. Endet der Prozess mitten im Versuch, läuft der Job nach dieser Frist erneut, auch in einem anderen Prozess; der abgebrochene Versuch zählt mit, und war es der letzte, landet der Job mit `attempt_lost` im Dead-Letter. Weil die Frist länger ist als die eines Versuchs, laufen nie zwei Versuche desselben Jobs zugleich, solange `run` seine Frist einhält.
 - Die Reihenfolge ist nicht zugesichert: Ein Job, der scheitert, hält die übrigen nicht auf.
@@ -447,6 +461,8 @@ const result = await harness.call({
 await harness.stop();
 ```
 
+Ein Aufruf kann einen `idempotencyKey` nennen; ohne ihn gilt er als Aufruf ohne Key (siehe [Idempotency-Keys](#idempotency-keys)).
+
 `result` ist `{ ok: true, output }` oder `{ ok: false, failure }` mit `code`, `kind`, `detail` und `issues`. Ohne Angabe gibt das Harness eine feste Uhr (`2026-11-26T08:00:00.000Z`), fortlaufende IDs im UUID-Format (`00000000-0000-4000-8000-000000000001`, …), den Audit-Einträgen fortlaufende IDs aus einer eigenen Folge (`00000000-0000-4000-a000-000000000001`, …), sodass eine Mutation die IDs der folgenden Operationen nicht verschiebt, den Events fortlaufende IDs aus einer dritten Folge (`00000000-0000-4000-e000-000000000001`, …), den Jobs aus einer vierten (`00000000-0000-4000-b000-000000000001`, …), `random()` = `0.5` und jedem Aufruf eine fortlaufende Correlation-ID (`harness-call-1`, …), unter der die Pipeline loggt; `now`, `newId`, `newAuditEntryId`, `random` und `newCorrelationId` lassen sich als Optionen übergeben. Lädt ein Plugin nicht, wirft `startOperationHarness` einen `HarnessStartError` mit dem Ladefehler. `harness.logEntries` enthält die Log-Einträge.
 
 Events stellt das Harness nicht von selbst zu: `await harness.deliverEvents()` ruft die Handler aller fälligen Zustellungen auf und kehrt zurück, wenn jede einmal versucht ist. Eine gescheiterte Zustellung wird erst wieder fällig, wenn die Uhr des Harness (`now`) weiter ist als ihre Wartezeit. Stellt ein Test die Uhr um Tage vor, legt `deliverEvents()` wie die Instanz die Zustellungen in den Dead-Letter, deren Zustellfrist abgelaufen ist, und löscht die Events aus der Outbox, deren Zustellungen alle seit 7 Tagen gelungen oder im Dead-Letter sind.
@@ -467,22 +483,25 @@ curl -X POST "http://127.0.0.1:3000/api/workspaces/$WORKSPACE/operations/referen
 
 - Der Pfad ist `POST /api/workspaces/{workspace}/operations/{operation}`, auch für eine Query. Der Body ist die Eingabe als JSON, höchstens 1 MiB (1048576 Bytes); die Antwort 200 enthält die Ausgabe der Operation. Eine andere Methode auf diesem Pfad beantwortet die API vor der Prüfung des Tokens mit 405 und `Allow: POST`, als Problem Details mit `code` `method_not_allowed`.
 - Jeder Aufruf braucht ein API-Token als `Authorization: Bearer <token>`; das Schema `Bearer` gilt in beliebiger Groß- und Kleinschreibung (RFC 9110). Fehlt es, steht es in einem anderen Schema, ist es unbekannt oder abgelaufen, antwortet die API mit 401 und `WWW-Authenticate: Bearer`, als Problem Details mit `code` `unauthenticated`. Die Antwort sagt nicht, welcher Fall vorlag; das Log nennt ihn im Eintrag `request not authenticated` mit `reason` (`missing_token`, `unknown_token`, `expired_token`). Der Akteur des Aufrufs ist der Service-Account des Tokens.
+- Den Idempotency-Key einer Mutation nennt der Header `Idempotency-Key` (siehe [Idempotency-Keys](#idempotency-keys)), als Text (`Idempotency-Key: retry-1`) oder als String der Structured Fields nach RFC 9651 in Anführungszeichen (`Idempotency-Key: "retry-1"`), wie im Entwurf der IETF; beide nennen denselben Key. Weil ein Key kein Komma enthält, scheitert eine Mutation mit einem doppelt geschickten Header mit `invalid_idempotency_key`: Der Server sieht zwei Header als einen Wert, durch `, ` getrennt. Eine Wiederholung antwortet mit 200 und demselben Body wie der erste Aufruf. Eine Query beachtet den Header nicht.
 - Jede Datenbankanweisung einer Anfrage darf höchstens 60 s dauern (`statement_timeout`); dauert sie länger, scheitert die Anfrage.
 - Jedes Scheitern kommt als Problem Details mit `Content-Type: application/problem+json` und der Korrelations-ID in `correlationId`, mit dem Status nach der Art (siehe [Aufruf einer Operation](#aufruf-einer-operation)). Ein interner Fehler nennt nur `internal_error` und eine neutrale Meldung, nie Stacktrace, Pfad oder Query; die Details stehen unter derselben Korrelations-ID im Log.
 
-| Code                   | Status | Bedeutung                                                                |
-| ---------------------- | ------ | ------------------------------------------------------------------------ |
-| `unauthenticated`      | 401    | Kein gültiges API-Token.                                                 |
-| `invalid_input`        | 400    | Der Body ist kein JSON, oder die Eingabe passt nicht zum Eingabe-Schema. |
-| `route_not_found`      | 404    | Weder Methode noch Pfad passen zu einer Route.                           |
-| `method_not_allowed`   | 405    | Der Pfad einer Operation mit anderer Methode als `POST`.                 |
-| `malformed_path`       | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                       |
-| `invalid_workspace_id` | 400    | Der Workspace im Pfad ist keine UUID.                                    |
-| `workspace_not_found`  | 404    | Kein Workspace hat diese UUID.                                           |
-| `unknown_operation`    | 404    | Weder der Core noch ein aktives Plugin hat eine Operation dieses Namens. |
-| `body_too_large`       | 413    | Der Body ist größer als 1 MiB.                                           |
-| `instance_not_ready`   | 503    | Die Instanz startet noch oder ihr Start ist gescheitert.                 |
-| `internal_error`       | 500    | Die Anfrage scheiterte aus einem internen Grund.                         |
+| Code                      | Status | Bedeutung                                                                                                                   |
+| ------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `unauthenticated`         | 401    | Kein gültiges API-Token.                                                                                                    |
+| `invalid_input`           | 400    | Der Body ist kein JSON, oder die Eingabe passt nicht zum Eingabe-Schema.                                                    |
+| `route_not_found`         | 404    | Weder Methode noch Pfad passen zu einer Route.                                                                              |
+| `method_not_allowed`      | 405    | Der Pfad einer Operation mit anderer Methode als `POST`.                                                                    |
+| `malformed_path`          | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                                                                          |
+| `invalid_workspace_id`    | 400    | Der Workspace im Pfad ist keine UUID.                                                                                       |
+| `workspace_not_found`     | 404    | Kein Workspace hat diese UUID.                                                                                              |
+| `unknown_operation`       | 404    | Weder der Core noch ein aktives Plugin hat eine Operation dieses Namens.                                                    |
+| `body_too_large`          | 413    | Der Body ist größer als 1 MiB.                                                                                              |
+| `invalid_idempotency_key` | 400    | Der Header `Idempotency-Key` hat nicht 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen ohne Komma, oder er kam mehrfach. |
+| `idempotency_key_reused`  | 422    | Der Idempotency-Key kam schon mit einer anderen Operation, einem anderen Workspace oder einem anderen Body.                 |
+| `instance_not_ready`      | 503    | Die Instanz startet noch oder ihr Start ist gescheitert.                                                                    |
+| `internal_error`          | 500    | Die Anfrage scheiterte aus einem internen Grund.                                                                            |
 
 #### Service-Account und API-Token anlegen
 

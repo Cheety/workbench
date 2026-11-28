@@ -514,13 +514,33 @@ describe("a page of the audit", () => {
 	});
 });
 
+const auditRefusal: PluginPackage = {
+	packageName: "@workbench/plugin-refusal",
+	pluginName: "refusal",
+	version: "1.0.0",
+	loadDefinition: async () =>
+		definePlugin({
+			manifest: { name: "refusal", capabilities: [DATABASE_CAPABILITY] },
+		}),
+	loadMigrations: async () => [
+		{
+			name: "0001_refuse_audit_entries.sql",
+			sql: `CREATE FUNCTION refuse_audit_entry() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'audit entries are refused'; END $$;
+CREATE TRIGGER refuse_audit_entry BEFORE INSERT ON core.audit_entries FOR EACH ROW EXECUTE FUNCTION refuse_audit_entry();`,
+		},
+	],
+};
+
 describe("a mutation whose audit entry cannot be written", () => {
 	test("is rolled back and fails as an internal error", async () => {
-		const harness = await startLedger();
+		const harness = await startOperationHarness({
+			plugins: [ledger, auditRefusal],
+		});
+		harnesses.push(harness);
 		const workspace = await harness.createWorkspace("Accounts");
 
 		const added = await harness.call({
-			actor: { kind: "user", id: "" },
+			actor: ALICE,
 			workspace,
 			operation: "ledger.addEntry",
 			input: { amount: 42 },
@@ -531,12 +551,14 @@ describe("a mutation whose audit entry cannot be written", () => {
 			operation: "ledger.listEntries",
 			input: {},
 		});
+		const audited = await listAuditEntries(harness, workspace, FIRST_TEN);
 
 		expect(added).toEqual({
 			ok: false,
 			failure: expect.objectContaining({ code: "internal_error" }),
 		});
 		expect(listed).toEqual({ ok: true, output: { entries: [] } });
+		expect(pageOf(audited)).toEqual({ entries: [], nextCursor: null });
 		expect(harness.logEntries).toContainEqual(
 			expect.objectContaining({
 				level: "error",

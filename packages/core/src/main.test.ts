@@ -347,16 +347,27 @@ describe("migrations at start", () => {
 		const database = await freshDatabase();
 		const env = { DATABASE_URL: database.url, PORT: "0", PLUGINS: "reference" };
 		const first = spawnInstance(env);
-		await readLog(first.stdout).until("instance started");
+		const firstStartup = await readLog(first.stdout).until("instance started");
 		first.kill("SIGTERM");
 		await first.exited;
+		const recordedBefore =
+			await database.sql`SELECT schema_name, migration, applied_at FROM core.migrations ORDER BY schema_name, migration`;
 		const second = spawnInstance(env);
 
-		const startup = await readLog(second.stdout).until("instance started");
+		const secondStartup = await readLog(second.stdout).until(
+			"instance started",
+		);
 
-		expect(startup.map((entry) => entry.message)).not.toContain(
+		const recordedAfter =
+			await database.sql`SELECT schema_name, migration, applied_at FROM core.migrations ORDER BY schema_name, migration`;
+		expect(firstStartup.map((entry) => entry.message)).toContain(
 			"migration applied",
 		);
+		expect(recordedBefore).not.toBeEmpty();
+		expect(secondStartup.map((entry) => entry.message)).not.toContain(
+			"migration applied",
+		);
+		expect(recordedAfter).toEqual(recordedBefore);
 	});
 
 	test("wait for an unreachable database, then migrate and report ready", async () => {

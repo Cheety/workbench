@@ -12,6 +12,20 @@ services:
       - "127.0.0.1:54329:5432"
     tmpfs:
       - /var/lib/postgresql/data
+    entrypoint:
+      - bash
+      - -euc
+      - |
+        mkdir -p /etc/postgresql/tls
+        openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+          -subj /CN=localhost -addext subjectAltName=DNS:localhost \
+          -keyout /etc/postgresql/tls/server.key \
+          -out /etc/postgresql/tls/server.crt
+        chown postgres:postgres /etc/postgresql/tls/server.key
+        chmod 600 /etc/postgresql/tls/server.key
+        exec docker-entrypoint.sh postgres -c ssl=on \
+          -c ssl_cert_file=/etc/postgresql/tls/server.crt \
+          -c ssl_key_file=/etc/postgresql/tls/server.key
     healthcheck:
       test:
         ["CMD-SHELL", "pg_isready --username workbench --dbname workbench_test"]
