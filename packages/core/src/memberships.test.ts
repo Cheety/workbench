@@ -139,93 +139,83 @@ async function startBellPipeline(
 	});
 }
 
-function lockingTheMembership(database: FreshDatabase): Promise<unknown> {
-	return database.sql.begin(
-		(transaction) => transaction`
-			SELECT role FROM core.memberships
-			WHERE workspace_id = ${WORKSPACE} AND actor_kind = ${ALICE.kind} AND actor_id = ${ALICE.id}
-			FOR UPDATE NOWAIT`,
-	);
+type Invoke = (
+	actor: Actor,
+	operation: string,
+	workspace: string | null,
+	input: unknown,
+) => Promise<OperationResult>;
+
+function invokerOf(pipeline: OperationPipeline): Invoke {
+	return (actor, operation, workspace, input) =>
+		pipeline.invoke({
+			operation,
+			actor,
+			apiTokenId: null,
+			idempotencyKey: null,
+			workspace,
+			input,
+			correlationId: operation,
+		});
 }
 
 describe("the membership checked for a mutation", () => {
-	test("cannot be revoked while the mutation runs", async () => {
+	test("cannot be revoked through core.revokeMembership while the mutation runs", async () => {
 		const database = await createFreshDatabase();
 		cleanups.push(() => database.drop());
 		const behind = gate();
-		const pipeline = await startBellPipeline(database, bellRungBehind(behind));
-		const ringing: Promise<OperationResult> = pipeline.invoke({
-			operation: "bell.ringBell",
-			actor: ALICE,
-			apiTokenId: null,
-			idempotencyKey: null,
-			workspace: WORKSPACE,
-			input: {},
-			correlationId: "call-1",
-		});
-		await behind.entered;
-
-		const revoked = await lockingTheMembership(database).then(
-			() => "revoked",
-			(error: unknown) => (error instanceof Error ? error.message : error),
+		const invoke = invokerOf(
+			await startBellPipeline(database, bellRungBehind(behind)),
 		);
+		const ringing = invoke(ALICE, "bell.ringBell", WORKSPACE, {});
+		await behind.entered;
+		const revoking = invoke(ADMIN, "core.revokeMembership", WORKSPACE, {
+			actor: ALICE,
+		});
+
+		const first = await lockWaitOrEnd(database, revoking);
 		behind.open();
 
-		expect(revoked).toStartWith("could not obtain lock on row");
+		expect(first).toBe("waiting for a lock");
 		expect(await ringing).toEqual({ ok: true, output: { rung: true } });
+		expect(await revoking).toEqual({
+			ok: true,
+			output: { revoked: true, role: "owner" },
+		});
 	});
 
-	test("keeps its role from being redefined while the mutation runs", async () => {
+	test("keeps its role from being changed through core.grantMembership while the mutation runs", async () => {
 		const database = await createFreshDatabase();
 		cleanups.push(() => database.drop());
 		const behind = gate();
-		const pipeline = await startBellPipeline(database, bellRungBehind(behind));
-		const ringing: Promise<OperationResult> = pipeline.invoke({
-			operation: "bell.ringBell",
-			actor: ALICE,
-			apiTokenId: null,
-			idempotencyKey: null,
-			workspace: WORKSPACE,
-			input: {},
-			correlationId: "call-1",
-		});
+		const invoke = invokerOf(
+			await startBellPipeline(database, bellRungBehind(behind)),
+		);
+		const ringing = invoke(ALICE, "bell.ringBell", WORKSPACE, {});
 		await behind.entered;
+		const changing = invoke(ADMIN, "core.grantMembership", WORKSPACE, {
+			actor: ALICE,
+			role: "viewer",
+		});
 
-		const redefined = await database.sql
-			.begin(
-				(transaction) => transaction`
-					SELECT name FROM core.roles WHERE name = 'owner' FOR UPDATE NOWAIT`,
-			)
-			.then(
-				() => "redefined",
-				(error: unknown) => (error instanceof Error ? error.message : error),
-			);
+		const first = await lockWaitOrEnd(database, changing);
 		behind.open();
 
-		expect(redefined).toStartWith("could not obtain lock on row");
+		expect(first).toBe("waiting for a lock");
 		expect(await ringing).toEqual({ ok: true, output: { rung: true } });
+		expect(await changing).toEqual({
+			ok: true,
+			output: { workspace: WORKSPACE, actor: ALICE, role: "viewer" },
+		});
 	});
 
 	test("keeps its custom role from being redefined through core.defineRole while the mutation runs", async () => {
 		const database = await createFreshDatabase();
 		cleanups.push(() => database.drop());
 		const behind = gate();
-		const pipeline = await startBellPipeline(database, bellRungBehind(behind));
-		const invoke = (
-			actor: Actor,
-			operation: string,
-			workspace: string | null,
-			input: unknown,
-		): Promise<OperationResult> =>
-			pipeline.invoke({
-				operation,
-				actor,
-				apiTokenId: null,
-				idempotencyKey: null,
-				workspace,
-				input,
-				correlationId: operation,
-			});
+		const invoke = invokerOf(
+			await startBellPipeline(database, bellRungBehind(behind)),
+		);
 		await invoke(ADMIN, "core.defineRole", null, {
 			name: "ringer",
 			rights: ["bell.bell.ring"],
