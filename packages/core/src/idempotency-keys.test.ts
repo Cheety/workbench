@@ -495,6 +495,7 @@ async function startLedgerPipeline(
 		newJobId: () => crypto.randomUUID(),
 		eventsCommitted: () => {},
 		jobsCommitted: () => {},
+		newApiToken: () => new Secret("wbt_unused-token"),
 		isInstanceAdmin: () => false,
 		random: () => 0.5,
 		logger,
@@ -595,7 +596,7 @@ function addingEntryBehindTheLock(
 	return pipeline.invoke({
 		operation: "ledger.addEntryBehindLock",
 		actor: ALICE,
-		apiTokenId: null,
+		apiToken: null,
 		idempotencyKey: "retry-1",
 		workspace: WORKSPACE,
 		input: { amount },

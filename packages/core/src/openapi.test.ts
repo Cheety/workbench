@@ -250,13 +250,13 @@ describe("the OpenAPI document of the HTTP API", () => {
 		[
 			"a workspace",
 			"board.renameLabel",
-			["missing_right"],
+			["missing_right", "operation_outside_token_scope"],
 			["workspace_not_found"],
 		],
 		[
 			"an object",
 			"board.moveLabel",
-			["missing_right", "not_object_holder"],
+			["missing_right", "operation_outside_token_scope", "not_object_holder"],
 			["workspace_not_found", "object_not_found"],
 		],
 	])(
@@ -313,7 +313,17 @@ describe("the OpenAPI document of the HTTP API", () => {
 							schema: {
 								allOf: [
 									{ $ref: "#/components/schemas/ProblemDetails" },
-									{ properties: { code: { enum: ["not_instance_admin"] } } },
+									{
+										properties: {
+											code: {
+												enum: [
+													"not_instance_admin",
+													"instance_outside_token_scope",
+													"operation_outside_token_scope",
+												],
+											},
+										},
+									},
 								],
 							},
 						},
@@ -340,7 +350,16 @@ describe("the OpenAPI document of the HTTP API", () => {
 						schema: {
 							allOf: [
 								{ $ref: "#/components/schemas/ProblemDetails" },
-								{ properties: { code: { enum: ["not_instance_admin"] } } },
+								{
+									properties: {
+										code: {
+											enum: [
+												"not_instance_admin",
+												"operation_outside_token_scope",
+											],
+										},
+									},
+								},
 							],
 						},
 					},
@@ -349,15 +368,49 @@ describe("the OpenAPI document of the HTTP API", () => {
 		});
 	});
 
-	test("names no denied call for the list of workspaces, which every actor calls", async () => {
+	test("names only the scope of the token as a denied call for the list of workspaces, which every actor calls", async () => {
+		const document = await describeHttpApi([], setSystemTimer);
+
+		const responses =
+			document.paths["/api/operations/core.listWorkspaces"]?.post?.responses;
+
+		expect(Object.keys(responses ?? {})).toEqual([
+			"200",
+			"401",
+			"403",
+			"default",
+		]);
+		expect(responses).toMatchObject({
+			"403": {
+				content: {
+					"application/problem+json": {
+						schema: {
+							allOf: [
+								{ $ref: "#/components/schemas/ProblemDetails" },
+								{
+									properties: {
+										code: {
+											enum: [
+												"instance_outside_token_scope",
+												"operation_outside_token_scope",
+											],
+										},
+									},
+								},
+							],
+						},
+					},
+				},
+			},
+		});
+	});
+
+	test("offers no Idempotency-Key header to core.createApiToken, whose answer holds the token", async () => {
 		const document = await describeHttpApi([], setSystemTimer);
 
 		expect(
-			Object.keys(
-				document.paths["/api/operations/core.listWorkspaces"]?.post
-					?.responses ?? {},
-			),
-		).toEqual(["200", "401", "default"]);
+			document.paths["/api/operations/core.createApiToken"]?.post?.parameters,
+		).toEqual([]);
 	});
 
 	test("offers a mutation, but not a query, an optional Idempotency-Key header", async () => {

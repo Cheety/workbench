@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { authenticateToken, newApiToken } from "./api-tokens.ts";
+import {
+	authenticateToken,
+	newApiToken,
+	UNLIMITED_TOKEN_SCOPE,
+} from "./api-tokens.ts";
 import { Secret } from "./config.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import {
@@ -71,7 +75,11 @@ describe("creating a service account", () => {
 		).toEqual({
 			authenticated: true,
 			actor: { kind: "service_account", id: issued.serviceAccountId },
-			apiTokenId: expect.any(String),
+			apiToken: {
+				id: expect.any(String),
+				expiresAt: THIRTY_DAYS_LATER,
+				scope: UNLIMITED_TOKEN_SCOPE,
+			},
 		});
 		expect(
 			await authenticateToken(

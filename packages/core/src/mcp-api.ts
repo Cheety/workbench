@@ -14,10 +14,7 @@ import {
 	authenticateRequest,
 	type HttpApi,
 } from "./http-api.ts";
-import {
-	IDEMPOTENCY_KEY_PATTERN,
-	TAKES_IDEMPOTENCY_KEY,
-} from "./idempotency-keys.ts";
+import { IDEMPOTENCY_KEY_PATTERN } from "./idempotency-keys.ts";
 import {
 	INVALID_IDEMPOTENCY_KEY,
 	WORKSPACE_NOT_EXPECTED,
@@ -146,7 +143,7 @@ function toolOf(operation: RegisteredOperation): Tool {
 			properties: {
 				...scope.properties,
 				input: operation.describeInput(),
-				...(TAKES_IDEMPOTENCY_KEY[operation.kind]
+				...(operation.takesIdempotencyKey
 					? { idempotencyKey: IDEMPOTENCY_KEY_ARGUMENT }
 					: {}),
 			},
@@ -174,12 +171,12 @@ async function callTool(
 	if (!workspace.valid) return toolError(workspace.problem, correlationId);
 	const key = params.arguments?.idempotencyKey ?? null;
 	const idempotencyKey = typeof key === "string" ? key : null;
-	if (key !== idempotencyKey && TAKES_IDEMPOTENCY_KEY[operation.kind])
+	if (key !== idempotencyKey && operation.takesIdempotencyKey)
 		return toolError(INVALID_IDEMPOTENCY_KEY, correlationId);
 	const result = await api.pipeline.invoke({
 		operation: operation.name,
 		actor: authentication.actor,
-		apiTokenId: authentication.apiTokenId,
+		apiToken: authentication.apiToken,
 		idempotencyKey,
 		workspace: workspace.workspace,
 		input: params.arguments?.input,

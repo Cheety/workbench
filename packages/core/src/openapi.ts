@@ -9,10 +9,7 @@ import {
 	OPERATION_LIST_PATH,
 	OPERATION_PATH_TEMPLATE,
 } from "./http-api.ts";
-import {
-	IDEMPOTENCY_KEY_PATTERN,
-	TAKES_IDEMPOTENCY_KEY,
-} from "./idempotency-keys.ts";
+import { IDEMPOTENCY_KEY_PATTERN } from "./idempotency-keys.ts";
 import type { JsonSchema } from "./json-schema.ts";
 import type { PluginPackage } from "./kernel.ts";
 import { denialsOf } from "./operation-pipeline.ts";
@@ -253,9 +250,7 @@ function describeOperation(operation: RegisteredOperation): OpenApiOperation {
 		operationId: operation.name,
 		parameters: [
 			...SCOPE_PARAMETERS[operation.scope],
-			...(TAKES_IDEMPOTENCY_KEY[operation.kind]
-				? [IDEMPOTENCY_KEY_PARAMETER]
-				: []),
+			...(operation.takesIdempotencyKey ? [IDEMPOTENCY_KEY_PARAMETER] : []),
 		],
 		requestBody: {
 			required: true,

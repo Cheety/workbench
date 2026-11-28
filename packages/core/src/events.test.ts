@@ -342,6 +342,7 @@ async function startLedgerWokenByItsPipeline() {
 		jobs: plugins.jobs,
 		newJobId: () => crypto.randomUUID(),
 		jobsCommitted: () => {},
+		newApiToken: () => new Secret("wbt_unused-token"),
 		isInstanceAdmin: () => false,
 	});
 	return {
@@ -349,7 +350,7 @@ async function startLedgerWokenByItsPipeline() {
 			pipeline.invoke({
 				operation,
 				actor: ALICE,
-				apiTokenId: null,
+				apiToken: null,
 				idempotencyKey: null,
 				workspace: WORKSPACE,
 				input: { amount },
@@ -427,6 +428,7 @@ async function startInstanceOn(
 		jobs: plugins.jobs,
 		newJobId: () => crypto.randomUUID(),
 		jobsCommitted: () => {},
+		newApiToken: () => new Secret("wbt_unused-token"),
 		isInstanceAdmin: () => false,
 	});
 	const delivery = createEventDelivery({
@@ -441,7 +443,7 @@ async function startInstanceOn(
 			pipeline.invoke({
 				operation: "ledger.addEntry",
 				actor: ALICE,
-				apiTokenId: null,
+				apiToken: null,
 				idempotencyKey: null,
 				workspace: WORKSPACE,
 				input: { amount: 5 },
@@ -665,7 +667,7 @@ describe("an event whose handler fails", () => {
 		expect(attempts).toEqual([event, event, event]);
 		expect(deliveryFailures(harness)).toEqual([
 			{
-				time: "2026-11-26T08:00:00.000Z",
+				time: "2026-11-27T09:00:00.000Z",
 				level: "error",
 				message: "event not delivered",
 				eventId: event,

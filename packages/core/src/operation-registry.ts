@@ -10,7 +10,10 @@ import {
 	type Sql,
 	type StartRole,
 } from "@workbench/sdk";
+import type { CallingToken } from "./api-tokens.ts";
 import { type AuditSubject, NO_AUDIT_SUBJECT } from "./audit-subject.ts";
+import type { Secret } from "./config.ts";
+import { TAKES_IDEMPOTENCY_KEY } from "./idempotency-keys.ts";
 import { isRecord } from "./is-record.ts";
 import { type JsonSchema, jsonSchemaReaderOf } from "./json-schema.ts";
 import { describeOwner, type Owner, ownerName } from "./owner.ts";
@@ -31,9 +34,12 @@ export type EveryActorGrant = { readonly by: "every_actor" };
 export type InstanceContext = {
 	readonly actor: Actor;
 	readonly sql: Sql;
+	readonly apiToken: CallingToken | null;
 	readonly grantableRights: ReadonlySet<string>;
+	readonly operationNames: ReadonlySet<string>;
 	now(): Date;
 	newId(): string;
+	newApiToken(): Secret;
 };
 
 type DescribedOperation = {
@@ -41,6 +47,7 @@ type DescribedOperation = {
 	readonly owner: Owner;
 	readonly kind: OperationKind;
 	readonly right: string;
+	readonly takesIdempotencyKey: boolean;
 	readonly validateInput: Validator;
 	readonly validateOutput: Validator;
 	describeInput(): JsonSchema;
@@ -132,6 +139,7 @@ function describedCoreOperationOf(
 		owner,
 		kind: definition.kind,
 		right: definition.right,
+		takesIdempotencyKey: TAKES_IDEMPOTENCY_KEY[definition.kind],
 		validateInput,
 		validateOutput,
 		describeInput: jsonSchemaReaderOf(definition.input, "input"),
@@ -177,10 +185,17 @@ export function instanceAdminWorkspaceOperationOf(
 	};
 }
 
+export function withoutIdempotencyKey(
+	operation: InstanceOperation,
+): InstanceOperation {
+	return { ...operation, takesIdempotencyKey: false };
+}
+
 export type OperationRegistry = {
 	find(name: string): RegisteredOperation | undefined;
 	list(): readonly RegisteredOperation[];
 	grantableRights(): ReadonlySet<string>;
+	operationNames(): ReadonlySet<string>;
 };
 
 export type OperationsRead = {
@@ -327,6 +342,7 @@ function readOperation(
 			scope: "workspace",
 			target: validTarget,
 			right: validRight,
+			takesIdempotencyKey: TAKES_IDEMPOTENCY_KEY[validKind],
 			grant: { by: "role", grantedTo },
 			validateInput,
 			validateOutput,
@@ -359,10 +375,12 @@ export function registerOperations(
 		operations.map((operation) => [operation.name, operation]),
 	);
 	const grantableRights = grantableRightsOf([...byName.values()]);
+	const operationNames: ReadonlySet<string> = new Set(byName.keys());
 	return {
 		find: (name) => byName.get(name),
 		list: () => [...byName.values()],
 		grantableRights: () => grantableRights,
+		operationNames: () => operationNames,
 	};
 }
 

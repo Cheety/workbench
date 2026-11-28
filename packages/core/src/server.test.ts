@@ -59,6 +59,7 @@ async function startTestServer(startupStatus: StartupStatus = "started") {
 			newJobId: () => "00000000-0000-4000-b000-000000000001",
 			jobsCommitted: () => {},
 			random: () => 0.5,
+			newApiToken: () => new Secret("wbt_unused-token"),
 			isInstanceAdmin: () => false,
 			logger,
 		}),

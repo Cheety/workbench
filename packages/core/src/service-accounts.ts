@@ -41,6 +41,10 @@ export function checkValidDays(validDays: number): void {
 		throw new InvalidValidDaysError(validDays);
 }
 
+export function expiryAfter(createdAt: Date, validDays: number): Date {
+	return new Date(createdAt.getTime() + validDays * DAY_MS);
+}
+
 export async function createServiceAccount(
 	sql: SQL,
 	account: NewServiceAccount,
@@ -51,7 +55,7 @@ export async function createServiceAccount(
 	const tokenId = sources.newId();
 	const token = sources.newToken();
 	const createdAt = sources.now();
-	const expiresAt = new Date(createdAt.getTime() + account.validDays * DAY_MS);
+	const expiresAt = expiryAfter(createdAt, account.validDays);
 	await sql.begin(async (transaction) => {
 		await transaction`INSERT INTO core.service_accounts (id, name, created_at) VALUES (${serviceAccountId}, ${account.name}, ${createdAt})`;
 		await transaction`INSERT INTO core.api_tokens (id, service_account_id, token_hash, created_at, expires_at) VALUES (${tokenId}, ${serviceAccountId}, ${apiTokenHash(token.reveal())}, ${createdAt}, ${expiresAt})`;

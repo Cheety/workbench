@@ -341,6 +341,7 @@ async function startBillingPipeline(jobsCommitted: () => void) {
 		eventsCommitted: () => {},
 		jobsCommitted,
 		random: () => 0.5,
+		newApiToken: () => new Secret("wbt_unused-token"),
 		isInstanceAdmin: () => false,
 		logger,
 	});
@@ -476,7 +477,7 @@ describe("a job that fails", () => {
 		expect(attempts).toEqual([1, 2, 3]);
 		expect(jobFailures(harness)).toEqual([
 			{
-				time: "2026-11-26T08:00:00.000Z",
+				time: "2026-11-27T09:00:00.000Z",
 				level: "error",
 				message: "job failed",
 				jobId: job,
@@ -525,7 +526,7 @@ describe("a job that fails", () => {
 		expect(jobFailures(harness).map((entry) => entry.attempt)).toEqual([1, 2]);
 		expect(deadLetters(harness)).toEqual([
 			{
-				time: "2026-11-26T08:00:00.000Z",
+				time: "2026-11-27T11:00:00.000Z",
 				level: "error",
 				message: "job dead-lettered",
 				jobId: "00000000-0000-4000-b000-000000000001",
@@ -779,7 +780,7 @@ describe("the pipeline", () => {
 			await pipeline.invoke({
 				operation,
 				actor: ALICE,
-				apiTokenId: null,
+				apiToken: null,
 				idempotencyKey: null,
 				workspace: WORKSPACE,
 				input: { amount },

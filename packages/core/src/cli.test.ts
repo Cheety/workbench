@@ -287,9 +287,21 @@ describe("the command line listing the operations", () => {
 		expect(run.stderr).toBe("");
 		expect(lines.at(-1)).toBe("");
 		expect(lines.slice(0, -1).map((line) => line.split("\t").slice(1))).toEqual(
-			api.registeredOperations
-				.toSorted((a, b) => a.name.localeCompare(b.name))
-				.map(({ name, kind }) => [name, kind]),
+			[
+				["core.createApiToken", "mutation"],
+				["core.createWorkspace", "mutation"],
+				["core.defineRole", "mutation"],
+				["core.grantMembership", "mutation"],
+				["core.listApiTokens", "query"],
+				["core.listAuditEntries", "query"],
+				["core.listInstanceAuditEntries", "query"],
+				["core.listWorkspaces", "query"],
+				["core.revokeApiToken", "mutation"],
+				["core.revokeMembership", "mutation"],
+				["reference.createNote", "mutation"],
+				["reference.listNotes", "query"],
+				["reference.renameNote", "mutation"],
+			],
 		);
 		expect(lines).toContain(
 			"reference create-note\treference.createNote\tmutation",

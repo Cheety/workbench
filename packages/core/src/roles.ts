@@ -89,5 +89,6 @@ export const defineRoleOperation = defineInstanceOperation({
 		member: null,
 		role: name,
 		rights,
+		apiToken: null,
 	}),
 });

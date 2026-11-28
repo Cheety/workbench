@@ -116,7 +116,8 @@ export async function pluginPackageAt(
 export async function startOperationHarness(
 	options: OperationHarnessOptions,
 ): Promise<OperationHarness> {
-	const { logger, entries } = recordingLogger();
+	const now = options.now ?? (() => FIXED_NOW);
+	const { logger, entries } = recordingLogger(now);
 	const database = await createFreshDatabase();
 	try {
 		const runner: MigrationRunner = {
@@ -147,7 +148,7 @@ export async function startOperationHarness(
 			await plugins.deactivate();
 			throw new HarnessStartError(failure.detail);
 		}
-		return harnessOf(database, plugins, options, { logger, entries });
+		return harnessOf(database, plugins, options, { now, logger, entries });
 	} catch (error) {
 		await database.drop();
 		throw error;
@@ -159,11 +160,15 @@ function harnessOf(
 	plugins: RunningPlugins,
 	options: OperationHarnessOptions,
 	{
+		now,
 		logger,
 		entries,
-	}: { readonly logger: Logger; readonly entries: readonly LogEntry[] },
+	}: {
+		readonly now: () => Date;
+		readonly logger: Logger;
+		readonly entries: readonly LogEntry[];
+	},
 ): OperationHarness {
-	const now = options.now ?? (() => FIXED_NOW);
 	const newId = options.newId ?? sequentialIds(OPERATION_ID_GROUP);
 	const random = options.random ?? (() => FIXED_RANDOM);
 	const newJobId = sequentialIds(JOB_ID_GROUP);
@@ -181,6 +186,7 @@ function harnessOf(
 		newJobId,
 		jobsCommitted: () => {},
 		random,
+		newApiToken: sequentialTokens(),
 		isInstanceAdmin: isInstanceAdminOf(options.instanceAdmins ?? []),
 		logger,
 	});
@@ -229,7 +235,7 @@ function harnessOf(
 		call: ({ idempotencyKey, ...call }) =>
 			pipeline.invoke({
 				...call,
-				apiTokenId: null,
+				apiToken: null,
 				idempotencyKey: idempotencyKey ?? null,
 				correlationId: newCorrelationId(),
 			}),
@@ -250,6 +256,14 @@ function sequentialIds(group: string): () => string {
 	return () => {
 		issued += 1;
 		return `00000000-0000-4000-${group}-${String(issued).padStart(12, "0")}`;
+	};
+}
+
+function sequentialTokens(): () => Secret {
+	let issued = 0;
+	return () => {
+		issued += 1;
+		return new Secret(`wbt_harness-token-${issued}`);
 	};
 }
 

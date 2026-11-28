@@ -1,4 +1,4 @@
-import type { Actor, OperationKind } from "@workbench/sdk";
+import type { Actor } from "@workbench/sdk";
 import { SQL } from "bun";
 import { authenticateToken } from "../api-tokens.ts";
 import { Secret } from "../config.ts";
@@ -7,7 +7,10 @@ import type { HttpApi } from "../http-api.ts";
 import { isInstanceAdminOf } from "../instance-admins.ts";
 import { type PluginPackage, startPlugins } from "../kernel.ts";
 import { grantMembership } from "../memberships.ts";
-import { createOperationPipeline } from "../operation-pipeline.ts";
+import {
+	createOperationPipeline,
+	type OperationPipeline,
+} from "../operation-pipeline.ts";
 import { roleName } from "../role-name.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
@@ -46,16 +49,11 @@ export class UnidentifiedApiTokenError extends Error {
 	}
 }
 
-export type OperationListed = {
-	readonly name: string;
-	readonly kind: OperationKind;
-};
-
 export type ApiInstance = {
 	readonly url: string;
-	readonly registeredOperations: readonly OperationListed[];
 	readonly database: FreshDatabase;
 	readonly logEntries: readonly LogEntry[];
+	readonly invoke: OperationPipeline["invoke"];
 	refuseAuthenticationDatabase(): void;
 	issueToken(role: string): Promise<string>;
 	issueIdentifiedToken(role: string): Promise<IdentifiedToken>;
@@ -137,6 +135,7 @@ async function startedApiInstance(
 	const instanceAdmins: Actor[] = [];
 	const isInstanceAdmin = isInstanceAdminOf(instanceAdmins);
 	let issuedTokens = 0;
+	let createdTokens = 0;
 	let issuedCorrelationIds = 0;
 	const api: HttpApi = {
 		authenticate: (token) => authenticateToken(authenticationSql, token, clock),
@@ -153,6 +152,10 @@ async function startedApiInstance(
 			newJobId: newId,
 			jobsCommitted: () => {},
 			random: () => 0.5,
+			newApiToken: () => {
+				createdTokens += 1;
+				return new Secret(`wbt_created-token-${createdTokens}`);
+			},
 			isInstanceAdmin,
 			logger,
 		}),
@@ -207,11 +210,9 @@ async function startedApiInstance(
 	};
 	return {
 		url,
-		registeredOperations: running.operations
-			.list()
-			.map(({ name, kind }) => ({ name, kind })),
 		database,
 		logEntries: entries,
+		invoke: (call) => api.pipeline.invoke(call),
 		refuseAuthenticationDatabase: () => authenticationGate.refuse(),
 		issueToken: async (role) => (await issueIdentifiedToken(role)).token,
 		issueIdentifiedToken,

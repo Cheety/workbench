@@ -6,6 +6,7 @@ export type AuditSubject = {
 	readonly member: Actor | null;
 	readonly role: RoleName | null;
 	readonly rights: readonly string[] | null;
+	readonly apiToken: string | null;
 };
 
 export const NO_AUDIT_SUBJECT: AuditSubject = {
@@ -13,4 +14,5 @@ export const NO_AUDIT_SUBJECT: AuditSubject = {
 	member: null,
 	role: null,
 	rights: null,
+	apiToken: null,
 };

@@ -127,12 +127,13 @@ describe("schema migrations", () => {
 				},
 			],
 		});
-		expect(
-			await database.sql`SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema IN ('core', 'plugin_notes') ORDER BY table_schema, table_name`,
-		).toEqual([
-			{ table_schema: "core", table_name: "migrations" },
-			{ table_schema: schemaName("plugin_notes"), table_name: "notes" },
-		]);
+		const coreTables =
+			await database.sql`SELECT table_name FROM information_schema.tables WHERE table_schema = 'core'`;
+		expect(coreTables).toContainEqual({ table_name: "migrations" });
+		expect(coreTables).not.toContainEqual({ table_name: "notes" });
+		expect([
+			...(await database.sql`SELECT table_name FROM information_schema.tables WHERE table_schema = 'plugin_notes'`),
+		]).toEqual([{ table_name: "notes" }]);
 	});
 
 	test("apply nothing when every migration was applied before", async () => {

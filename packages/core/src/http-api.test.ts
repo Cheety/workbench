@@ -763,12 +763,15 @@ describe("the operations listed over HTTP", () => {
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({
 			operations: [
+				{ name: "core.createApiToken", kind: "mutation" },
 				{ name: "core.createWorkspace", kind: "mutation" },
 				{ name: "core.defineRole", kind: "mutation" },
 				{ name: "core.grantMembership", kind: "mutation" },
+				{ name: "core.listApiTokens", kind: "query" },
 				{ name: "core.listAuditEntries", kind: "query" },
 				{ name: "core.listInstanceAuditEntries", kind: "query" },
 				{ name: "core.listWorkspaces", kind: "query" },
+				{ name: "core.revokeApiToken", kind: "mutation" },
 				{ name: "core.revokeMembership", kind: "mutation" },
 				{ name: "ledger.addEntry", kind: "mutation" },
 				{ name: "ledger.listEntries", kind: "query" },

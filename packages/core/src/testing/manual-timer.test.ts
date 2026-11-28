@@ -13,7 +13,20 @@ describe("a manual timer", () => {
 		expect(expired).toEqual(["short"]);
 	});
 
-	test("expires the timer set first among timers of the same delay", () => {
+	test("expires the timer whose deadline comes first, counting each delay from the time its timer was set", () => {
+		const timer = manualTimer();
+		const expired: string[] = [];
+		timer.setTimer(() => expired.push("set first"), 300);
+		timer.setTimer(() => {}, 100);
+		timer.expire();
+		timer.setTimer(() => expired.push("set later"), 250);
+
+		timer.expire();
+
+		expect(expired).toEqual(["set first"]);
+	});
+
+	test("expires the timer set first among timers of the same deadline", () => {
 		const timer = manualTimer();
 		const expired: string[] = [];
 		timer.setTimer(() => expired.push("first"), 100);

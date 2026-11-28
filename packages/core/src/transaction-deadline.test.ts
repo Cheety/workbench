@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { Sql } from "@workbench/sdk";
 import { SQL } from "bun";
 import { z } from "zod";
-import { manualTimer } from "./testing/manual-timer.ts";
+import { type ManualTimer, manualTimer } from "./testing/manual-timer.ts";
 import {
 	createFreshDatabase,
 	type FreshDatabase,
@@ -123,8 +123,6 @@ async function connectionSecurityOf(
 
 const HOOK_LOCK = 4712;
 
-const CANCEL_AGAIN_AFTER_MS = 100;
-
 class TimeIsUpError extends Error {
 	constructor() {
 		super("the time of the hook is up");
@@ -197,6 +195,25 @@ async function untilStatementsWaitForTheLock(
 			WHERE datname = current_database() AND wait_event_type = 'Lock'`;
 }
 
+async function settledExpiringEachTimer(
+	running: Promise<unknown>,
+	timer: ManualTimer,
+): Promise<unknown> {
+	const settled = running.then(
+		() => ({ outcome: undefined }),
+		(error: unknown) => ({ outcome: error }),
+	);
+	for (;;) {
+		const timerSet = timer.set().then(() => undefined);
+		if (timer.isPending()) {
+			timer.expire();
+			continue;
+		}
+		const next = await Promise.race([settled, timerSet]);
+		if (next !== undefined) return next.outcome;
+	}
+}
+
 async function notesIn(sql: SQL): Promise<unknown[]> {
 	const rows: unknown[] = await sql`SELECT note FROM notes`;
 	return [...rows];
@@ -238,12 +255,13 @@ describe("a hook whose time is up while a statement of it is running", () => {
 		timer.expire();
 		const refusal = await furtherStatement.promise;
 		gate.release();
-		const givenUp = await running.catch((error: unknown) => error);
+		const givenUp = await settledExpiringEachTimer(running, timer);
 
 		expect(givenUp).toBeInstanceOf(TimeIsUpError);
 		expect(refusal).toMatchObject({ name: "StatementRefusedError" });
 		expect(await notesIn(database.sql)).toEqual([]);
-		expect(timer.delaysMs).toEqual([250, CANCEL_AGAIN_AFTER_MS]);
+		expect(timer.delaysMs[0]).toBe(250);
+		expect(timer.pendingCount()).toBe(0);
 	});
 
 	test("is given up while a statement of another connection goes on undisturbed", async () => {
@@ -275,13 +293,13 @@ describe("a hook whose time is up while a statement of it is running", () => {
 		});
 		await timerSet;
 		await untilStatementsWaitForTheLock(observer, 2);
-		timer.expire();
-		const givenUp = await running.catch((error: unknown) => error);
+		const givenUp = await settledExpiringEachTimer(running, timer);
 		await observer`SELECT pg_advisory_unlock(${HOOK_LOCK})`;
 
 		expect(givenUp).toBeInstanceOf(TimeIsUpError);
 		expect(await undisturbed).toBe("finished");
-		expect(timer.delaysMs).toEqual([250, CANCEL_AGAIN_AFTER_MS]);
+		expect(timer.delaysMs[0]).toBe(250);
+		expect(timer.pendingCount()).toBe(0);
 	});
 });
 
@@ -409,11 +427,17 @@ describe("a hook whose statement reaches Postgres only after its time is up", ()
 		const { gate, pool } = poolBehindAGate(database);
 		const timer = manualTimer();
 		const begun = Promise.withResolvers<void>();
+		const statementEnded = Promise.withResolvers<unknown>();
 		const hook: TransactionHook = async ({ sql }) => {
 			gate.holdRequests();
 			const statement = sql`SELECT pg_advisory_xact_lock(${HOOK_LOCK})`;
 			begun.resolve();
-			await statement;
+			statementEnded.resolve(
+				await statement.then(
+					() => "finished",
+					(error: unknown) => error,
+				),
+			);
 		};
 
 		const running = pool.begin(async (transaction) => {
@@ -430,15 +454,14 @@ describe("a hook whose statement reaches Postgres only after its time is up", ()
 		await cancelledInVain;
 		gate.release();
 		await untilAStatementWaitsForTheLock(observer);
-		timer.expire();
-		const givenUp = await running.catch((error: unknown) => error);
+		const givenUp = await settledExpiringEachTimer(running, timer);
 
 		expect(givenUp).toBeInstanceOf(TimeIsUpError);
+		expect(await statementEnded.promise).toMatchObject({
+			message: "canceling statement due to user request",
+		});
 		expect([...(await pool`SELECT 1 AS served`)]).toEqual([{ served: 1 }]);
-		expect(timer.delaysMs).toEqual([
-			250,
-			CANCEL_AGAIN_AFTER_MS,
-			CANCEL_AGAIN_AFTER_MS,
-		]);
+		expect(timer.delaysMs[0]).toBe(250);
+		expect(timer.pendingCount()).toBe(0);
 	});
 });

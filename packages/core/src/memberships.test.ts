@@ -134,6 +134,7 @@ async function startBellPipeline(
 		eventsCommitted: () => {},
 		jobsCommitted: () => {},
 		random: () => 0.5,
+		newApiToken: () => new Secret("wbt_unused-token"),
 		isInstanceAdmin: isInstanceAdminOf([ADMIN]),
 		logger,
 	});
@@ -151,7 +152,7 @@ function invokerOf(pipeline: OperationPipeline): Invoke {
 		pipeline.invoke({
 			operation,
 			actor,
-			apiTokenId: null,
+			apiToken: null,
 			idempotencyKey: null,
 			workspace,
 			input,

@@ -134,6 +134,7 @@ export const grantMembershipOperation = defineInstanceAdminWorkspaceOperation({
 		member: actor,
 		role,
 		rights: null,
+		apiToken: null,
 	}),
 });
 
@@ -160,5 +161,6 @@ export const revokeMembershipOperation = defineInstanceAdminWorkspaceOperation({
 		member: actor,
 		role,
 		rights: null,
+		apiToken: null,
 	}),
 });
