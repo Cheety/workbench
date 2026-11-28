@@ -12,7 +12,8 @@ import type { EventRegistry } from "./event-registry.ts";
 import { describeThrown } from "./failure-reason.ts";
 import {
 	IdempotencyKeyReusedError,
-	isIdempotencyKey,
+	InvalidIdempotencyKeyError,
+	idempotencyKey,
 	runIdempotently,
 } from "./idempotency-keys.ts";
 import { enqueueJob } from "./job-queue.ts";
@@ -86,6 +87,14 @@ const INVALID_IDEMPOTENCY_KEY: OperationFailure = {
 	issues: [],
 };
 
+const IDEMPOTENCY_KEY_REUSED: OperationFailure = {
+	code: "idempotency_key_reused",
+	kind: "rejected",
+	detail:
+		"the idempotency key was already used with another operation, workspace or input",
+	issues: [],
+};
+
 const WORKSPACE_NOT_FOUND: OperationFailure = {
 	code: "workspace_not_found",
 	kind: "not_found",
@@ -153,13 +162,13 @@ async function invoke(
 			detail: `no operation is named ${quote(call.operation)}`,
 			issues: [],
 		});
-	if (call.idempotencyKey !== null && !isIdempotencyKey(call.idempotencyKey))
-		return failed(INVALID_IDEMPOTENCY_KEY);
 	const logger = options.logger.with({
 		correlationId: call.correlationId,
 		operation: operation.name,
 	});
 	try {
+		const key =
+			call.idempotencyKey === null ? null : idempotencyKey(call.idempotencyKey);
 		const input = await operation.validateInput(call.input);
 		if (!input.valid)
 			return failed({
@@ -191,13 +200,12 @@ async function invoke(
 						);
 					return executed;
 				};
-				if (call.idempotencyKey === null || !IS_REPLAYED[operation.kind])
-					return run();
+				if (key === null || !IS_REPLAYED[operation.kind]) return run();
 				return runIdempotently(
 					transaction,
 					{
 						actor: call.actor,
-						key: call.idempotencyKey,
+						key,
 						operation: operation.name,
 						workspace: call.workspace,
 						input: call.input,
@@ -386,13 +394,9 @@ function logAndMapFailure(
 	owner: Owner,
 ): OperationFailure {
 	if (error instanceof WorkspaceNotFoundError) return WORKSPACE_NOT_FOUND;
-	if (error instanceof IdempotencyKeyReusedError)
-		return {
-			code: "idempotency_key_reused",
-			kind: "rejected",
-			detail: error.message,
-			issues: [],
-		};
+	if (error instanceof InvalidIdempotencyKeyError)
+		return INVALID_IDEMPOTENCY_KEY;
+	if (error instanceof IdempotencyKeyReusedError) return IDEMPOTENCY_KEY_REUSED;
 	if (error instanceof OperationError)
 		return {
 			code: `${ownerName(owner)}.${error.code}`,

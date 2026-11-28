@@ -4,19 +4,33 @@ import type { SQL } from "bun";
 import { z } from "zod";
 import { isRecord } from "./is-record.ts";
 
-const IDEMPOTENCY_KEY = /^[ -~]{1,255}$/;
+declare const idempotencyKeyBrand: unique symbol;
+
+export type IdempotencyKey = string & { readonly [idempotencyKeyBrand]: true };
+
+export const IDEMPOTENCY_KEY_PATTERN = "^[ -~]{1,255}$";
+
+const IDEMPOTENCY_KEY = new RegExp(IDEMPOTENCY_KEY_PATTERN);
 
 const RETENTION_MS = 86_400_000;
 
 const MOST_REMOVED_PER_RUN = 10_000;
 
-export function isIdempotencyKey(value: string): boolean {
-	return IDEMPOTENCY_KEY.test(value);
+export class InvalidIdempotencyKeyError extends Error {
+	constructor() {
+		super(`an idempotency key must match ${IDEMPOTENCY_KEY_PATTERN}`);
+		this.name = "InvalidIdempotencyKeyError";
+	}
+}
+
+export function idempotencyKey(value: string): IdempotencyKey {
+	if (!IDEMPOTENCY_KEY.test(value)) throw new InvalidIdempotencyKeyError();
+	return value as IdempotencyKey;
 }
 
 export type IdempotentCall = {
 	readonly actor: Actor;
-	readonly key: string;
+	readonly key: IdempotencyKey;
 	readonly operation: string;
 	readonly workspace: string;
 	readonly input: unknown;
@@ -25,9 +39,7 @@ export type IdempotentCall = {
 
 export class IdempotencyKeyReusedError extends Error {
 	constructor() {
-		super(
-			"the idempotency key was already used with another operation, workspace or input",
-		);
+		super("the idempotency key belongs to another call");
 		this.name = "IdempotencyKeyReusedError";
 	}
 }
