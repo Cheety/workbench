@@ -59,6 +59,10 @@ async function startReferenceInstance(): Promise<ApiInstance> {
 	return mcp.startInstance([await pluginPackageAt(REFERENCE_DIRECTORY)]);
 }
 
+const answer = z.record(z.string(), z.unknown());
+
+type Answer = z.infer<typeof answer>;
+
 type Call = {
 	readonly operation: string;
 	readonly workspace: string;
@@ -69,20 +73,20 @@ async function overHttp(
 	api: ApiInstance,
 	token: string,
 	{ operation, workspace, input }: Call,
-): Promise<string> {
+): Promise<Answer> {
 	const response = await api.post(
 		`/api/workspaces/${workspace}/operations/${operation}`,
 		JSON.stringify(input),
 		{ Authorization: `Bearer ${token}` },
 	);
-	return response.text();
+	return answer.parse(await response.json());
 }
 
 async function overMcp(
 	api: ApiInstance,
 	token: string,
 	{ operation, workspace, input }: Call,
-): Promise<string> {
+): Promise<Answer> {
 	const client = await mcp.connectedClient(api.url, token);
 	const result = await client.callTool({
 		name: operation.replace(".", "_"),
@@ -95,7 +99,7 @@ async function overMcp(
 			]),
 		})
 		.parse(result);
-	return content[0].text;
+	return answer.parse(JSON.parse(content[0].text));
 }
 
 describe("the reference operations listed as MCP tools", () => {
@@ -169,12 +173,12 @@ describe("an operation of the reference plugin over MCP and over HTTP", () => {
 			call,
 		);
 
-		expect(JSON.parse(answeredOverHttp)).toEqual({
+		expect(answeredOverHttp).toEqual({
 			id: expect.any(String),
 			title: "Plan",
 			createdAt: "2026-11-26T08:00:00.000Z",
 		});
-		expect(answeredOverMcp).toBe(answeredOverHttp);
+		expect(answeredOverMcp).toEqual(answeredOverHttp);
 	});
 
 	test("reaches the same operation, so a note created over MCP is listed over HTTP", async () => {
@@ -192,7 +196,7 @@ describe("an operation of the reference plugin over MCP and over HTTP", () => {
 			input: { limit: 10 },
 		});
 
-		expect(JSON.parse(listed)).toEqual({ notes: [JSON.parse(created)] });
+		expect(listed).toEqual({ notes: [created] });
 	});
 
 	test.each([
@@ -215,8 +219,8 @@ describe("an operation of the reference plugin over MCP and over HTTP", () => {
 			const token = await api.issueToken();
 			const call = { operation: "reference.createNote", workspace, input };
 
-			const failedOverHttp = JSON.parse(await overHttp(api, token, call));
-			const failedOverMcp = JSON.parse(await overMcp(api, token, call));
+			const failedOverHttp = await overHttp(api, token, call);
+			const failedOverMcp = await overMcp(api, token, call);
 
 			expect(failedOverHttp).toMatchObject({ code });
 			expect(failedOverMcp).toEqual({
@@ -237,8 +241,8 @@ describe("a domain error of a plugin over MCP and over HTTP", () => {
 			input: { year: 2025 },
 		};
 
-		const failedOverHttp = JSON.parse(await overHttp(api, token, call));
-		const failedOverMcp = JSON.parse(await overMcp(api, token, call));
+		const failedOverHttp = await overHttp(api, token, call);
+		const failedOverMcp = await overMcp(api, token, call);
 
 		expect(failedOverHttp).toEqual({
 			type: "urn:workbench:problem:ledger.book_already_closed",
