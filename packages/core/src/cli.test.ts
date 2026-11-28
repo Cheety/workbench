@@ -564,6 +564,26 @@ describe("the API token of the command line", () => {
 		});
 	});
 
+	test("in a configuration file that cannot be read is reported by the file, with exit code 2", async () => {
+		const home = await emptyHome();
+		const directory = join(home, "workbench.json");
+		await mkdir(directory);
+
+		const run = await runCliIn(home, ["operations"], {
+			WORKBENCH_CONFIG: directory,
+		});
+
+		expect(run).toEqual({
+			exitCode: 2,
+			stdout: "",
+			stderr: [
+				"invalid configuration:",
+				`  ${directory} cannot be read`,
+				"",
+			].join("\n"),
+		});
+	});
+
 	test("that the instance does not know is rejected as unauthenticated with exit code 1", async () => {
 		const api = await startReferenceInstance();
 

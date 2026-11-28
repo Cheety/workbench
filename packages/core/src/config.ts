@@ -1,8 +1,11 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { UNKNOWN_FAILURE_REASON } from "./failure-reason.ts";
+import { parseJsonText } from "./json-text.ts";
 import { LOG_LEVELS, type LogLevel } from "./logger.ts";
 import { isPluginName } from "./plugin-name.ts";
+import { systemFailureReason } from "./system-error.ts";
 
 const REDACTED = "[redacted]";
 
@@ -251,10 +254,32 @@ export type CliConfig = {
 	readonly token: Secret;
 };
 
+export type CliConfigFileContent =
+	| { readonly found: "text"; readonly text: string }
+	| { readonly found: "missing" }
+	| { readonly found: "unreadable" };
+
 export type CliConfigSource = {
 	readonly env: Readonly<Record<string, string | undefined>>;
-	readonly readFile: (path: string) => string | undefined;
+	readonly readFile: (path: string) => CliConfigFileContent;
 };
+
+export type CliConfigIssue = {
+	readonly subject: string;
+	readonly problem: string;
+};
+
+export class InvalidCliConfigError extends Error {
+	readonly issues: readonly CliConfigIssue[];
+
+	constructor(issues: readonly CliConfigIssue[]) {
+		super(
+			`Invalid configuration of the command line: ${issues.map((issue) => `${issue.subject} ${issue.problem}`).join("; ")}`,
+		);
+		this.name = "InvalidCliConfigError";
+		this.issues = issues;
+	}
+}
 
 const CLI_CONFIG_FILE = join("workbench", "cli.json");
 
@@ -272,7 +297,7 @@ type CliConfigFileRead =
 			readonly path: string | undefined;
 			readonly file: CliConfigFile;
 	  }
-	| { readonly read: false; readonly issue: ConfigIssue };
+	| { readonly read: false; readonly issue: CliConfigIssue };
 
 function isInstanceUrl(value: string): boolean {
 	if (!URL.canParse(value)) return false;
@@ -295,37 +320,41 @@ function readCliConfigFile(source: CliConfigSource): CliConfigFileRead {
 	const chosen = readVariable(source, "WORKBENCH_CONFIG");
 	const path = chosen ?? defaultCliConfigPath(source);
 	if (path === undefined) return { read: true, path, file: {} };
-	const text = source.readFile(path);
-	if (text === undefined)
-		return chosen === undefined
-			? { read: true, path, file: {} }
-			: {
-					read: false,
-					issue: {
-						variable: "WORKBENCH_CONFIG",
-						problem: "names a file that does not exist",
-					},
-				};
-	const parsed = cliConfigFile.safeParse(parsedJsonOrUndefined(text));
+	const content = source.readFile(path);
+	switch (content.found) {
+		case "missing":
+			return chosen === undefined
+				? { read: true, path, file: {} }
+				: {
+						read: false,
+						issue: {
+							subject: "WORKBENCH_CONFIG",
+							problem: "names a file that does not exist",
+						},
+					};
+		case "unreadable":
+			return {
+				read: false,
+				issue: { subject: path, problem: "cannot be read" },
+			};
+		case "text":
+			return parsedCliConfigFile(path, content.text);
+	}
+}
+
+function parsedCliConfigFile(path: string, text: string): CliConfigFileRead {
+	const json = parseJsonText(text);
+	const parsed = cliConfigFile.safeParse(json.parsed ? json.value : undefined);
 	if (!parsed.success)
 		return {
 			read: false,
 			issue: {
-				variable: path,
+				subject: path,
 				problem:
 					"must be a JSON object with no other fields than the strings url and token",
 			},
 		};
 	return { read: true, path, file: parsed.data };
-}
-
-function parsedJsonOrUndefined(text: string): unknown {
-	try {
-		return JSON.parse(text);
-	} catch (error) {
-		if (error instanceof SyntaxError) return undefined;
-		throw error;
-	}
 }
 
 type CliValue = {
@@ -357,7 +386,7 @@ function resolveCliValue(
 
 export function loadCliConfig(source: CliConfigSource): CliConfig {
 	const configFile = readCliConfigFile(source);
-	if (!configFile.read) throw new InvalidConfigError([configFile.issue]);
+	if (!configFile.read) throw new InvalidCliConfigError([configFile.issue]);
 	const { path, file } = configFile;
 	const url = resolveCliValue(source, "WORKBENCH_URL", {
 		path,
@@ -369,25 +398,31 @@ export function loadCliConfig(source: CliConfigSource): CliConfig {
 		field: "token",
 		value: file.token,
 	});
-	const issues: ConfigIssue[] = [];
+	const issues: CliConfigIssue[] = [];
 	if (url.value === undefined)
-		issues.push({ variable: url.reportedAs, problem: "is required" });
+		issues.push({ subject: url.reportedAs, problem: "is required" });
 	else if (!isInstanceUrl(url.value))
 		issues.push({
-			variable: url.reportedAs,
+			subject: url.reportedAs,
 			problem: `must be a ${INSTANCE_SCHEMES.map((scheme) => `${scheme}://`).join(" or ")} URL with a host`,
 		});
 	if (token.value === undefined)
-		issues.push({ variable: token.reportedAs, problem: "is required" });
+		issues.push({ subject: token.reportedAs, problem: "is required" });
 	if (url.value === undefined || token.value === undefined || issues.length > 0)
-		throw new InvalidConfigError(issues);
+		throw new InvalidCliConfigError(issues);
 	return { instanceUrl: new URL(url.value), token: new Secret(token.value) };
 }
 
 export function loadCliConfigFromEnvironment(): CliConfig {
-	return loadCliConfig({
-		env: process.env,
-		readFile: (path) =>
-			existsSync(path) ? readFileSync(path, "utf8") : undefined,
-	});
+	return loadCliConfig({ env: process.env, readFile: readCliConfigFileText });
+}
+
+function readCliConfigFileText(path: string): CliConfigFileContent {
+	try {
+		return { found: "text", text: readFileSync(path, "utf8") };
+	} catch (error) {
+		const reason = systemFailureReason(error);
+		if (reason === UNKNOWN_FAILURE_REASON) throw error;
+		return reason === "ENOENT" ? { found: "missing" } : { found: "unreadable" };
+	}
 }

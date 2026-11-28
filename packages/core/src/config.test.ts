@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	type CliConfigSource,
+	InvalidCliConfigError,
 	InvalidConfigError,
 	loadCliConfig,
 	loadConfig,
@@ -293,14 +294,19 @@ const TOKEN = "wbt_s3cr3t-token";
 function filesOf(
 	files: Readonly<Record<string, string>>,
 ): CliConfigSource["readFile"] {
-	return (path) => files[path];
+	return (path) => {
+		const text = files[path];
+		return text === undefined ? { found: "missing" } : { found: "text", text };
+	};
 }
 
-function captureInvalidCliConfig(source: CliConfigSource): InvalidConfigError {
+function captureInvalidCliConfig(
+	source: CliConfigSource,
+): InvalidCliConfigError {
 	try {
 		loadCliConfig(source);
 	} catch (error) {
-		if (error instanceof InvalidConfigError) return error;
+		if (error instanceof InvalidCliConfigError) return error;
 		throw error;
 	}
 	throw new Error("expected loadCliConfig to reject the configuration");
@@ -334,7 +340,7 @@ describe("loadCliConfig", () => {
 
 		expect(error.issues).toEqual([
 			{
-				variable: "WORKBENCH_CONFIG",
+				subject: "WORKBENCH_CONFIG",
 				problem: "names a file that does not exist",
 			},
 		]);
@@ -354,7 +360,7 @@ describe("loadCliConfig", () => {
 
 			expect(error.issues).toEqual([
 				{
-					variable: "/home/ada/.config/workbench/cli.json",
+					subject: "/home/ada/.config/workbench/cli.json",
 					problem:
 						"must be a JSON object with no other fields than the strings url and token",
 				},
@@ -375,7 +381,7 @@ describe("loadCliConfig", () => {
 
 		expect(error.issues).toEqual([
 			{
-				variable: "url in /home/ada/.config/workbench/cli.json",
+				subject: "url in /home/ada/.config/workbench/cli.json",
 				problem: "must be a http:// or https:// URL with a host",
 			},
 		]);
@@ -385,8 +391,8 @@ describe("loadCliConfig", () => {
 		const error = captureInvalidCliConfig({ env: {}, readFile: filesOf({}) });
 
 		expect(error.issues).toEqual([
-			{ variable: "WORKBENCH_URL", problem: "is required" },
-			{ variable: "WORKBENCH_TOKEN", problem: "is required" },
+			{ subject: "WORKBENCH_URL", problem: "is required" },
+			{ subject: "WORKBENCH_TOKEN", problem: "is required" },
 		]);
 	});
 

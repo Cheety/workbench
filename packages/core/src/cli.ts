@@ -3,7 +3,7 @@ import { OPERATION_KINDS } from "@workbench/sdk";
 import { z } from "zod";
 import {
 	type CliConfig,
-	InvalidConfigError,
+	InvalidCliConfigError,
 	loadCliConfigFromEnvironment,
 } from "./config.ts";
 import { IDEMPOTENCY_KEY_HEADER, OPERATIONS_PATH } from "./http-api.ts";
@@ -235,11 +235,11 @@ let config: CliConfig;
 try {
 	config = loadCliConfigFromEnvironment();
 } catch (error) {
-	if (!(error instanceof InvalidConfigError)) throw error;
+	if (!(error instanceof InvalidCliConfigError)) throw error;
 	writeError(
 		[
 			"invalid configuration:",
-			...error.issues.map((issue) => `  ${issue.variable} ${issue.problem}`),
+			...error.issues.map((issue) => `  ${issue.subject} ${issue.problem}`),
 		].join("\n"),
 	);
 	process.exit(EXIT_CODES.misused);
