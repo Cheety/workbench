@@ -243,13 +243,16 @@ async function invoke(
 				const input = await operation.validateInput(call.input);
 				if (!input.valid) throw failedCall(invalidInput(input.issues));
 				const run = async (): Promise<unknown> => {
+					const access = accessOf(call);
 					const executed = await execute(
 						operation,
 						input.value,
 						contextOf(call, transaction, options, {
+							auth: access.auth,
 							publish: publisher.publishIn(transaction),
 							enqueue: enqueuer.enqueueIn(transaction),
 						}),
+						access,
 					);
 					if (IS_AUDITED[operation.kind])
 						await recordAuditEntry(
@@ -389,15 +392,30 @@ async function authorize(
 	}
 }
 
-function authOf(call: OperationCall): OperationAuth {
+type CallAccess = {
+	readonly auth: OperationAuth;
+	throwRecordedDenial(): void;
+};
+
+function accessOf(call: OperationCall): CallAccess {
+	let recordedDenial: CallFailedError | undefined;
+	const recordDenial = (reason: DenialReason): CallFailedError => {
+		recordedDenial ??= deniedCall(reason);
+		return recordedDenial;
+	};
 	return {
-		requireAccess: (object) => {
-			if (object === undefined) throw failedCall(OBJECT_NOT_FOUND);
-			if (object.workspace !== call.workspace)
-				throw deniedCall("object_not_found");
-			if (object.holder !== null && !isSameActor(object.holder, call.actor))
-				throw deniedCall("not_object_holder");
-			return object;
+		auth: {
+			requireAccess: (object) => {
+				if (object === undefined) throw failedCall(OBJECT_NOT_FOUND);
+				if (object.workspace !== call.workspace)
+					throw recordDenial("object_not_found");
+				if (object.holder !== null && !isSameActor(object.holder, call.actor))
+					throw recordDenial("not_object_holder");
+				return object;
+			},
+		},
+		throwRecordedDenial: () => {
+			if (recordedDenial !== undefined) throw recordedDenial;
 		},
 	};
 }
@@ -410,12 +428,12 @@ function contextOf(
 	call: OperationCall,
 	transaction: SQL,
 	sources: Pick<OperationPipelineOptions, "now" | "newId" | "random">,
-	effects: Pick<OperationContext, "publish" | "enqueue">,
+	effects: Pick<OperationContext, "auth" | "publish" | "enqueue">,
 ): OperationContext {
 	return {
 		actor: call.actor,
 		workspace: call.workspace,
-		auth: authOf(call),
+		auth: effects.auth,
 		sql: statementsIn(transaction),
 		now: sources.now,
 		newId: sources.newId,
@@ -504,9 +522,10 @@ async function execute(
 	operation: RegisteredOperation,
 	input: unknown,
 	ctx: OperationContext,
+	access: CallAccess,
 ): Promise<unknown> {
 	const output = await operation.validateOutput(
-		await runExecute(operation, input, ctx),
+		await runExecute(operation, input, ctx, access),
 	);
 	if (!output.valid) throw new InvalidOutputError(output.issues);
 	return output.value;
@@ -516,14 +535,19 @@ async function runExecute(
 	operation: RegisteredOperation,
 	input: unknown,
 	ctx: OperationContext,
+	access: CallAccess,
 ): Promise<unknown> {
+	let output: unknown;
 	try {
-		return await operation.execute(input, ctx);
+		output = await operation.execute(input, ctx);
 	} catch (error) {
+		access.throwRecordedDenial();
 		if (error instanceof OperationError || error instanceof CallFailedError)
 			throw error;
 		throw new ExecuteThrewError(error);
 	}
+	access.throwRecordedDenial();
+	return output;
 }
 
 function logAndMapFailure(

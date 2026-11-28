@@ -98,6 +98,24 @@ const purgeEntries = defineOperation({
 	}),
 });
 
+const OTHER_WORKSPACE = "00000000-0000-4000-8000-00000000eeee";
+
+const addForeignEntry = defineOperation({
+	...addEntry,
+	name: "addForeignEntry",
+	target: "object",
+	execute: async ({ amount }, ctx) => {
+		const id = ctx.newId();
+		await ctx.sql`INSERT INTO entries (id, workspace_id, amount) VALUES (${id}, ${ctx.workspace}, ${amount})`;
+		try {
+			ctx.auth.requireAccess({ workspace: OTHER_WORKSPACE, holder: null });
+		} catch (error) {
+			if (!(error instanceof Error)) throw error;
+		}
+		return { id, amount };
+	},
+});
+
 const CLIENT_METHODS = [
 	"unsafe",
 	"begin",
@@ -153,6 +171,7 @@ const ledger: PluginPackage = {
 			auditEntries,
 			probeClient,
 			purgeEntries,
+			addForeignEntry,
 		],
 	}),
 	loadMigrations: async () => [
@@ -538,6 +557,52 @@ describe("the right of an operation", () => {
 		expect(added).toEqual({
 			ok: false,
 			failure: expect.objectContaining({ code: "workspace_not_found" }),
+		});
+	});
+});
+
+describe("a denial raised through ctx.auth", () => {
+	test("fails the call and is audited even when execute catches it", async () => {
+		const harness = await startLedger();
+		const workspace = await harness.createWorkspace("Accounts", [
+			{ actor: ALICE, role: "owner" },
+		]);
+
+		const added = await harness.call({
+			actor: ALICE,
+			workspace,
+			operation: "ledger.addForeignEntry",
+			input: { amount: 5 },
+		});
+		const listed = await harness.call({
+			actor: ALICE,
+			workspace,
+			operation: "ledger.listEntries",
+			input: {},
+		});
+		const audited = await harness.call({
+			actor: ALICE,
+			workspace,
+			operation: "core.listAuditEntries",
+			input: { limit: 10, cursor: null },
+		});
+
+		expect(added).toEqual({
+			ok: false,
+			failure: expect.objectContaining({ code: "object_not_found" }),
+		});
+		expect(listed).toEqual({ ok: true, output: { entries: [] } });
+		expect(audited).toEqual({
+			ok: true,
+			output: {
+				entries: [
+					expect.objectContaining({
+						operation: "ledger.addForeignEntry",
+						result: "denied",
+					}),
+				],
+				nextCursor: null,
+			},
 		});
 	});
 });
