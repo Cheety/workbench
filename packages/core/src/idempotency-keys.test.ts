@@ -9,7 +9,10 @@ import {
 import { SQL } from "bun";
 import { z } from "zod";
 import { Secret } from "./config.ts";
+import { CORE_JOBS } from "./core-jobs.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
+import { createJobQueue, type JobQueue } from "./job-queue.ts";
+import { registerJobs } from "./job-registry.ts";
 import { type PluginPackage, startPlugins } from "./kernel.ts";
 import {
 	createOperationPipeline,
@@ -465,6 +468,72 @@ async function startLedgerPipeline(
 		logger,
 	});
 }
+
+async function startCoreJobQueue(
+	database: FreshDatabase,
+	now: () => Date,
+): Promise<JobQueue> {
+	await startLedgerPipeline(database, now);
+	const { logger } = recordingLogger();
+	return createJobQueue({
+		sql: database.sql,
+		cancellation: database.cancellation,
+		jobs: registerJobs(CORE_JOBS),
+		hasCoreSchema: () => true,
+		now,
+		newId: () => crypto.randomUUID(),
+		newJobId: () => crypto.randomUUID(),
+		random: () => 0.5,
+		runTimeout: { ms: 10_000, setTimer: setSystemTimer },
+		logger,
+	});
+}
+
+const MOST_REMOVED_PER_RUN = 10_000;
+
+function insertingExpiredKeys(database: FreshDatabase, count: number) {
+	return database.sql`
+		INSERT INTO core.idempotency_keys (actor_kind, actor_id, key, operation, workspace_id, input_hash, created_at)
+		SELECT 'user', 'alice', 'expired-' || n, 'ledger.addEntry', ${WORKSPACE}, ${"0".repeat(64)},
+			'2026-11-26T09:00:00.000Z'::timestamptz + n * interval '1 millisecond'
+		FROM generate_series(1, ${count}::integer) AS n`;
+}
+
+describe("the cron job removing expired idempotency keys", () => {
+	test("removes at most 10 000 keys per run, the oldest first", async () => {
+		const database = await createFreshDatabase();
+		cleanups.push(() => database.drop());
+		const clock = adjustableClock("2026-11-27T09:00:30.000Z");
+		const jobs = await startCoreJobQueue(database, clock.now);
+		await insertingExpiredKeys(database, MOST_REMOVED_PER_RUN + 1);
+		await jobs.runDue(NOT_STOPPED);
+		clock.advanceBy(10 * ONE_MINUTE_MS);
+
+		await jobs.runDue(NOT_STOPPED);
+
+		expect(await database.sql`SELECT key FROM core.idempotency_keys`).toEqual([
+			{ key: `expired-${MOST_REMOVED_PER_RUN + 1}` },
+		]);
+	});
+
+	test("removes the keys left over on its next run", async () => {
+		const database = await createFreshDatabase();
+		cleanups.push(() => database.drop());
+		const clock = adjustableClock("2026-11-27T09:00:30.000Z");
+		const jobs = await startCoreJobQueue(database, clock.now);
+		await insertingExpiredKeys(database, MOST_REMOVED_PER_RUN + 1);
+		await jobs.runDue(NOT_STOPPED);
+		clock.advanceBy(10 * ONE_MINUTE_MS);
+		await jobs.runDue(NOT_STOPPED);
+		clock.advanceBy(10 * ONE_MINUTE_MS);
+
+		await jobs.runDue(NOT_STOPPED);
+
+		expect(await database.sql`SELECT key FROM core.idempotency_keys`).toEqual(
+			[],
+		);
+	});
+});
 
 async function connectionHoldingTheEntryLock(
 	database: FreshDatabase,
