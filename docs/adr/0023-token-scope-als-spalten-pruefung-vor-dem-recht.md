@@ -29,9 +29,17 @@ Ein Akteur widerruft und sieht mit jedem seiner Tokens, das die Operationen dies
 
 Die Antwort von `core.createApiToken` enthält das Token im Klartext. Mit einem Idempotency-Key hielte `core.idempotency_keys` sie mindestens 24 Stunden fest, entgegen ADR-0012, wonach die Instanz nur den Hash speichert. Die Operation beachtet deshalb keinen Key, wie eine Query; OpenAPI und MCP bieten ihn nicht an. Erwogen wurde, einen Key mit eigenem Code abzulehnen; das bräche Clients, die jeder Mutation einen Key mitgeben. Eine Wiederholung legt ein zweites Token an, das ungenutzt abläuft oder widerrufen wird.
 
+## Aufräumen
+
+Abgelaufene und widerrufene Tokens wüchsen sonst mit jedem angelegten Token. Der Cron-Job des Cores `core.removeRevokedAndExpiredApiTokens` löscht stündlich (`0 * * * *`) höchstens 1000 Tokens, deren `expires_at` oder `revoked_at` mehr als 30 Tage zurückliegt, wie `core.removeExpiredIdempotencyKeys` in einer Anweisung mit `FOR UPDATE SKIP LOCKED`. 30 Tage folgen dem Dead-Letter der Jobs (ADR-0016): So lange zeigt `core.listApiTokens` ein Token noch, und ein Owner kann einen Audit-Eintrag mit dessen Scope und Ablauf erklären. Die Frist ist fest wie die übrigen Aufbewahrungsfristen; erwogen wurde eine Umgebungsvariable, aber kein Betreiber braucht bisher eine andere.
+
+Gelöscht wird nur ein Token, mit dem kein noch gespeichertes Token angelegt wurde. Ein Token, das ein nebenläufiges Anlegen nach dem Widerruf seines Vorgängers festschrieb, hat kein eigenes `revoked_at` und ist nur über den Vorgänger wirkungslos; fehlte der Vorgänger, gälte es wieder. Der Vorgänger bleibt deshalb stehen, bis das Token selbst abgelaufen und gelöscht ist, und eine Kette wird von ihrem Ende her gelöscht, ein Glied je Lauf. Erwogen wurde, beim Löschen die Nachfahren in derselben Anweisung zu widerrufen; das änderte ein Token, dessen Akteur es nicht widerrufen hat, und der Fremdschlüssel `created_by_api_token_id` verlangte trotzdem, die Nachfahren zuerst zu löschen.
+
+`core.audit_entries.api_token_id` verweist seit Migration 0021 nicht mehr per Fremdschlüssel auf `core.api_tokens` (abweichend von ADR-0014): Das Audit ist ein Nachweis, der länger gilt als das Token, und nennt dessen ID weiter, auch wenn es gelöscht ist. Erwogen wurde, nur Tokens ohne Audit-Eintrag zu löschen; dann bliebe jedes Token, das je eine Mutation aufrief, für immer stehen, und jede Löschung prüfte den Fremdschlüssel über das ganze Audit. Erwogen wurde `ON DELETE SET NULL`; dann verlöre das Audit, mit welchem Token gehandelt wurde.
+
 ## Consequences
 
 - Bis es Nutzer mit Login gibt, hält nur ein Service-Account Tokens (`core.api_tokens.service_account_id`); ein Nutzer erhält `core.not_a_service_account`. Tokens für Nutzer verlangen eine neue Migration, die den Akteur nach Art und ID nennt.
 - Das Token aus `create-service-account` hat keinen Scope.
-- Audit-Einträge von Anlegen und Widerruf nennen das Token des Aufrufs in `api_token_id` und das angelegte oder widerrufene in `subject_api_token_id`. Diese Spalte hat keinen Fremdschlüssel auf `core.api_tokens`, damit ein künftiger Löschjob abgelaufene Tokens löschen kann, ohne ihren Nachweis im Audit zu verlieren.
-- Abgelaufene und widerrufene Tokens bleiben in `core.api_tokens`; ein Löschjob fehlt noch.
+- Audit-Einträge von Anlegen und Widerruf nennen das Token des Aufrufs in `api_token_id` und das angelegte oder widerrufene in `subject_api_token_id`. Beide Spalten haben keinen Fremdschlüssel auf `core.api_tokens`, damit der Löschjob abgelaufene und widerrufene Tokens löschen kann, ohne ihren Nachweis im Audit zu verlieren.
+- Ein gelöschtes Token ist aus `core.listApiTokens` fort; ein Audit-Eintrag nennt seine ID weiter, aber nicht mehr seinen Scope.

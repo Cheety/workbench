@@ -1,0 +1,1 @@
+ALTER TABLE audit_entries DROP CONSTRAINT audit_entries_api_token_id_fkey;

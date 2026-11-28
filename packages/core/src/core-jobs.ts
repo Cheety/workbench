@@ -1,3 +1,4 @@
+import { removeRevokedAndExpiredApiTokens } from "./api-token-removal.ts";
 import { removeExpiredIdempotencyKeys } from "./idempotency-keys.ts";
 import { type RegisteredJob, readJobs } from "./job-registry.ts";
 import { CORE_OWNER } from "./owner.ts";
@@ -12,7 +13,7 @@ export class InvalidCoreJobsError extends Error {
 function readCoreJobs(): readonly RegisteredJob[] {
 	const { value, problems } = readJobs(CORE_OWNER, {
 		jobs: undefined,
-		cronJobs: [removeExpiredIdempotencyKeys],
+		cronJobs: [removeExpiredIdempotencyKeys, removeRevokedAndExpiredApiTokens],
 	});
 	if (problems.length > 0) throw new InvalidCoreJobsError(problems);
 	return value;
