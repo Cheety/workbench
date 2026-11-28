@@ -2,7 +2,11 @@ import { fileURLToPath } from "node:url";
 import { DATABASE_CAPABILITY } from "@workbench/sdk";
 import { CORE_OPERATIONS } from "./core-operations.ts";
 import type { SetTimer } from "./hook-timeout.ts";
-import { IDEMPOTENCY_KEY_HEADER, OPERATION_PATH_TEMPLATE } from "./http-api.ts";
+import {
+	API_VERSION,
+	IDEMPOTENCY_KEY_HEADER,
+	OPERATION_PATH_TEMPLATE,
+} from "./http-api.ts";
 import {
 	IDEMPOTENCY_KEY_PATTERN,
 	TAKES_IDEMPOTENCY_KEY,
@@ -19,8 +23,6 @@ export const OPENAPI_DOCUMENT_PATH = fileURLToPath(
 );
 
 const OPENAPI_VERSION = "3.1.1";
-
-const API_VERSION = "1";
 
 const JSON_CONTENT_TYPE = "application/json";
 

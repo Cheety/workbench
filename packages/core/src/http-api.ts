@@ -10,6 +10,8 @@ import { isWorkspaceId } from "./workspaces.ts";
 
 export const API_PATH_PREFIX = "/api/";
 
+export const API_VERSION = "1";
+
 export const OPERATION_PATH_TEMPLATE =
 	"/api/workspaces/{workspace}/operations/{operation}";
 

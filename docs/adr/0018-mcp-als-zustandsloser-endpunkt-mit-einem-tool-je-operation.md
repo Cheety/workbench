@@ -10,6 +10,8 @@ Das Ergebnis eines Tools ist ein Textblock mit der Ausgabe als JSON, Byte für B
 
 Eine Query trägt die Annotation `readOnlyHint: true`, eine Mutation `false`; so kann ein Client Queries ohne Rückfrage zulassen. Eine Beschreibung hat ein Tool nicht, weil eine Operation keine hat.
 
+Der Server nennt sich `workbench` in der Version des API-Vertrags, derselben, die `info.version` in `docs/openapi.json` trägt: Beide beschreiben dieselben Operationen und ändern sich zusammen. Erwogen wurde die Version des Paketes `@workbench/core`; sie steht auf `0.0.0` und sagt einem Client nichts.
+
 Der Core nutzt das MCP-SDK (`@modelcontextprotocol/sdk`) für Protokoll und Transport, aber dessen Klasse `Server`, nicht `McpServer`. `McpServer` nimmt die Schemas eines Tools nur als zod-Schemas an, erzeugt das JSON Schema selbst und prüft die Argumente vor dem Aufruf; der Core müsste dafür zod-Typen der Plugins erwarten, was ADR-0010 ausschließt, und die Eingabe würde zweimal geprüft, einmal mit anderen Meldungen als in der Pipeline. `Server` ist im SDK als veraltet markiert, mit dem Hinweis, ihn für solche Fälle weiter zu nutzen. Der Core baut je Anfrage einen `Server` mit dem Akteur des Tokens, sodass kein Zustand zwischen zwei Anfragen liegt. Erwogen wurde, JSON-RPC und Transport selbst umzusetzen; Aushandlung der Protokollversion, Batches, Benachrichtigungen und die Fehler des Transports nähme dann niemand ab.
 
 ## Consequences

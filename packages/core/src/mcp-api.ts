@@ -9,6 +9,7 @@ import {
 import type { OperationKind } from "@workbench/sdk";
 import type { AuthenticatedToken } from "./api-tokens.ts";
 import {
+	API_VERSION,
 	type ApiRequest,
 	authenticateRequest,
 	type HttpApi,
@@ -30,7 +31,7 @@ export const MCP_PATH = "/api/mcp";
 
 const MCP_METHOD = "POST";
 
-const SERVER_INFO = { name: "workbench", version: "1" };
+const SERVER_INFO = { name: "workbench", version: API_VERSION };
 
 const OPERATION_NAME_SEPARATOR = ".";
 

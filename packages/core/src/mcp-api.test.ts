@@ -9,6 +9,7 @@ import {
 } from "@workbench/sdk";
 import { z } from "zod";
 import type { PluginPackage } from "./kernel.ts";
+import { OPENAPI_DOCUMENT_PATH } from "./openapi.ts";
 import {
 	API_INSTANCE_WORKSPACE,
 	type ApiInstance,
@@ -131,6 +132,22 @@ const MCP_HEADERS = {
 	"Content-Type": "application/json",
 	"MCP-Protocol-Version": "2025-11-25",
 };
+
+describe("the MCP server of the instance", () => {
+	test("names itself workbench in the version of the API contract", async () => {
+		const api = await startLedgerInstance();
+		const { info } = z
+			.object({ info: z.object({ version: z.string() }) })
+			.parse(await Bun.file(OPENAPI_DOCUMENT_PATH).json());
+
+		const client = await connectedClient(api, await api.issueToken());
+
+		expect(client.getServerVersion()).toEqual({
+			name: "workbench",
+			version: info.version,
+		});
+	});
+});
 
 describe("the operations listed as MCP tools", () => {
 	test("name each operation of the core and the active plugins with its input schema inside a workspace", async () => {
