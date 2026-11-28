@@ -323,7 +323,7 @@ describe("access to the notes of the reference plugin", () => {
 
 	test.each([
 		["a viewer", "viewer", "missing_right"],
-		["an editor who did not create it", "editor", "not_object_owner"],
+		["an editor who did not create it", "editor", "not_object_holder"],
 	] as const)("refuses %s to rename a note", async (_case, role, code) => {
 		const reference = await startReference();
 		const workspace = await reference.createWorkspace("Alpha", [

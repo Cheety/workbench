@@ -1,4 +1,5 @@
 import {
+	ACTOR_KINDS,
 	type AccessedObject,
 	defineOperation,
 	defineRight,
@@ -56,7 +57,7 @@ export const createNote = defineOperation({
 	output: note,
 	execute: async ({ title }, ctx) => {
 		const [row] = await ctx.sql`
-			INSERT INTO notes (id, workspace_id, title, created_at, owner_kind, owner_id)
+			INSERT INTO notes (id, workspace_id, title, created_at, holder_kind, holder_id)
 			VALUES (${ctx.newId()}, ${ctx.workspace}, ${title}, ${ctx.now()}, ${ctx.actor.kind}, ${ctx.actor.id})
 			RETURNING id, title, created_at`;
 		const created = noteOf(noteRow.parse(row));
@@ -84,17 +85,17 @@ export const listNotes = defineOperation({
 
 const accessedNoteRow = z.object({
 	workspace_id: z.string(),
-	owner_kind: z.enum(["user", "service_account"]).nullable(),
-	owner_id: z.string().nullable(),
+	holder_kind: z.enum(ACTOR_KINDS).nullable(),
+	holder_id: z.string().nullable(),
 });
 
 function accessedNoteOf(row: z.infer<typeof accessedNoteRow>): AccessedObject {
 	return {
 		workspace: row.workspace_id,
-		owner:
-			row.owner_kind === null || row.owner_id === null
+		holder:
+			row.holder_kind === null || row.holder_id === null
 				? null
-				: { kind: row.owner_kind, id: row.owner_id },
+				: { kind: row.holder_kind, id: row.holder_id },
 	};
 }
 
@@ -107,7 +108,7 @@ export const renameNote = defineOperation({
 	output: note,
 	execute: async ({ noteId, title }, ctx) => {
 		const [found] = await ctx.sql`
-			SELECT workspace_id, owner_kind, owner_id FROM notes
+			SELECT workspace_id, holder_kind, holder_id FROM notes
 			WHERE id = ${noteId}
 			FOR UPDATE`;
 		ctx.auth.requireAccess(

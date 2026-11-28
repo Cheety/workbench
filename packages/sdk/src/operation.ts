@@ -28,7 +28,8 @@ export type Schema<Value> = {
 	};
 };
 
-export type ActorKind = "user" | "service_account";
+export const ACTOR_KINDS = ["user", "service_account"] as const;
+export type ActorKind = (typeof ACTOR_KINDS)[number];
 
 export type Actor = {
 	readonly kind: ActorKind;
@@ -49,7 +50,7 @@ export function defineRight(definition: RightDefinition): RightDefinition {
 
 export type AccessedObject = {
 	readonly workspace: string;
-	readonly owner: Actor | null;
+	readonly holder: Actor | null;
 };
 
 export type OperationAuth = {

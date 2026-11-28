@@ -189,7 +189,7 @@ Eine von einem Plugin deklarierte, benannte Erlaubnis (z. B. `kanban.board.edit`
 _Avoid_: Permission, Scope, Privileg
 
 **Besitzer**:
-Der Akteur, dem ein Objekt gehört, etwa weil er es angelegt hat; die Pipeline lässt über `ctx.auth` nur ihn auf das Objekt zu, wenn das Plugin den Besitzer nennt.
+Der Akteur, dem ein Objekt gehört, etwa weil er es angelegt hat; die Pipeline lässt über `ctx.auth` nur ihn auf das Objekt zu, wenn das Plugin den Besitzer nennt. Im Code heißt er `holder`.
 _Avoid_: Owner (das ist die Startrolle), Ersteller, Autor
 
 **Instanz-Admin**:

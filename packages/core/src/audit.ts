@@ -1,6 +1,6 @@
 import {
+	ACTOR_KINDS,
 	type Actor,
-	type ActorKind,
 	defineOperation,
 	defineRight,
 	OperationError,
@@ -21,11 +21,6 @@ export type NewAuditEntry = {
 	readonly workspace: string;
 	readonly result: AuditResult;
 };
-
-const ACTOR_KINDS = [
-	"user",
-	"service_account",
-] as const satisfies readonly ActorKind[];
 
 const MAX_LISTED_AUDIT_ENTRIES = 100;
 

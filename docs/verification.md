@@ -78,7 +78,7 @@ curl -si http://127.0.0.1:3123/health/live -H 'X-Correlation-ID: verify-1'
 docker compose -f compose.dev.yaml exec -T postgres psql -U workbench -d workbench_verify -c 'TABLE core.migrations' -c '\dt plugin_reference.*'
 ```
 
-`core.migrations` hat die Spalten `schema_name`, `migration` und `applied_at`; dort stehen `core | 0001_create_workspaces.sql` und für das Referenz-Plugin `plugin_reference | 0001_create_notes.sql` bis `plugin_reference | 0003_add_owner_to_notes.sql`, und `\dt` zeigt dessen Tabelle `notes`.
+`core.migrations` hat die Spalten `schema_name`, `migration` und `applied_at`; dort stehen `core | 0001_create_workspaces.sql` und für das Referenz-Plugin `plugin_reference | 0001_create_notes.sql` bis `plugin_reference | 0003_add_holder_to_notes.sql`, und `\dt` zeigt dessen Tabelle `notes`.
 
 ## Ein Event in der Outbox ansehen
 

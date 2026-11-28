@@ -127,45 +127,37 @@ const OBJECT_NOT_FOUND: OperationFailure = {
 	issues: [],
 };
 
-const NOT_OBJECT_OWNER: OperationFailure = {
-	code: "not_object_owner",
+const NOT_OBJECT_HOLDER: OperationFailure = {
+	code: "not_object_holder",
 	kind: "forbidden",
 	detail: "the object belongs to another actor",
 	issues: [],
 };
 
-class AccessDeniedError extends Error {
+class CallFailedError extends Error {
 	readonly failure: OperationFailure;
 
 	constructor(failure: OperationFailure) {
 		super(failure.detail);
-		this.name = "AccessDeniedError";
+		this.name = "CallFailedError";
 		this.failure = failure;
 	}
 }
 
-class ObjectNotFoundError extends Error {
-	constructor() {
-		super(OBJECT_NOT_FOUND.detail);
-		this.name = "ObjectNotFoundError";
+class AccessDeniedError extends CallFailedError {
+	constructor(failure: OperationFailure) {
+		super(failure);
+		this.name = "AccessDeniedError";
 	}
 }
 
-class InvalidInputError extends Error {
-	readonly issues: readonly ValidationIssue[];
-
-	constructor(issues: readonly ValidationIssue[]) {
-		super("the input does not match the input schema of the operation");
-		this.name = "InvalidInputError";
-		this.issues = issues;
-	}
-}
-
-class WorkspaceNotFoundError extends Error {
-	constructor() {
-		super(WORKSPACE_NOT_FOUND.detail);
-		this.name = "WorkspaceNotFoundError";
-	}
+function invalidInput(issues: readonly ValidationIssue[]): OperationFailure {
+	return {
+		code: "invalid_input",
+		kind: "invalid_input",
+		detail: "the input does not match the input schema of the operation",
+		issues,
+	};
 }
 
 class InvalidOutputError extends Error {
@@ -233,7 +225,7 @@ async function invoke(
 			async (transaction) => {
 				await authorize(transaction, call, operation);
 				const input = await operation.validateInput(call.input);
-				if (!input.valid) throw new InvalidInputError(input.issues);
+				if (!input.valid) throw new CallFailedError(invalidInput(input.issues));
 				const run = async (): Promise<unknown> => {
 					const executed = await execute(
 						operation,
@@ -372,7 +364,7 @@ async function authorize(
 	);
 	switch (membership.kind) {
 		case "no_workspace":
-			throw new WorkspaceNotFoundError();
+			throw new CallFailedError(WORKSPACE_NOT_FOUND);
 		case "not_member":
 			throw new AccessDeniedError(WORKSPACE_NOT_FOUND);
 		case "member":
@@ -384,11 +376,11 @@ async function authorize(
 function authOf(call: OperationCall): OperationAuth {
 	return {
 		requireAccess: (object) => {
-			if (object === undefined) throw new ObjectNotFoundError();
+			if (object === undefined) throw new CallFailedError(OBJECT_NOT_FOUND);
 			if (object.workspace !== call.workspace)
 				throw new AccessDeniedError(OBJECT_NOT_FOUND);
-			if (object.owner !== null && !isSameActor(object.owner, call.actor))
-				throw new AccessDeniedError(NOT_OBJECT_OWNER);
+			if (object.holder !== null && !isSameActor(object.holder, call.actor))
+				throw new AccessDeniedError(NOT_OBJECT_HOLDER);
 			return object;
 		},
 	};
@@ -512,11 +504,7 @@ async function runExecute(
 	try {
 		return await operation.execute(input, ctx);
 	} catch (error) {
-		if (
-			error instanceof OperationError ||
-			error instanceof AccessDeniedError ||
-			error instanceof ObjectNotFoundError
-		)
+		if (error instanceof OperationError || error instanceof CallFailedError)
 			throw error;
 		throw new ExecuteThrewError(error);
 	}
@@ -527,15 +515,7 @@ function logAndMapFailure(
 	logger: Logger,
 	owner: Owner,
 ): OperationFailure {
-	if (error instanceof WorkspaceNotFoundError) return WORKSPACE_NOT_FOUND;
-	if (error instanceof ObjectNotFoundError) return OBJECT_NOT_FOUND;
-	if (error instanceof InvalidInputError)
-		return {
-			code: "invalid_input",
-			kind: "invalid_input",
-			detail: error.message,
-			issues: error.issues,
-		};
+	if (error instanceof CallFailedError) return error.failure;
 	if (error instanceof IdempotencyKeyReusedError) return IDEMPOTENCY_KEY_REUSED;
 	if (error instanceof OperationError)
 		return {

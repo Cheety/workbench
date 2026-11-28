@@ -220,7 +220,7 @@ Wirft `execute`, passt die Ausgabe nicht zum Schema oder lässt sich der Audit-E
 | `workspace_not_found`     | `not_found`     | Der Workspace existiert nicht, oder der Akteur hat keine Mitgliedschaft in ihm.                                                                     |
 | `missing_right`           | `forbidden`     | Die Rolle der Mitgliedschaft des Akteurs hat das Recht der Operation nicht.                                                                         |
 | `object_not_found`        | `not_found`     | `ctx.auth` fand das Objekt nicht oder in einem anderen Workspace.                                                                                   |
-| `not_object_owner`        | `forbidden`     | `ctx.auth` fand das Objekt im Besitz eines anderen Akteurs.                                                                                         |
+| `not_object_holder`       | `forbidden`     | `ctx.auth` fand das Objekt im Besitz eines anderen Akteurs.                                                                                         |
 | `internal_error`          | `internal`      | `execute` warf einen anderen Fehler als `OperationError`, die Ausgabe passt nicht zum Schema, oder die Pipeline scheiterte außerhalb von `execute`. |
 | `<plugin>.<code>`         | aus dem Fehler  | `execute` warf einen `OperationError`.                                                                                                              |
 
@@ -249,16 +249,16 @@ Jede Operation verlangt eine Mitgliedschaft des Akteurs im Workspace des Aufrufs
 - Das Referenz-Plugin gibt `reference.note.read` allen drei Startrollen, `reference.note.create` und `reference.note.edit` nur `owner` und `editor`; ein `viewer` kann also `reference.listNotes` aufrufen, `reference.createNote` nicht. Das Recht `core.audit.read` des Cores hat nur `owner`.
 - Bis Workspaces und Mitgliedschaften über Operationen verwaltet werden (#16), legt der Betreiber eine Mitgliedschaft per SQL an, etwa für einen Service-Account: `INSERT INTO core.memberships (workspace_id, actor_kind, actor_id, role, created_at) VALUES ('<workspace>', 'service_account', '<serviceAccount>', 'owner', now())`.
 
-Für Zugriffe auf einzelne Objekte im Use Case gibt es `ctx.auth.requireAccess(object)`. Das Plugin liest sein Objekt nur über dessen ID, ohne Filter auf den Workspace, und reicht dessen Workspace und Besitzer (`owner`, ein Akteur oder `null`, wenn das Objekt keinen Besitzer hat) weiter; `requireAccess` gibt das Objekt unverändert zurück oder wirft:
+Für Zugriffe auf einzelne Objekte im Use Case gibt es `ctx.auth.requireAccess(object)`. Das Plugin liest sein Objekt nur über dessen ID, ohne Filter auf den Workspace, und reicht dessen Workspace und Besitzer (`holder`, ein Akteur oder `null`, wenn das Objekt keinen Besitzer hat) weiter; `requireAccess` gibt das Objekt unverändert zurück oder wirft:
 
 ```ts
 const [row] =
-	await ctx.sql`SELECT workspace_id, owner_kind, owner_id FROM notes WHERE id = ${noteId} FOR UPDATE`;
+	await ctx.sql`SELECT workspace_id, holder_kind, holder_id FROM notes WHERE id = ${noteId} FOR UPDATE`;
 ctx.auth.requireAccess(row === undefined ? undefined : accessedNoteOf(row));
 ```
 
 - `undefined` (kein Objekt) und ein Objekt eines anderen Workspace scheitern gleich, mit `object_not_found`, sodass ein Akteur fremde Objekte nicht von fehlenden unterscheiden kann.
-- Ein Objekt mit einem anderen Akteur als Besitzer scheitert mit `not_object_owner`.
+- Ein Objekt mit einem anderen Akteur als Besitzer scheitert mit `not_object_holder`.
 
 Ein verweigerter Zugriff hinterlässt einen Audit-Eintrag mit dem Ergebnis `denied` (siehe [Audit](#audit)): eine fehlende Mitgliedschaft in einem existierenden Workspace, ein fehlendes Recht, und ein Objekt eines anderen Workspace oder Besitzers aus `ctx.auth`. Kein Eintrag entsteht für einen Workspace, den es nicht gibt, und für ein Objekt, das es nicht gibt. Die Pipeline rollt die Transaktion des Aufrufs zurück und schreibt den Eintrag in einer eigenen; lässt er sich nicht schreiben, scheitert der Aufruf mit `internal_error` (`reason` `pipeline_failed`).
 
@@ -539,7 +539,7 @@ Events stellt das Harness nicht von selbst zu: `await harness.deliverEvents()` r
 
 Auch Jobs führt das Harness nicht von selbst aus: `await harness.runJobs()` versucht jeden fälligen Job einmal und kehrt dann zurück. Ein gescheiterter Job wird erst wieder fällig, wenn die Uhr des Harness (`now`) weiter ist als seine Wartezeit; ein Test stellt die Uhr vor, statt zu warten. Für einen Cron-Job reiht der erste Aufruf die nächste Fälligkeit nach der Uhr des Harness ein; ist die Uhr danach bei ihr angekommen, führt der nächste Aufruf ihn aus, auch für die Fälligkeiten, über die der Test die Uhr hinweggestellt hat, höchstens die zehn jüngsten. Stellt ein Test die Uhr um Tage vor, löscht `runJobs()` wie die Instanz erledigte Jobs nach 7 und Jobs im Dead-Letter nach 30 Tagen aus `core.jobs`.
 
-Das Referenz-Plugin bietet so die Mutation `reference.createNote` (Eingabe `title`, 1 bis 200 Zeichen nach Entfernen von Leerraum am Rand; der Akteur wird Besitzer der Notiz), die Query `reference.listNotes` (Eingabe `limit`, 1 bis 100; die neuesten zuerst) und die Mutation `reference.renameNote` (Eingabe `noteId` und `title`; nur der Besitzer benennt eine Notiz um, geprüft über `ctx.auth`, eine Notiz ohne Besitzer aus der Zeit vor `0003_add_owner_to_notes.sql` jeder mit dem Recht), alle auf den Notizen eines Workspaces in `plugin_reference.notes`. `reference.createNote` publiziert das Event `reference.NoteCreated` (Version 1, Payload `noteId`), dessen Definition `noteCreated` im Contract des Plugins liegt (siehe [Events](#events)). Seine Tests in `packages/plugin-reference/src/operations.test.ts` zeigen das Harness im Einsatz.
+Das Referenz-Plugin bietet so die Mutation `reference.createNote` (Eingabe `title`, 1 bis 200 Zeichen nach Entfernen von Leerraum am Rand; der Akteur wird Besitzer der Notiz), die Query `reference.listNotes` (Eingabe `limit`, 1 bis 100; die neuesten zuerst) und die Mutation `reference.renameNote` (Eingabe `noteId` und `title`; nur der Besitzer benennt eine Notiz um, geprüft über `ctx.auth`, eine Notiz ohne Besitzer aus der Zeit vor `0003_add_holder_to_notes.sql` jeder mit dem Recht), alle auf den Notizen eines Workspaces in `plugin_reference.notes`. `reference.createNote` publiziert das Event `reference.NoteCreated` (Version 1, Payload `noteId`), dessen Definition `noteCreated` im Contract des Plugins liegt (siehe [Events](#events)). Seine Tests in `packages/plugin-reference/src/operations.test.ts` zeigen das Harness im Einsatz.
 
 ### HTTP-API
 
@@ -569,7 +569,7 @@ curl -X POST "http://127.0.0.1:3000/api/workspaces/$WORKSPACE/operations/referen
 | `workspace_not_found`     | 404    | Kein Workspace hat diese UUID, oder der Service-Account des Tokens hat keine Mitgliedschaft in ihm.                             |
 | `missing_right`           | 403    | Die Rolle der Mitgliedschaft hat das Recht der Operation nicht.                                                                 |
 | `object_not_found`        | 404    | Die Operation fand das Objekt nicht oder in einem anderen Workspace.                                                            |
-| `not_object_owner`        | 403    | Das Objekt gehört einem anderen Akteur.                                                                                         |
+| `not_object_holder`       | 403    | Das Objekt gehört einem anderen Akteur.                                                                                         |
 | `unknown_operation`       | 404    | Weder der Core noch ein aktives Plugin hat eine Operation dieses Namens.                                                        |
 | `body_too_large`          | 413    | Der Body ist größer als 1 MiB.                                                                                                  |
 | `invalid_idempotency_key` | 400    | Der Header `Idempotency-Key` hat nicht 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen ohne Komma, oder er kam mehrfach.     |
