@@ -3,10 +3,10 @@ import {
 	type Actor,
 	defineOperation,
 	defineRight,
-	OperationError,
 } from "@workbench/sdk";
 import type { SQL } from "bun";
 import { z } from "zod";
+import { type Keyset, pageOf } from "./keyset-pages.ts";
 import { defineInstanceOperation } from "./operation-registry.ts";
 
 export const DENIAL_REASONS = [
@@ -132,44 +132,18 @@ type AuditPosition = {
 	readonly id: string;
 };
 
-const encodedPosition = z.tuple([z.iso.datetime(), z.guid()]);
-
-function cursorAfter(position: AuditPosition): string {
-	const encoded: z.infer<typeof encodedPosition> = [
-		position.occurredAt.toISOString(),
-		position.id,
-	];
-	return Buffer.from(JSON.stringify(encoded)).toString("base64url");
-}
-
-function invalidCursor(): OperationError {
-	return new OperationError(
-		"rejected",
-		"invalid_cursor",
-		"the cursor does not name a position in the audit",
-	);
-}
-
-function positionOf(cursor: string): AuditPosition {
-	const encoded = encodedPosition.safeParse(decodedJson(cursor));
-	if (!encoded.success) throw invalidCursor();
-	const [occurredAt, id] = encoded.data;
-	const position = { occurredAt: new Date(occurredAt), id };
-	if (cursorAfter(position) !== cursor) throw invalidCursor();
-	return position;
-}
-
-function decodedJson(cursor: string): unknown {
-	try {
-		const decoded: unknown = JSON.parse(
-			Buffer.from(cursor, "base64url").toString("utf8"),
-		);
-		return decoded;
-	} catch (error) {
-		if (error instanceof SyntaxError) return undefined;
-		throw error;
-	}
-}
+const auditEntries: Keyset<z.infer<typeof auditEntryRow>, AuditPosition> = {
+	list: "the audit",
+	row: auditEntryRow,
+	position: z
+		.tuple([z.iso.datetime(), z.guid()])
+		.transform(([occurredAt, id]) => ({
+			occurredAt: new Date(occurredAt),
+			id,
+		})),
+	positionOf: (row) => ({ occurredAt: row.occurred_at, id: row.id }),
+	encode: ({ occurredAt, id }) => [occurredAt.toISOString(), id],
+};
 
 export const auditRead = defineRight({
 	name: "core.audit.read",
@@ -186,24 +160,6 @@ const auditPageInput = z.object({
 	cursor: z.string().max(MAX_CURSOR_LENGTH).nullable(),
 });
 
-type AuditPage = {
-	readonly rows: readonly z.infer<typeof auditEntryRow>[];
-	readonly nextCursor: string | null;
-};
-
-function auditPageOf(rows: readonly unknown[], limit: number): AuditPage {
-	const found = z.array(auditEntryRow).parse(rows);
-	const page = found.slice(0, limit);
-	const last = page.at(-1);
-	return {
-		rows: page,
-		nextCursor:
-			found.length > limit && last !== undefined
-				? cursorAfter({ occurredAt: last.occurred_at, id: last.id })
-				: null,
-	};
-}
-
 export const listAuditEntries = defineOperation({
 	name: "listAuditEntries",
 	kind: "query",
@@ -214,25 +170,23 @@ export const listAuditEntries = defineOperation({
 		entries: z.array(workspaceAuditEntry),
 		nextCursor: z.string().nullable(),
 	}),
-	execute: async ({ limit, cursor }, ctx) => {
-		const upTo = limit + 1;
-		const after = cursor === null ? null : positionOf(cursor);
-		const rows =
+	execute: async (request, ctx) => {
+		const page = await pageOf(auditEntries, request, (after, upTo) =>
 			after === null
-				? await ctx.sql`
+				? ctx.sql`
 					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason
 					FROM core.audit_entries
 					WHERE workspace_id = ${ctx.workspace}
 					ORDER BY occurred_at DESC, id DESC
 					LIMIT ${upTo}`
-				: await ctx.sql`
+				: ctx.sql`
 					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason
 					FROM core.audit_entries
 					WHERE workspace_id = ${ctx.workspace}
 						AND (occurred_at, id) < (${after.occurredAt}, ${after.id})
 					ORDER BY occurred_at DESC, id DESC
-					LIMIT ${upTo}`;
-		const page = auditPageOf(rows, limit);
+					LIMIT ${upTo}`,
+		);
 		return {
 			entries: page.rows.map((row) => ({
 				...auditEntryOf(row),
@@ -252,23 +206,21 @@ export const listInstanceAuditEntries = defineInstanceOperation({
 		entries: z.array(instanceAuditEntry),
 		nextCursor: z.string().nullable(),
 	}),
-	execute: async ({ limit, cursor }, ctx) => {
-		const upTo = limit + 1;
-		const after = cursor === null ? null : positionOf(cursor);
-		const rows =
+	execute: async (request, ctx) => {
+		const page = await pageOf(auditEntries, request, (after, upTo) =>
 			after === null
-				? await ctx.sql`
+				? ctx.sql`
 					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason
 					FROM core.audit_entries
 					ORDER BY occurred_at DESC, id DESC
 					LIMIT ${upTo}`
-				: await ctx.sql`
+				: ctx.sql`
 					SELECT id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason
 					FROM core.audit_entries
 					WHERE (occurred_at, id) < (${after.occurredAt}, ${after.id})
 					ORDER BY occurred_at DESC, id DESC
-					LIMIT ${upTo}`;
-		const page = auditPageOf(rows, limit);
+					LIMIT ${upTo}`,
+		);
 		return {
 			entries: page.rows.map(auditEntryOf),
 			nextCursor: page.nextCursor,

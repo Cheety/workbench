@@ -1,6 +1,7 @@
-import { defineRight, OperationError } from "@workbench/sdk";
+import { defineRight } from "@workbench/sdk";
 import type { SQL } from "bun";
 import { z } from "zod";
+import { type Keyset, pageOf } from "./keyset-pages.ts";
 import { defineInstanceOperation } from "./operation-registry.ts";
 
 export type NewWorkspace = {
@@ -66,41 +67,18 @@ type WorkspacePosition = {
 	readonly id: string;
 };
 
-const encodedPosition = z.tuple([z.string(), z.guid()]);
-
-function cursorAfter(position: WorkspacePosition): string {
-	const encoded: z.infer<typeof encodedPosition> = [position.name, position.id];
-	return Buffer.from(JSON.stringify(encoded)).toString("base64url");
-}
-
-function invalidCursor(): OperationError {
-	return new OperationError(
-		"rejected",
-		"invalid_cursor",
-		"the cursor does not name a position in the list of workspaces",
-	);
-}
-
-function positionOf(cursor: string): WorkspacePosition {
-	const encoded = encodedPosition.safeParse(decodedJson(cursor));
-	if (!encoded.success) throw invalidCursor();
-	const [name, id] = encoded.data;
-	const position = { name, id };
-	if (cursorAfter(position) !== cursor) throw invalidCursor();
-	return position;
-}
-
-function decodedJson(cursor: string): unknown {
-	try {
-		const decoded: unknown = JSON.parse(
-			Buffer.from(cursor, "base64url").toString("utf8"),
-		);
-		return decoded;
-	} catch (error) {
-		if (error instanceof SyntaxError) return undefined;
-		throw error;
-	}
-}
+const listedWorkspaces: Keyset<
+	z.infer<typeof listedWorkspaceRow>,
+	WorkspacePosition
+> = {
+	list: "the list of workspaces",
+	row: listedWorkspaceRow,
+	position: z
+		.tuple([z.string(), z.guid()])
+		.transform(([name, id]) => ({ name, id })),
+	positionOf: ({ name, id }) => ({ name, id }),
+	encode: ({ name, id }) => [name, id],
+};
 
 export const listWorkspacesOperation = defineInstanceOperation({
 	name: "listWorkspaces",
@@ -114,35 +92,25 @@ export const listWorkspacesOperation = defineInstanceOperation({
 		workspaces: z.array(workspace.extend({ role: z.string() })),
 		nextCursor: z.string().nullable(),
 	}),
-	execute: async ({ limit, cursor }, ctx) => {
-		const upTo = limit + 1;
-		const after = cursor === null ? null : positionOf(cursor);
-		const rows =
+	execute: async (request, ctx) => {
+		const page = await pageOf(listedWorkspaces, request, (after, upTo) =>
 			after === null
-				? await ctx.sql`
+				? ctx.sql`
 					SELECT workspaces.id, workspaces.name, memberships.role
 					FROM core.memberships
 					JOIN core.workspaces ON workspaces.id = memberships.workspace_id
 					WHERE memberships.actor_kind = ${ctx.actor.kind} AND memberships.actor_id = ${ctx.actor.id}
 					ORDER BY workspaces.name, workspaces.id
 					LIMIT ${upTo}`
-				: await ctx.sql`
+				: ctx.sql`
 					SELECT workspaces.id, workspaces.name, memberships.role
 					FROM core.memberships
 					JOIN core.workspaces ON workspaces.id = memberships.workspace_id
 					WHERE memberships.actor_kind = ${ctx.actor.kind} AND memberships.actor_id = ${ctx.actor.id}
 						AND (workspaces.name, workspaces.id) > (${after.name}, ${after.id})
 					ORDER BY workspaces.name, workspaces.id
-					LIMIT ${upTo}`;
-		const found = z.array(listedWorkspaceRow).parse(rows);
-		const page = found.slice(0, limit);
-		const last = page.at(-1);
-		return {
-			workspaces: page,
-			nextCursor:
-				found.length > limit && last !== undefined
-					? cursorAfter({ name: last.name, id: last.id })
-					: null,
-		};
+					LIMIT ${upTo}`,
+		);
+		return { workspaces: page.rows, nextCursor: page.nextCursor };
 	},
 });
