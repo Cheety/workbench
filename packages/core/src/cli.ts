@@ -6,6 +6,7 @@ import {
 	InvalidCliConfigError,
 	loadCliConfigFromEnvironment,
 } from "./config.ts";
+import { type HookTimeout, setSystemTimer } from "./hook-timeout.ts";
 import {
 	IDEMPOTENCY_KEY_HEADER,
 	OPERATION_LIST_PATH,
@@ -33,8 +34,6 @@ const REQUEST_TIMEOUT_MS = 120_000;
 const PARSE_ARGS_ERROR_CODE_PREFIX = "ERR_PARSE_ARGS_";
 
 const EXIT_CODES = { succeeded: 0, failed: 1, misused: 2 } as const;
-
-type ExitCode = (typeof EXIT_CODES)[keyof typeof EXIT_CODES];
 
 type Invocation =
 	| { readonly action: "list" }
@@ -220,15 +219,64 @@ function findListing(body: unknown): string | undefined {
 		.join("");
 }
 
+export type ExitCode = (typeof EXIT_CODES)[keyof typeof EXIT_CODES];
+
+export type CliOutput = {
+	writeOutput(text: string): void;
+	writeError(text: string): void;
+};
+
+export type CommandLineRun = {
+	readonly args: readonly string[];
+	readonly loadConfig: () => CliConfig;
+	readonly output: CliOutput;
+	readonly deadline: HookTimeout;
+};
+
+export async function runCommandLine({
+	args,
+	loadConfig,
+	output,
+	deadline,
+}: CommandLineRun): Promise<ExitCode> {
+	const parsed = readInvocation(args);
+	if (!parsed.ok) {
+		output.writeError(`${parsed.problem}\n${USAGE}\n`);
+		return EXIT_CODES.misused;
+	}
+	let config: CliConfig;
+	try {
+		config = loadConfig();
+	} catch (error) {
+		if (!(error instanceof InvalidCliConfigError)) throw error;
+		output.writeError(
+			`${[
+				"invalid configuration:",
+				...error.issues.map((issue) => `  ${issue.subject} ${issue.problem}`),
+			].join("\n")}\n`,
+		);
+		return EXIT_CODES.misused;
+	}
+	const expiry = new AbortController();
+	const cancel = deadline.setTimer(() => expiry.abort(), deadline.ms);
+	try {
+		return await invoke(parsed.invocation, config, output, expiry.signal);
+	} finally {
+		cancel();
+	}
+}
+
 async function invoke(
 	invocation: Invocation,
 	config: CliConfig,
+	output: CliOutput,
+	expired: AbortSignal,
 ): Promise<ExitCode> {
 	const exchange = exchangeFor(invocation, config);
-	const sent = await send(exchange, config.instanceUrl);
+	const sent = await send(exchange, config.instanceUrl, expired);
 	if (!sent.reached) {
-		writeError(
-			`the instance at ${config.instanceUrl.origin} cannot be reached`,
+		output.writeError(
+			`the instance at ${config.instanceUrl.origin} cannot be reached\n`,
 		);
 		return EXIT_CODES.failed;
 	}
@@ -237,36 +285,38 @@ async function invoke(
 	const answer =
 		response.ok && body.parsed ? exchange.findAnswer(body.value) : undefined;
 	if (answer !== undefined) {
-		process.stdout.write(answer);
+		output.writeOutput(answer);
 		return EXIT_CODES.succeeded;
 	}
 	const problem = problemDetails.safeParse(
 		body.parsed ? body.value : undefined,
 	);
-	writeError(
-		problem.success
-			? describeProblem(problem.data)
-			: `the instance answered with HTTP ${response.status} and an unexpected body`,
+	output.writeError(
+		`${
+			problem.success
+				? describeProblem(problem.data)
+				: `the instance answered with HTTP ${response.status} and an unexpected body`
+		}\n`,
 	);
 	return EXIT_CODES.failed;
 }
 
-async function send({ path, init }: Exchange, instanceUrl: URL): Promise<Sent> {
+async function send(
+	{ path, init }: Exchange,
+	instanceUrl: URL,
+	expired: AbortSignal,
+): Promise<Sent> {
 	try {
 		const response = await fetch(new URL(path, instanceUrl), {
 			...init,
-			signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+			signal: expired,
 		});
 		return { reached: true, response };
 	} catch (error) {
-		if (error instanceof TypeError || isTimeout(error))
+		if (error instanceof TypeError || expired.aborted)
 			return { reached: false };
 		throw error;
 	}
-}
-
-function isTimeout(error: unknown): boolean {
-	return error instanceof DOMException && error.name === "TimeoutError";
 }
 
 function describeProblem(problem: z.infer<typeof problemDetails>): string {
@@ -280,28 +330,16 @@ function describeProblem(problem: z.infer<typeof problemDetails>): string {
 	].join("\n");
 }
 
-function writeError(text: string): void {
-	process.stderr.write(`${text}\n`);
-}
-
-const read = readInvocation(Bun.argv.slice(2));
-if (!read.ok) {
-	writeError(`${read.problem}\n${USAGE}`);
-	process.exit(EXIT_CODES.misused);
-}
-
-let config: CliConfig;
-try {
-	config = loadCliConfigFromEnvironment();
-} catch (error) {
-	if (!(error instanceof InvalidCliConfigError)) throw error;
-	writeError(
-		[
-			"invalid configuration:",
-			...error.issues.map((issue) => `  ${issue.subject} ${issue.problem}`),
-		].join("\n"),
+if (import.meta.main) {
+	process.exit(
+		await runCommandLine({
+			args: Bun.argv.slice(2),
+			loadConfig: loadCliConfigFromEnvironment,
+			output: {
+				writeOutput: (text) => process.stdout.write(text),
+				writeError: (text) => process.stderr.write(text),
+			},
+			deadline: { ms: REQUEST_TIMEOUT_MS, setTimer: setSystemTimer },
+		}),
 	);
-	process.exit(EXIT_CODES.misused);
 }
-
-process.exit(await invoke(read.invocation, config));
