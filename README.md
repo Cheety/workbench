@@ -196,14 +196,14 @@ Die Pipeline prüft bisher keine Rechte; das folgt mit Identität und Zugriff.
 
 #### Idempotency-Keys
 
-Ein Akteur kann einer Mutation einen Idempotency-Key mitgeben, damit eine Wiederholung, etwa nach einer Zeitüberschreitung, keinen zweiten Effekt hat (ADR-0017). Der Key ist 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen lang, sonst scheitert der Aufruf mit `invalid_idempotency_key`, bevor irgendetwas läuft.
+Ein Akteur kann einer Mutation einen Idempotency-Key mitgeben, damit eine Wiederholung, etwa nach einer Zeitüberschreitung, keinen zweiten Effekt hat (ADR-0017). Der Key ist 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen lang, sonst scheitert die Mutation mit `invalid_idempotency_key`, bevor irgendetwas läuft.
 
 - Der erste Aufruf mit einem Key führt die Mutation aus und hält ihre Antwort in `core.idempotency_keys` fest, in ihrer Transaktion. Jeder weitere Aufruf desselben Akteurs mit demselben Key, derselben Operation, demselben Workspace und derselben Eingabe erhält dieselbe Antwort, ohne dass `execute` läuft, und hinterlässt keinen Audit-Eintrag, kein Event und keinen Job. Die Eingabe gilt als dieselbe, wenn ihr JSON dieselben Felder mit denselben Werten hat, in beliebiger Reihenfolge.
 - Nennt ein weiterer Aufruf mit demselben Key eine andere Operation, einen anderen Workspace oder eine andere Eingabe, scheitert er mit `idempotency_key_reused`, und die Mutation läuft nicht.
 - Kommt ein zweiter Aufruf mit demselben Key, während der erste noch läuft, wartet er auf ihn und antwortet wie er; scheitert der erste, führt der zweite die Mutation aus.
 - Keys sind je Akteur getrennt: Derselbe Key zweier Akteure, auch eines Nutzers und eines Service-Accounts mit derselben ID, sind zwei Keys.
 - Scheitert die Mutation, bleibt der Key frei: Ein weiterer Aufruf mit ihm führt sie erneut aus.
-- Eine Query beachtet den Key nicht und läuft bei jedem Aufruf; nur seine Form wird geprüft.
+- Eine Query beachtet den Key nicht, auch nicht seine Form, und läuft bei jedem Aufruf.
 - Ein Key gilt mindestens 24 Stunden ab seinem ersten Aufruf. Danach löscht ihn der Cron-Job des Cores `core.removeExpiredIdempotencyKeys`, der alle zehn Minuten (`*/10 * * * *`) läuft und je Lauf höchstens 10 000 abgelaufene Keys löscht; mit ihm verschwindet die festgehaltene Antwort. Bis er gelöscht ist, gilt ein abgelaufener Key weiter, danach führt ein Aufruf mit ihm die Mutation wieder aus.
 
 ### Audit

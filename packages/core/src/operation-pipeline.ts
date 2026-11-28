@@ -168,7 +168,9 @@ async function invoke(
 	});
 	try {
 		const key =
-			call.idempotencyKey === null ? null : idempotencyKey(call.idempotencyKey);
+			call.idempotencyKey === null || !IS_REPLAYED[operation.kind]
+				? null
+				: idempotencyKey(call.idempotencyKey);
 		const input = await operation.validateInput(call.input);
 		if (!input.valid)
 			return failed({
@@ -200,7 +202,7 @@ async function invoke(
 						);
 					return executed;
 				};
-				if (key === null || !IS_REPLAYED[operation.kind]) return run();
+				if (key === null) return run();
 				return runIdempotently(
 					transaction,
 					{

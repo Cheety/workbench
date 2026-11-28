@@ -329,6 +329,18 @@ describe("a query called with an idempotency key", () => {
 			output: { entries: [{ id: expect.any(String), amount: 42 }] },
 		});
 	});
+
+	test("runs with a key a mutation would reject as malformed, since a query takes no key", async () => {
+		const harness = await startLedger();
+		const workspace = await harness.createWorkspace("Accounts");
+
+		const listed = await harness.call({
+			...listingEntries(workspace),
+			idempotencyKey: "",
+		});
+
+		expect(listed).toEqual({ ok: true, output: { entries: [] } });
+	});
 });
 
 function adjustableClock(start: string) {
