@@ -103,7 +103,9 @@ const pluginNames = z
 
 const serviceAccountIds = z
 	.string()
-	.transform((value) => value.split(",").map((id) => id.trim()))
+	.transform((value) =>
+		value.trim() === "" ? [] : value.split(",").map((id) => id.trim()),
+	)
 	.pipe(z.array(z.uuid()));
 
 const schema = z.object({

@@ -740,6 +740,6 @@ Die Konfiguration kommt ausschließlich aus der Umgebung und wird beim Start gep
 | `READINESS_TIMEOUT_MS`            | nein    | `2000`   | Frist der Datenbankprüfung im Readiness-Check in Millisekunden, 1 bis 60000.                                                                                                                          |
 | `PLUGIN_HOOK_TIMEOUT_MS`          | nein    | `10000`  | Frist in Millisekunden, die ein Plugin je für das Laden seines Einstiegs, für `activate`, für `deactivate`, für jeden Aufruf eines Event-Handlers und für jeden Versuch eines Jobs hat, 1 bis 600000. |
 | `PLUGINS`                         | nein    | –        | Namen der Plugins, die die Instanz aktiviert, durch Komma getrennt. Ohne Angabe ist kein Plugin aktiv.                                                                                                |
-| `INSTANCE_ADMIN_SERVICE_ACCOUNTS` | nein    | –        | IDs (UUIDs) der Service-Accounts, die Instanz-Admin sind, durch Komma getrennt. Ohne Angabe gibt es keinen Instanz-Admin.                                                                             |
+| `INSTANCE_ADMIN_SERVICE_ACCOUNTS` | nein    | –        | IDs (UUIDs) der Service-Accounts, die Instanz-Admin sind, durch Komma getrennt. Leer oder ohne Angabe gibt es keinen.                                                                                 |
 
 Für die Tests gilt zusätzlich `TEST_DATABASE_URL` (Standard: die Datenbank aus `compose.dev.yaml`).

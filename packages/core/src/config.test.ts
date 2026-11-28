@@ -297,6 +297,21 @@ describe("loadConfig", () => {
 		expect(config.instanceAdmins).toEqual([]);
 	});
 
+	test.each([
+		["empty", ""],
+		["blank", "  "],
+	])(
+		"names no instance admin when INSTANCE_ADMIN_SERVICE_ACCOUNTS is %s",
+		(_case, value) => {
+			const config = loadConfig({
+				env: { DATABASE_URL, INSTANCE_ADMIN_SERVICE_ACCOUNTS: value },
+				readSecretFile: noSecretFiles,
+			});
+
+			expect(config.instanceAdmins).toEqual([]);
+		},
+	);
+
 	test("reads INSTANCE_ADMIN_SERVICE_ACCOUNTS as service accounts that are instance admins", () => {
 		const config = loadConfig({
 			env: {
