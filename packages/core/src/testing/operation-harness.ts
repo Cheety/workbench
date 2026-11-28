@@ -90,6 +90,10 @@ const EVENT_ID_GROUP = "e000";
 
 const JOB_ID_GROUP = "b000";
 
+const EVENT_HANDLER_ID_GROUP = "c000";
+
+const JOB_RUN_ID_GROUP = "d000";
+
 const NOT_STOPPED = new AbortController().signal;
 
 const HOOK_TIMEOUT_MS = 10_000;
@@ -186,7 +190,7 @@ function harnessOf(
 		events: plugins.events,
 		hasCoreSchema: () => true,
 		now,
-		newId,
+		newId: sequentialIds(EVENT_HANDLER_ID_GROUP),
 		random,
 		handlerTimeout: { ms: HOOK_TIMEOUT_MS, setTimer: setSystemTimer },
 		logger,
@@ -197,7 +201,7 @@ function harnessOf(
 		jobs: plugins.jobs,
 		hasCoreSchema: () => true,
 		now,
-		newId,
+		newId: sequentialIds(JOB_RUN_ID_GROUP),
 		newJobId,
 		random,
 		runTimeout: { ms: HOOK_TIMEOUT_MS, setTimer: setSystemTimer },

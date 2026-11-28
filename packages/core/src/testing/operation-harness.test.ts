@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { type Actor, defineOperation, definePlugin } from "@workbench/sdk";
+import {
+	type Actor,
+	defineEvent,
+	defineEventSubscription,
+	defineJob,
+	defineOperation,
+	definePlugin,
+	eventSubscriptionCapability,
+} from "@workbench/sdk";
 import { SQL } from "bun";
 import { z } from "zod";
 import {
@@ -72,6 +80,72 @@ const ledger: PluginPackage = {
 		operations: [describeCall, drawId, nameDatabase],
 	}),
 };
+
+const idDrawn = defineEvent({
+	plugin: "journal",
+	name: "IdDrawn",
+	version: 1,
+	payload: z.object({ id: z.string() }),
+});
+
+function followingUpOnDrawnIds(drawn: string[]): PluginPackage[] {
+	const drawIdLater = defineJob({
+		name: "drawIdLater",
+		payload: z.object({}),
+		maxAttempts: 1,
+		run: async (_job, ctx) => {
+			drawn.push(ctx.newId());
+		},
+	});
+	const drawIdAndFollowUp = defineOperation({
+		name: "drawIdAndFollowUp",
+		kind: "mutation",
+		target: "workspace",
+		right: "journal.entry.add",
+		input: z.object({}),
+		output: z.object({ id: z.string() }),
+		execute: async (_input, ctx) => {
+			const id = ctx.newId();
+			await ctx.publish(idDrawn, { id });
+			await ctx.enqueue(drawIdLater, {});
+			return { id };
+		},
+	});
+	return [
+		{
+			packageName: "@workbench/plugin-journal",
+			pluginName: "journal",
+			version: "1.0.0",
+			loadDefinition: async () => ({
+				...definePlugin({ manifest: { name: "journal" } }),
+				rights: [{ name: "journal.entry.add", defaultRoles: ["owner"] }],
+				operations: [drawIdAndFollowUp],
+				events: [idDrawn],
+				jobs: [drawIdLater],
+			}),
+		},
+		{
+			packageName: "@workbench/plugin-tally",
+			pluginName: "tally",
+			version: "1.0.0",
+			loadDefinition: async () =>
+				definePlugin({
+					manifest: {
+						name: "tally",
+						capabilities: [eventSubscriptionCapability(idDrawn)],
+					},
+					subscriptions: [
+						defineEventSubscription({
+							event: idDrawn,
+							handle: async (_event, ctx) => {
+								drawn.push(ctx.newId());
+							},
+						}),
+					],
+				}),
+		},
+	];
+}
 
 const unstoppable: PluginPackage = {
 	packageName: "@workbench/plugin-unstoppable",
@@ -261,6 +335,46 @@ describe("the operation harness", () => {
 			},
 		});
 	});
+
+	test.each([
+		[
+			"delivering events",
+			(harness: OperationHarness) => harness.deliverEvents(),
+		],
+		["running jobs", (harness: OperationHarness) => harness.runJobs()],
+	])(
+		"draws the ids of %s from a sequence of their own, so it does not shift the ids of the next operation",
+		async (_followUp, followUp) => {
+			const drawn: string[] = [];
+			const harness = await startOperationHarness({
+				plugins: [ledger, ...followingUpOnDrawnIds(drawn)],
+			});
+			harnesses.push(harness);
+			const workspace = await harness.createWorkspace("Accounts", [
+				{ actor: ALICE, role: "owner" },
+			]);
+			const first = await harness.call({
+				actor: ALICE,
+				workspace,
+				operation: "journal.drawIdAndFollowUp",
+				input: {},
+			});
+			await followUp(harness);
+
+			const second = await harness.call({
+				actor: ALICE,
+				workspace,
+				operation: "ledger.drawId",
+				input: {},
+			});
+
+			expect(drawn).toHaveLength(1);
+			expect([first, second]).toEqual([
+				{ ok: true, output: { id: "00000000-0000-4000-8000-000000000002" } },
+				{ ok: true, output: { id: "00000000-0000-4000-8000-000000000003" } },
+			]);
+		},
+	);
 
 	test("gives audit entries the ids a test passes", async () => {
 		const ids = [
