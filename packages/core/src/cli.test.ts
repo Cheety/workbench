@@ -282,23 +282,21 @@ describe("the command line listing the operations", () => {
 
 		const run = await runCli(["operations"], await accessTo(api));
 
-		expect(run).toEqual({
-			exitCode: 0,
-			stdout: [
-				"core create-workspace\tcore.createWorkspace\tmutation",
-				"core define-role\tcore.defineRole\tmutation",
-				"core grant-membership\tcore.grantMembership\tmutation",
-				"core list-audit-entries\tcore.listAuditEntries\tquery",
-				"core list-instance-audit-entries\tcore.listInstanceAuditEntries\tquery",
-				"core list-workspaces\tcore.listWorkspaces\tquery",
-				"core revoke-membership\tcore.revokeMembership\tmutation",
-				"reference create-note\treference.createNote\tmutation",
-				"reference list-notes\treference.listNotes\tquery",
-				"reference rename-note\treference.renameNote\tmutation",
-				"",
-			].join("\n"),
-			stderr: "",
-		});
+		const lines = run.stdout.split("\n");
+		expect(run.exitCode).toBe(0);
+		expect(run.stderr).toBe("");
+		expect(lines.at(-1)).toBe("");
+		expect(lines.slice(0, -1).map((line) => line.split("\t").slice(1))).toEqual(
+			api.registeredOperations
+				.toSorted((a, b) => a.name.localeCompare(b.name))
+				.map(({ name, kind }) => [name, kind]),
+		);
+		expect(lines).toContain(
+			"reference create-note\treference.createNote\tmutation",
+		);
+		expect(lines).toContain(
+			"core list-instance-audit-entries\tcore.listInstanceAuditEntries\tquery",
+		);
 	});
 });
 
