@@ -254,11 +254,14 @@ export type CliOutput = {
 	writeError(text: string): void;
 };
 
+export type Fetch = (url: URL, init: RequestInit) => Promise<Response>;
+
 export type CommandLineRun = {
 	readonly args: readonly string[];
 	readonly loadConfig: () => CliConfig;
 	readonly output: CliOutput;
 	readonly deadline: HookTimeout;
+	readonly fetch: Fetch;
 };
 
 export async function runCommandLine({
@@ -266,6 +269,7 @@ export async function runCommandLine({
 	loadConfig,
 	output,
 	deadline,
+	fetch,
 }: CommandLineRun): Promise<ExitCode> {
 	const parsed = readInvocation(args);
 	if (!parsed.ok) {
@@ -288,20 +292,28 @@ export async function runCommandLine({
 	const expiry = new AbortController();
 	const cancel = deadline.setTimer(() => expiry.abort(), deadline.ms);
 	try {
-		return await invoke(parsed.invocation, config, output, expiry.signal);
+		return await invoke(parsed.invocation, config, output, {
+			fetch,
+			expired: expiry.signal,
+		});
 	} finally {
 		cancel();
 	}
 }
 
+type Transport = {
+	readonly fetch: Fetch;
+	readonly expired: AbortSignal;
+};
+
 async function invoke(
 	invocation: Invocation,
 	config: CliConfig,
 	output: CliOutput,
-	expired: AbortSignal,
+	transport: Transport,
 ): Promise<ExitCode> {
 	const exchange = exchangeFor(invocation, config);
-	const sent = await send(exchange, config.instanceUrl, expired);
+	const sent = await send(exchange, config.instanceUrl, transport);
 	if (!sent.reached) {
 		output.writeError(
 			`the instance at ${config.instanceUrl.origin} cannot be reached\n`,
@@ -331,7 +343,7 @@ async function invoke(
 async function send(
 	{ path, init }: Exchange,
 	instanceUrl: URL,
-	expired: AbortSignal,
+	{ fetch, expired }: Transport,
 ): Promise<Sent> {
 	try {
 		const response = await fetch(new URL(path, instanceUrl), {
@@ -405,6 +417,7 @@ if (import.meta.main) {
 				writeError: (text) => process.stderr.write(text),
 			},
 			deadline: { ms: REQUEST_TIMEOUT_MS, setTimer: setSystemTimer },
+			fetch,
 		}),
 	);
 }

@@ -10,7 +10,7 @@ import {
 	OperationError,
 } from "@workbench/sdk";
 import { z } from "zod";
-import { runCommandLine } from "./cli.ts";
+import { type Fetch, runCommandLine } from "./cli.ts";
 import { Secret } from "./config.ts";
 import type { PluginPackage } from "./kernel.ts";
 import {
@@ -169,6 +169,7 @@ async function runCliInProcess(
 	args: readonly string[],
 	instanceUrl: string,
 	timer: ManualTimer,
+	fetchOfRun: Fetch,
 ): Promise<Run> {
 	let stdout = "";
 	let stderr = "";
@@ -187,6 +188,7 @@ async function runCliInProcess(
 			},
 		},
 		deadline: { ms: REQUEST_DEADLINE_MS, setTimer: timer.setTimer },
+		fetch: fetchOfRun,
 	});
 	return { exitCode, stdout, stderr };
 }
@@ -873,6 +875,22 @@ describe("an instance the command line cannot reach", () => {
 	});
 });
 
+describe("a request that fetch refuses to send", () => {
+	test("is thrown on as it came instead of being reported as an instance that cannot be reached", async () => {
+		const refused = new TypeError("Header 'Authorization' has invalid value");
+		const refusingFetch: Fetch = () => Promise.reject(refused);
+
+		const running = runCliInProcess(
+			["operations"],
+			"http://127.0.0.1:1",
+			manualTimer(),
+			refusingFetch,
+		);
+
+		await expect(running).rejects.toBe(refused);
+	});
+});
+
 describe("an instance that does not answer before the deadline of the command line", () => {
 	test("is reported as unreachable with exit code 1 when it never answers the request", async () => {
 		const received = Promise.withResolvers<void>();
@@ -889,6 +907,7 @@ describe("an instance that does not answer before the deadline of the command li
 				["operations"],
 				`http://127.0.0.1:${silent.port}`,
 				timer,
+				fetch,
 			);
 			await received.promise;
 
@@ -931,6 +950,7 @@ describe("an instance that does not answer before the deadline of the command li
 				["operations"],
 				`http://127.0.0.1:${address.port}`,
 				timer,
+				fetch,
 			);
 			await sentPart.promise;
 
