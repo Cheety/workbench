@@ -215,7 +215,7 @@ const OBJECT_DENIALS: Record<OperationTarget, readonly DenialReason[]> = {
 	object: ["object_not_found", "not_object_holder"],
 };
 
-function denialReasonsOf(
+function accessDenialReasonsOf(
 	operation: RegisteredOperation,
 ): readonly DenialReason[] {
 	switch (operation.scope) {
@@ -223,16 +223,34 @@ function denialReasonsOf(
 			return [
 				...INSTANCE_DENIALS[operation.grant.by],
 				"instance_outside_token_scope",
-				"operation_outside_token_scope",
 			];
 		case "workspace":
 			return [
 				...WORKSPACE_DENIALS[operation.grant.by],
 				"workspace_outside_token_scope",
-				"operation_outside_token_scope",
-				...OBJECT_DENIALS[operation.target],
 			];
 	}
+}
+
+function objectDenialReasonsOf(
+	operation: RegisteredOperation,
+): readonly DenialReason[] {
+	switch (operation.scope) {
+		case "instance":
+			return [];
+		case "workspace":
+			return OBJECT_DENIALS[operation.target];
+	}
+}
+
+function denialReasonsOf(
+	operation: RegisteredOperation,
+): readonly DenialReason[] {
+	return [
+		...accessDenialReasonsOf(operation),
+		"operation_outside_token_scope",
+		...objectDenialReasonsOf(operation),
+	];
 }
 
 export function denialsOf(
