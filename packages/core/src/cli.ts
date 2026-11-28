@@ -6,6 +6,7 @@ import {
 	InvalidCliConfigError,
 	loadCliConfigFromEnvironment,
 } from "./config.ts";
+import { UNKNOWN_FAILURE_REASON } from "./failure-reason.ts";
 import { type HookTimeout, setSystemTimer } from "./hook-timeout.ts";
 import {
 	IDEMPOTENCY_KEY_HEADER,
@@ -24,6 +25,7 @@ import {
 	qualifiedOperationName,
 } from "./operation-registry.ts";
 import { isPluginName } from "./plugin-name.ts";
+import { systemFailureReason } from "./system-error.ts";
 
 const USAGE = [
 	"usage: workbench operations",
@@ -333,10 +335,16 @@ async function send(
 		const body = parseJsonText(await response.text());
 		return { reached: true, status: response.status, ok: response.ok, body };
 	} catch (error) {
-		if (error instanceof TypeError || expired.aborted)
-			return { reached: false };
+		if (expired.aborted || isNetworkFailure(error)) return { reached: false };
 		throw error;
 	}
+}
+
+function isNetworkFailure(error: unknown): boolean {
+	return (
+		error instanceof TypeError &&
+		systemFailureReason(error) !== UNKNOWN_FAILURE_REASON
+	);
 }
 
 function describeProblem(problem: z.infer<typeof problemDetails>): string {
