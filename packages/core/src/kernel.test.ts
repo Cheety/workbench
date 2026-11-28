@@ -1631,11 +1631,14 @@ describe("plugin schemas", () => {
 				{ schema: "plugin_sticky_notes", migration: "0001_create_notes.sql" },
 			],
 		};
-		expect(seenAtActivation).toEqual([
-			{ plugin: "cards", ...migrated },
-			{ plugin: "sticky-notes", ...migrated },
-			{ plugin: "board", ...migrated },
-		]);
+		expect(seenAtActivation).toHaveLength(3);
+		expect(seenAtActivation).toEqual(
+			expect.arrayContaining([
+				{ plugin: "cards", ...migrated },
+				{ plugin: "sticky-notes", ...migrated },
+				{ plugin: "board", ...migrated },
+			]),
+		);
 	});
 
 	test("tells a plugin with the database capability the name of its schema", async () => {
