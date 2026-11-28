@@ -147,11 +147,20 @@ describe("the operations listed as MCP tools", () => {
 
 		const { tools } = await client.listTools();
 
-		expect(tools.map((tool) => tool.name).toSorted()).toEqual(
-			api.registeredOperations
-				.map((operation) => operation.name.replace(".", "_"))
-				.toSorted(),
-		);
+		expect(tools.map((tool) => tool.name).toSorted()).toEqual([
+			"core_createApiToken",
+			"core_createWorkspace",
+			"core_defineRole",
+			"core_grantMembership",
+			"core_listApiTokens",
+			"core_listAuditEntries",
+			"core_listInstanceAuditEntries",
+			"core_listWorkspaces",
+			"core_revokeApiToken",
+			"core_revokeMembership",
+			"ledger_addEntry",
+			"ledger_listEntries",
+		]);
 		const addEntryTool = tools.find((tool) => tool.name === "ledger_addEntry");
 		expect(Object.keys(addEntryTool?.inputSchema.properties ?? {})).toEqual([
 			"workspace",
