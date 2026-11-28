@@ -9,12 +9,15 @@ import {
 	OperationError,
 } from "@workbench/sdk";
 import { z } from "zod";
+import { runCommandLine } from "./cli.ts";
+import { Secret } from "./config.ts";
 import type { PluginPackage } from "./kernel.ts";
 import {
 	API_INSTANCE_WORKSPACE,
 	type ApiInstance,
 	startApiInstance,
 } from "./testing/api-instance.ts";
+import { type ManualTimer, manualTimer } from "./testing/manual-timer.ts";
 import { pluginPackageAt } from "./testing/operation-harness.ts";
 
 const COMMAND = new URL("./cli.ts", import.meta.url).pathname;
@@ -25,6 +28,8 @@ const REFERENCE_DIRECTORY = join(
 );
 
 const UNKNOWN_WORKSPACE = "00000000-0000-4000-8000-00000000bbbb";
+
+const REQUEST_DEADLINE_MS = 120_000;
 
 const closeBook = defineOperation({
 	name: "closeBook",
@@ -111,6 +116,32 @@ async function runCliIn(
 		new Response(command.stdout).text(),
 		new Response(command.stderr).text(),
 	]);
+	return { exitCode, stdout, stderr };
+}
+
+async function runCliInProcess(
+	args: readonly string[],
+	instanceUrl: string,
+	timer: ManualTimer,
+): Promise<Run> {
+	let stdout = "";
+	let stderr = "";
+	const exitCode = await runCommandLine({
+		args,
+		loadConfig: () => ({
+			instanceUrl: new URL(instanceUrl),
+			token: new Secret("wbt_never-issued"),
+		}),
+		output: {
+			writeOutput: (text) => {
+				stdout += text;
+			},
+			writeError: (text) => {
+				stderr += text;
+			},
+		},
+		deadline: { ms: REQUEST_DEADLINE_MS, setTimer: timer.setTimer },
+	});
 	return { exitCode, stdout, stderr };
 }
 
@@ -646,5 +677,38 @@ describe("an instance the command line cannot reach", () => {
 			stdout: "",
 			stderr: "the instance at http://127.0.0.1:1 cannot be reached\n",
 		});
+	});
+});
+
+describe("an instance that does not answer before the deadline of the command line", () => {
+	test("is reported as unreachable with exit code 1 when it never answers the request", async () => {
+		const received = Promise.withResolvers<void>();
+		const silent = Bun.serve({
+			port: 0,
+			fetch: () => {
+				received.resolve();
+				return new Promise<Response>(() => {});
+			},
+		});
+		const timer = manualTimer();
+		try {
+			const running = runCliInProcess(
+				["operations"],
+				`http://127.0.0.1:${silent.port}`,
+				timer,
+			);
+			await received.promise;
+
+			timer.expire();
+
+			expect(await running).toEqual({
+				exitCode: 1,
+				stdout: "",
+				stderr: `the instance at http://127.0.0.1:${silent.port} cannot be reached\n`,
+			});
+			expect(timer.delaysMs).toEqual([REQUEST_DEADLINE_MS]);
+		} finally {
+			await silent.stop(true);
+		}
 	});
 });
