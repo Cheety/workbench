@@ -135,6 +135,17 @@ docker compose -f compose.dev.yaml exec -T postgres psql -U workbench -d workben
 
 Die ersten beiden Antworten sind gleich, mit derselben `id`; die dritte ist Problem Details mit Status 422 und `code` `idempotency_key_reused`. `core.idempotency_keys` hat eine Zeile mit dem Key `verify-1`, `reference.createNote` und der Antwort als JSON, und `plugin_reference.notes` hat genau eine Notiz. Dass der Cron-Job den Key nach 24 Stunden löscht und dass zwei gleichzeitige Aufrufe nur einmal ausführen, zeigen die Tests in `packages/core/src/idempotency-keys.test.ts`, mit einer Uhr, die der Test stellt.
 
+## Ein Tool per MCP aufrufen
+
+Den Server, den Workspace und das Token wie unter [Ein Event in der Outbox ansehen](#ein-event-in-der-outbox-ansehen) anlegen. Dann die Tools listen und die Referenz-Mutation als Tool aufrufen, einmal gültig und einmal mit leerem Titel:
+
+```sh
+for body in '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"reference_createNote","arguments":{"workspace":"00000000-0000-4000-8000-00000000aaaa","input":{"title":"Plan"}}}}' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"reference_createNote","arguments":{"workspace":"00000000-0000-4000-8000-00000000aaaa","input":{"title":""}}}}'; do curl -s http://127.0.0.1:3123/api/mcp -H "Authorization: Bearer $(cat /tmp/workbench-verify.token)" -H 'Accept: application/json, text/event-stream' -H 'Content-Type: application/json' -H 'MCP-Protocol-Version: 2025-11-25' -d "$body"; echo; done
+curl -si http://127.0.0.1:3123/api/mcp -H 'Accept: application/json, text/event-stream' -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":4,"method":"tools/list"}' | head -1
+```
+
+`tools/list` nennt `core_listAuditEntries`, `reference_createNote` und `reference_listNotes`, jedes mit `workspace` und `input` im `inputSchema`. Der erste Aufruf antwortet mit einem Textblock, der die Notiz als JSON enthält, wie der Body von `POST …/operations/reference.createNote`; der zweite mit `isError: true` und Problem Details mit `code` `invalid_input`. Ohne Token antwortet der Endpunkt mit `401 Unauthorized`.
+
 ## Einen Ladefehler auslösen
 
 Ein Plugin in `PLUGINS`, das kein Plugin-Paket bereitstellt, ist der schnellste Ladefehler. Den Server wie oben starten, aber mit `PLUGINS=reference,missing`, dann:

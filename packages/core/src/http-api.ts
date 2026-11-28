@@ -1,6 +1,7 @@
 import type { Authentication } from "./api-tokens.ts";
 import type { Logger } from "./logger.ts";
 import type { OperationPipeline } from "./operation-pipeline.ts";
+import type { OperationRegistry } from "./operation-registry.ts";
 import {
 	MAX_BODY_BYTES,
 	problemResponse,
@@ -28,6 +29,7 @@ const STRUCTURED_FIELD_ESCAPE = /\\(["\\])/g;
 export type HttpApi = {
 	readonly authenticate: (token: string) => Promise<Authentication>;
 	readonly pipeline: OperationPipeline;
+	readonly operations: Pick<OperationRegistry, "list">;
 };
 
 export type ApiRequest = {

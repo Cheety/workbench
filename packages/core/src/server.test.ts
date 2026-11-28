@@ -53,6 +53,7 @@ async function startTestServer(startupStatus: StartupStatus = "started") {
 		startupStatus: () => startupStatus,
 		api: {
 			authenticate: (token) => authenticateToken(sql, token, NOW),
+			operations: registerOperations([]),
 			pipeline: createOperationPipeline({
 				sql,
 				registry: registerOperations([]),
@@ -278,6 +279,18 @@ describe("the HTTP API", () => {
 			code: "instance_not_ready",
 			correlationId: "generated-1",
 			issues: [],
+		});
+	});
+
+	test("answers 503 problem details at the MCP endpoint while the instance is still starting", async () => {
+		const { post } = await startTestServer("starting");
+
+		const response = await post("/api/mcp");
+
+		expect(response.status).toBe(503);
+		expect(await response.json()).toMatchObject({
+			code: "instance_not_ready",
+			detail: "the instance is still starting",
 		});
 	});
 

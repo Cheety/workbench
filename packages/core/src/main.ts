@@ -201,6 +201,7 @@ const server = startServerOrExit({
 	startupStatus: instance.status,
 	api: {
 		authenticate: (token) => authenticateToken(sql, token, now()),
+		operations: instance.operations,
 		pipeline: createOperationPipeline({
 			sql,
 			registry: instance.operations,

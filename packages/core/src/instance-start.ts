@@ -98,7 +98,10 @@ export function createInstanceStart(
 	return {
 		status: () => status,
 		hasCoreSchema: () => hasCoreSchema,
-		operations: { find: (name) => operations.find(name) },
+		operations: {
+			find: (name) => operations.find(name),
+			list: () => operations.list(),
+		},
 		events: {
 			findEvent: (name) => events.findEvent(name),
 			subscriptions: () => events.subscriptions(),

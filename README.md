@@ -492,9 +492,9 @@ curl -X POST "http://127.0.0.1:3000/api/workspaces/$WORKSPACE/operations/referen
 | `unauthenticated`         | 401    | Kein gültiges API-Token.                                                                                                    |
 | `invalid_input`           | 400    | Der Body ist kein JSON, oder die Eingabe passt nicht zum Eingabe-Schema.                                                    |
 | `route_not_found`         | 404    | Weder Methode noch Pfad passen zu einer Route.                                                                              |
-| `method_not_allowed`      | 405    | Der Pfad einer Operation mit anderer Methode als `POST`.                                                                    |
+| `method_not_allowed`      | 405    | Der Pfad einer Operation oder der MCP-Endpunkt mit anderer Methode als `POST`.                                              |
 | `malformed_path`          | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                                                                          |
-| `invalid_workspace_id`    | 400    | Der Workspace im Pfad ist keine UUID.                                                                                       |
+| `invalid_workspace_id`    | 400    | Der Workspace im Pfad oder im Argument `workspace` eines MCP-Tools ist keine UUID.                                          |
 | `workspace_not_found`     | 404    | Kein Workspace hat diese UUID.                                                                                              |
 | `unknown_operation`       | 404    | Weder der Core noch ein aktives Plugin hat eine Operation dieses Namens.                                                    |
 | `body_too_large`          | 413    | Der Body ist größer als 1 MiB.                                                                                              |
@@ -536,6 +536,20 @@ bun run openapi
 ```
 
 Jede Operation erscheint mit ihrem Namen als `operationId`, Ein- und Ausgabe-Schema als JSON Schema und Problem Details für jedes Scheitern. Die Schemas kommen aus [Standard JSON Schema](https://standardschema.dev) (`~standard.jsonSchema`, etwa von zod 4); ein Schema ohne diese Erweiterung erscheint als `{}`. `bun run check` scheitert, wenn die Datei nicht zu den Operationen passt; dann `bun run openapi` ausführen und das Ergebnis committen.
+
+### MCP
+
+Jede Operation des Cores und der aktiven Plugins ist auch als Tool des [Model Context Protocol](https://modelcontextprotocol.io) erreichbar, als dünner Adapter auf dieselbe Pipeline wie die HTTP-API (ADR-0018). Ein MCP-Client verbindet sich per Streamable HTTP mit `http://<host>/api/mcp` und schickt das API-Token als Header, etwa für Claude Code:
+
+```sh
+claude mcp add --transport http workbench "http://127.0.0.1:3000/api/mcp" --header "Authorization: Bearer $TOKEN"
+```
+
+- Der Endpunkt nimmt nur `POST` an, zustandslos und ohne Session; die Antwort ist JSON, kein SSE-Stream. `GET` und `DELETE` beantwortet er vor der Prüfung des Tokens mit 405 und `Allow: POST`, als Problem Details mit `code` `method_not_allowed`. Solange die Instanz startet oder ihr Start gescheitert ist, antwortet er wie die HTTP-API mit 503 (`instance_not_ready`).
+- Jede Anfrage braucht ein gültiges API-Token als `Authorization: Bearer <token>`, wie die HTTP-API: Ohne gültiges Token antwortet der Endpunkt mit 401 und `WWW-Authenticate: Bearer` (`unauthenticated`), listet keine Tools und ruft keines auf; das Log nennt den Grund im Eintrag `request not authenticated`. OAuth bietet der Endpunkt nicht an. Der Akteur eines Aufrufs ist der Service-Account des Tokens, und eine Mutation schreibt wie über HTTP einen Audit-Eintrag mit dem Token.
+- Der Name eines Tools ist der Name der Operation mit `_` statt `.`, etwa `reference_createNote` für `reference.createNote`. Seine Argumente sind `workspace`, die UUID des Workspace, und `input`, die Eingabe der Operation; das Eingabe-Schema des Tools nennt unter `input` das JSON Schema aus dem [API-Vertrag](#api-vertrag). Eine Query trägt die Annotation `readOnlyHint: true`.
+- Das Ergebnis eines Tools ist ein Textblock mit der Ausgabe als JSON, derselbe Text wie der Body der HTTP-API. Scheitert ein Aufruf, ist das Ergebnis ein Tool-Fehler (`isError: true`), dessen Text die Problem Details der HTTP-API mit demselben `code` sind (siehe die Tabelle unter [HTTP-API](#http-api)); fehlt `workspace` oder ist es keine UUID, ist der Code `invalid_workspace_id`. Ein Idempotency-Key lässt sich über MCP noch nicht angeben.
+- Der Body einer Anfrage ist höchstens 1 MiB groß; einen größeren lehnt der Endpunkt mit 413 als Fehler von JSON-RPC ab.
 
 ### Contract
 

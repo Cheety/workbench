@@ -120,6 +120,7 @@ async function startedApiInstance(
 		api: {
 			authenticate: (token) =>
 				authenticateToken(authenticationSql, token, clock),
+			operations: running.operations,
 			pipeline: createOperationPipeline({
 				sql: database.sql,
 				registry: running.operations,
