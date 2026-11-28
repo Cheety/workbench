@@ -8,6 +8,7 @@ import {
 import { isRecord } from "./is-record.ts";
 import { type JsonSchema, jsonSchemaReaderOf } from "./json-schema.ts";
 import { describeOwner, type Owner, ownerName } from "./owner.ts";
+import { isPluginName } from "./plugin-name.ts";
 import { quote } from "./quote.ts";
 import { type Validator, validatorOf } from "./schema-validation.ts";
 
@@ -35,6 +36,31 @@ export type OperationsRead = {
 };
 
 export const OPERATION_NAME = /^[a-z]+(?:[A-Z][a-z0-9]*)+$/;
+
+export const OPERATION_NAME_SEPARATOR = ".";
+
+export type QualifiedOperationName = {
+	readonly plugin: string;
+	readonly name: string;
+};
+
+export function qualifiedOperationName({
+	plugin,
+	name,
+}: QualifiedOperationName): string {
+	return `${plugin}${OPERATION_NAME_SEPARATOR}${name}`;
+}
+
+export function findQualifiedOperationName(
+	operation: string,
+): QualifiedOperationName | undefined {
+	const separator = operation.indexOf(OPERATION_NAME_SEPARATOR);
+	if (separator < 0) return undefined;
+	const plugin = operation.slice(0, separator);
+	const name = operation.slice(separator + OPERATION_NAME_SEPARATOR.length);
+	if (!isPluginName(plugin) || !OPERATION_NAME.test(name)) return undefined;
+	return { plugin, name };
+}
 
 const RIGHT_NAME = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*$/;
 
@@ -89,7 +115,7 @@ function readOperation(
 			],
 		};
 	const prefix = ownerName(owner);
-	const fullName = `${prefix}.${name}`;
+	const fullName = qualifiedOperationName({ plugin: prefix, name });
 	const operation = `operation ${quote(fullName)}`;
 	const problems: string[] = [];
 	const accepted = <Value>(

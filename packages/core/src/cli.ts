@@ -12,7 +12,11 @@ import {
 	OPERATION_PATH_TEMPLATE,
 } from "./http-api.ts";
 import { parseJsonText } from "./json-text.ts";
-import { OPERATION_NAME } from "./operation-registry.ts";
+import {
+	findQualifiedOperationName,
+	type QualifiedOperationName,
+	qualifiedOperationName,
+} from "./operation-registry.ts";
 import { isPluginName } from "./plugin-name.ts";
 
 const USAGE = [
@@ -23,8 +27,6 @@ const USAGE = [
 const LISTING_CLI_COMMAND = "operations";
 
 const KEBAB_CASE_OPERATION = /^[a-z]+(?:-[a-z][a-z0-9]*)+$/;
-
-const OPERATION_NAME_SEPARATOR = ".";
 
 const REQUEST_TIMEOUT_MS = 120_000;
 
@@ -55,7 +57,15 @@ type Exchange = {
 const operationList = z.object({
 	operations: z.array(
 		z.object({
-			name: z.string().refine(isQualifiedOperationName),
+			name: z.string().transform((name, context) => {
+				const qualified = findQualifiedOperationName(name);
+				if (qualified !== undefined) return qualified;
+				context.addIssue({
+					code: "custom",
+					message: "is not the name of an operation",
+				});
+				return z.NEVER;
+			}),
 			kind: z.enum(OPERATION_KINDS),
 		}),
 	),
@@ -72,13 +82,6 @@ const problemDetails = z.object({
 		}),
 	),
 });
-
-class UnexpectedOperationNameError extends Error {
-	constructor(name: string) {
-		super(`${JSON.stringify(name)} is not the name of an operation`);
-		this.name = "UnexpectedOperationNameError";
-	}
-}
 
 function readInvocation(args: readonly string[]): InvocationRead {
 	let parsed: ReturnType<typeof parseOptions>;
@@ -115,7 +118,10 @@ function readInvocation(args: readonly string[]): InvocationRead {
 		valid: true,
 		invocation: {
 			action: "call",
-			operation: `${plugin}${OPERATION_NAME_SEPARATOR}${camelCaseOf(operation)}`,
+			operation: qualifiedOperationName({
+				plugin,
+				name: camelCaseOf(operation),
+			}),
 			workspace,
 			input,
 			idempotencyKey: values["idempotency-key"],
@@ -142,31 +148,7 @@ function camelCaseOf(kebabCase: string): string {
 	);
 }
 
-type QualifiedOperationName = {
-	readonly plugin: string;
-	readonly name: string;
-};
-
-function findQualifiedOperationName(
-	operation: string,
-): QualifiedOperationName | undefined {
-	const separator = operation.indexOf(OPERATION_NAME_SEPARATOR);
-	const plugin = operation.slice(0, separator);
-	const name = operation.slice(separator + OPERATION_NAME_SEPARATOR.length);
-	if (separator < 0 || !isPluginName(plugin) || !OPERATION_NAME.test(name))
-		return undefined;
-	return { plugin, name };
-}
-
-function isQualifiedOperationName(operation: string): boolean {
-	return findQualifiedOperationName(operation) !== undefined;
-}
-
-function cliCommandOf(operation: string): string {
-	const qualified = findQualifiedOperationName(operation);
-	if (qualified === undefined)
-		throw new UnexpectedOperationNameError(operation);
-	const { plugin, name } = qualified;
+function cliCommandOf({ plugin, name }: QualifiedOperationName): string {
 	const kebabCase = name.replace(
 		/[A-Z]/g,
 		(letter) => `-${letter.toLowerCase()}`,
@@ -217,7 +199,10 @@ function listingOf(body: unknown): string | undefined {
 	const listed = operationList.safeParse(body);
 	if (!listed.success) return undefined;
 	return listed.data.operations
-		.map(({ name, kind }) => `${cliCommandOf(name)}\t${name}\t${kind}\n`)
+		.map(
+			({ name, kind }) =>
+				`${cliCommandOf(name)}\t${qualifiedOperationName(name)}\t${kind}\n`,
+		)
 		.join("");
 }
 
