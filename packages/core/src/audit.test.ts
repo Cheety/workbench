@@ -194,8 +194,36 @@ const MIDDLE_ID = "00000000-0000-4000-a000-000000000005";
 
 const HIGHEST_ID = "00000000-0000-4000-a000-000000000009";
 
-function cursorOf(position: unknown): string {
-	return Buffer.from(JSON.stringify(position)).toString("base64url");
+const encodedPosition = z.tuple([z.iso.datetime(), z.guid()]);
+
+type EncodedPosition = z.infer<typeof encodedPosition>;
+
+function encoded(content: unknown): string {
+	return Buffer.from(JSON.stringify(content)).toString("base64url");
+}
+
+function reencoded(
+	cursor: string,
+	change: (position: EncodedPosition) => unknown,
+): string {
+	const position = encodedPosition.parse(
+		JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")),
+	);
+	if (encoded(position) !== cursor)
+		throw new Error("the cursor is no longer base64url JSON of [time, id]");
+	return encoded(change(position));
+}
+
+async function nextCursorOf(
+	harness: OperationHarness,
+	workspace: string,
+): Promise<string> {
+	await addEntries(harness, workspace, 2);
+	const page = pageOf(
+		await listAuditEntries(harness, workspace, { limit: 1, cursor: null }),
+	);
+	if (page.nextCursor === null) throw new Error("the page names no cursor");
+	return page.nextCursor;
 }
 
 describe("the audit of a workspace", () => {
@@ -460,21 +488,25 @@ describe("a page of the audit", () => {
 		expect(third.nextCursor).toBeNull();
 	});
 
-	test.each([
-		["that is no encoded position", "not a cursor"],
-		["that encodes something else than a position", cursorOf({ page: 2 })],
+	test.each<[string, (cursor: string) => string]>([
+		["that is no encoded position", () => "not a cursor"],
+		[
+			"that encodes something else than a position",
+			(cursor) => reencoded(cursor, () => ({ page: 2 })),
+		],
 		[
 			"whose time is no time",
-			cursorOf(["yesterday", "00000000-0000-4000-a000-000000000001"]),
+			(cursor) => reencoded(cursor, ([, id]) => ["yesterday", id]),
 		],
-		["whose id is no UUID", cursorOf(["2026-11-27T08:00:00.000Z", "first"])],
 		[
-			"that carries more than its position",
-			`${cursorOf(["2026-11-27T08:00:00.000Z", "00000000-0000-4000-a000-000000000001"])}~~`,
+			"whose id is no UUID",
+			(cursor) => reencoded(cursor, ([time]) => [time, "first"]),
 		],
-	])("is refused for a cursor %s", async (_case, cursor) => {
+		["that carries more than its position", (cursor) => `${cursor}~~`],
+	])("is refused for a cursor %s", async (_case, tamper) => {
 		const harness = await startLedger();
 		const workspace = await harness.createWorkspace("Accounts");
+		const cursor = tamper(await nextCursorOf(harness, workspace));
 
 		const listed = await listAuditEntries(harness, workspace, {
 			limit: 10,

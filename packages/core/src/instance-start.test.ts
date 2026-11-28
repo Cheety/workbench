@@ -357,16 +357,27 @@ const registries: [
 
 describe("the registries of an instance", () => {
 	test.each(registries)(
-		"have none of the %s of the plugins while they are still starting",
-		(_kind, _registered, seen, whileStarting) => {
+		"have none of the %s of the plugins while they are still starting and switch to them once they started",
+		async (_kind, registered, seen, whileStarting, onceStarted) => {
+			const pluginStart = pendingStep<StartedPlugins>();
 			const instance = createInstanceStart(
-				steps({ startPlugins: () => new Promise(() => {}) }),
+				steps({ startPlugins: pluginStart.run }),
 				recordingLogger().logger,
 			);
+			const running = instance.run();
+			await pluginStart.called;
+			const seenWhileStarting = seen(instance);
 
-			void instance.run();
+			pluginStart.finish({ ...pluginsWith(), ...registered });
+			await running;
 
-			expect(seen(instance)).toEqual(whileStarting);
+			expect({
+				whileStarting: seenWhileStarting,
+				onceStarted: seen(instance),
+			}).toEqual({
+				whileStarting,
+				onceStarted,
+			});
 		},
 	);
 

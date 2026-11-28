@@ -117,6 +117,11 @@ const addEntryWithMalformedEvent = addingEntryAndPublishing(
 	(ctx) => ctx.publish(entryAddedOfAnyPayload, { entryId: 7 }),
 );
 
+const addEntryWithoutEvent = addingEntryAndPublishing(
+	"addEntryWithoutEvent",
+	async () => {},
+);
+
 const countEntries = defineOperation({
 	name: "countEntries",
 	kind: "query",
@@ -151,6 +156,7 @@ const ledger: PluginPackage = {
 				addEntryWithUndeclaredEvent,
 				addEntryWithForeignEvent,
 				addEntryWithMalformedEvent,
+				addEntryWithoutEvent,
 				countEntries,
 				announceCount,
 			],
@@ -273,6 +279,7 @@ async function startLedgerWokenByItsPipeline() {
 	const { logger } = recordingLogger();
 	const received: EntryAdded[] = [];
 	const firstReceived = Promise.withResolvers<void>();
+	let wakeUps = 0;
 	const plugins = await startPlugins({
 		discover: async () => ({
 			packages: [
@@ -321,7 +328,10 @@ async function startLedgerWokenByItsPipeline() {
 		registry: plugins.operations,
 		newAuditEntryId: () => crypto.randomUUID(),
 		newEventId: () => crypto.randomUUID(),
-		eventsCommitted: () => loop.wake(),
+		eventsCommitted: () => {
+			wakeUps += 1;
+			loop.wake();
+		},
 		jobs: plugins.jobs,
 		newJobId: () => crypto.randomUUID(),
 		jobsCommitted: () => {},
@@ -338,6 +348,7 @@ async function startLedgerWokenByItsPipeline() {
 				correlationId: "request-1",
 			}),
 		received,
+		wakeUps: () => wakeUps,
 		firstReceived: firstReceived.promise,
 		deliverDue: () => delivery.deliverDue(NOT_STOPPED),
 		stopDelivering: () => loop.stop(),
@@ -928,6 +939,19 @@ describe("the pipeline", () => {
 				failure: expect.objectContaining({ code: "internal_error" }),
 			});
 			expect(ledgerAndStatistics.received).toEqual([]);
+			expect(ledgerAndStatistics.wakeUps()).toBe(0);
 		},
 	);
+
+	test("does not wake the delivery after a committed mutation that published nothing", async () => {
+		const ledgerAndStatistics = await startLedgerWokenByItsPipeline();
+
+		const added = await ledgerAndStatistics.call(
+			"ledger.addEntryWithoutEvent",
+			5,
+		);
+
+		expect(added).toEqual({ ok: true, output: { id: ENTRY } });
+		expect(ledgerAndStatistics.wakeUps()).toBe(0);
+	});
 });

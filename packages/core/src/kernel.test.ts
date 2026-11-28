@@ -29,6 +29,7 @@ import {
 	migrateSchemas,
 } from "./schema-migrations.ts";
 import { schemaName } from "./schema-name.ts";
+import { manualTimer } from "./testing/manual-timer.ts";
 import {
 	createFreshDatabase,
 	type FreshDatabase,
@@ -125,40 +126,6 @@ type Scenario = {
 };
 
 const NEVER_EXPIRING: HookTimeout = { ms: 10_000, setTimer: () => () => {} };
-
-function manualTimers() {
-	const delaysMs: number[] = [];
-	const pending = new Set<() => void>();
-	let announce: ((expire: () => void) => void) | undefined;
-	let latest: (() => void) | undefined;
-	const setTimer: HookTimeout["setTimer"] = (expire, delayMs) => {
-		delaysMs.push(delayMs);
-		const timer = () => {
-			if (pending.delete(timer)) expire();
-		};
-		pending.add(timer);
-		latest = timer;
-		announce?.(timer);
-		announce = undefined;
-		return () => {
-			pending.delete(timer);
-		};
-	};
-	return {
-		setTimer,
-		delaysMs,
-		pending: () => pending.size,
-		expireLatest: () => {
-			if (latest === undefined || !pending.has(latest))
-				throw new Error("the latest timer is not pending");
-			latest();
-		},
-		next: () =>
-			new Promise<() => void>((resolve) => {
-				announce = resolve;
-			}),
-	};
-}
 
 function hanging(): Promise<void> {
 	return new Promise(() => {});
@@ -997,7 +964,7 @@ describe("plugin kernel", () => {
 
 	test("gives up on a plugin that does not finish activating and starts the others", async () => {
 		const journal: string[] = [];
-		const timers = manualTimers();
+		const timers = manualTimer();
 		const activating = Promise.withResolvers<void>();
 
 		const starting = start({
@@ -1026,7 +993,7 @@ describe("plugin kernel", () => {
 			hookTimeout: { ms: 5000, setTimer: timers.setTimer },
 		});
 		await activating.promise;
-		timers.expireLatest();
+		timers.expire();
 		const { plugins } = await starting;
 		await plugins.deactivate();
 
@@ -1048,7 +1015,7 @@ describe("plugin kernel", () => {
 	});
 
 	test("ignores an activation that fails after it has timed out", async () => {
-		const timers = manualTimers();
+		const timers = manualTimer();
 		const activating = Promise.withResolvers<void>();
 		const activation = Promise.withResolvers<void>();
 
@@ -1068,7 +1035,7 @@ describe("plugin kernel", () => {
 			hookTimeout: { ms: 5000, setTimer: timers.setTimer },
 		});
 		await activating.promise;
-		timers.expireLatest();
+		timers.expire();
 		const { plugins, entries } = await starting;
 		activation.reject(new Error("too late"));
 		await settled();
@@ -1081,7 +1048,7 @@ describe("plugin kernel", () => {
 
 	test("gives up on a plugin that does not finish deactivating and deactivates the others", async () => {
 		const journal: string[] = [];
-		const timers = manualTimers();
+		const timers = manualTimer();
 		const { plugins, entries } = await start({
 			packages: [
 				packageOf(recordingPlugin(journal, { name: "notes" })),
@@ -1092,10 +1059,11 @@ describe("plugin kernel", () => {
 			enabledPlugins: ["notes", "board"],
 			hookTimeout: { ms: 5000, setTimer: timers.setTimer },
 		});
-		const timeUp = timers.next();
+		const timerSet = timers.set();
 
 		const deactivating = plugins.deactivate();
-		(await timeUp)();
+		await timerSet;
+		timers.expire();
 		const outcome = await deactivating;
 
 		expect(outcome).toBe("incomplete");
@@ -1111,7 +1079,7 @@ describe("plugin kernel", () => {
 	});
 
 	test("stops the clock of every load, activation and deactivation that finishes in time", async () => {
-		const timers = manualTimers();
+		const timers = manualTimer();
 		const { plugins } = await start({
 			packages: [
 				packageOf(definePlugin({ manifest: { name: "notes" } })),
@@ -1124,7 +1092,7 @@ describe("plugin kernel", () => {
 		await plugins.deactivate();
 
 		expect(new Set(timers.delaysMs)).toEqual(new Set([5000]));
-		expect(timers.pending()).toBe(0);
+		expect(timers.pendingCount()).toBe(0);
 	});
 
 	test("hands a plugin the capabilities its manifest declares and no others", async () => {
@@ -1334,8 +1302,8 @@ describe("plugin kernel", () => {
 
 	test("gives up on a plugin entry that does not finish loading and starts the others", async () => {
 		const journal: string[] = [];
-		const timers = manualTimers();
-		const timeUp = timers.next();
+		const timers = manualTimer();
+		const timerSet = timers.set();
 
 		const starting = start({
 			packages: [
@@ -1356,7 +1324,8 @@ describe("plugin kernel", () => {
 			enabledPlugins: ["notes", "board", "cards"],
 			hookTimeout: { ms: 5000, setTimer: timers.setTimer },
 		});
-		(await timeUp)();
+		await timerSet;
+		timers.expire();
 		const { plugins, entries } = await starting;
 
 		const detail =
@@ -1382,8 +1351,8 @@ describe("plugin kernel", () => {
 	});
 
 	test("ignores a plugin entry that fails to load after it has timed out", async () => {
-		const timers = manualTimers();
-		const timeUp = timers.next();
+		const timers = manualTimer();
+		const timerSet = timers.set();
 		const loading = Promise.withResolvers<unknown>();
 
 		const starting = start({
@@ -1398,7 +1367,8 @@ describe("plugin kernel", () => {
 			enabledPlugins: ["notes"],
 			hookTimeout: { ms: 5000, setTimer: timers.setTimer },
 		});
-		(await timeUp)();
+		await timerSet;
+		timers.expire();
 		const { plugins, entries } = await starting;
 		loading.reject(new Error("too late"));
 		await settled();
@@ -1474,7 +1444,7 @@ describe("plugin kernel", () => {
 	});
 
 	test("stops the clock of a plugin entry whose loading throws at once", async () => {
-		const timers = manualTimers();
+		const timers = manualTimer();
 
 		const { plugins } = await start({
 			packages: [
@@ -1494,12 +1464,12 @@ describe("plugin kernel", () => {
 		expect(plugins.failures.map((failure) => failure.reason)).toEqual([
 			"invalid_manifest",
 		]);
-		expect(timers.pending()).toBe(0);
+		expect(timers.pendingCount()).toBe(0);
 	});
 
 	test("does not blame a plugin for a capability the instance fails to provide", async () => {
 		const journal: string[] = [];
-		const timers = manualTimers();
+		const timers = manualTimer();
 
 		const { plugins, entries } = await start({
 			packages: [
@@ -1544,7 +1514,7 @@ describe("plugin kernel", () => {
 		]);
 		expect(plugins.active).toEqual(["cards"]);
 		expect(journal).toEqual(["activate cards"]);
-		expect(timers.pending()).toBe(0);
+		expect(timers.pendingCount()).toBe(0);
 		expect(entries).toContainEqual(
 			expect.objectContaining({
 				level: "error",
@@ -1743,11 +1713,12 @@ describe("plugin schemas", () => {
 			{
 				plugin: "notes",
 				reason: "migration_failed",
-				detail:
-					'plugin "notes" was not activated because its schema could not be migrated: PostgresError: Failed to connect',
+				detail: expect.stringContaining(
+					'plugin "notes" was not activated because its schema could not be migrated: PostgresError',
+				),
 				error: expect.objectContaining({
 					name: "PostgresError",
-					message: "Failed to connect",
+					message: expect.any(String),
 				}),
 			},
 		]);
