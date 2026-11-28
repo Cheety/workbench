@@ -15,7 +15,11 @@ export type FoundMembership =
 	| { readonly kind: "not_member" }
 	| { readonly kind: "member"; readonly role: StartRole };
 
-const membershipRow = z.object({ role: z.enum(START_ROLES).nullable() });
+export type MembershipLock = "share" | "none";
+
+const membershipRow = z.object({ role: z.enum(START_ROLES) });
+
+const workspaceRow = z.object({ id: z.string() });
 
 export async function grantMembership(
 	sql: SQL,
@@ -30,16 +34,39 @@ export async function findMembership(
 	sql: SQL,
 	workspace: string,
 	actor: Actor,
+	lock: MembershipLock,
 ): Promise<FoundMembership> {
 	if (!isWorkspaceId(workspace)) return { kind: "no_workspace" };
-	const rows: unknown[] = await sql`
-		SELECT m.role
-		FROM core.workspaces w
-		LEFT JOIN core.memberships m
-			ON m.workspace_id = w.id AND m.actor_kind = ${actor.kind} AND m.actor_id = ${actor.id}
-		WHERE w.id = ${workspace}`;
-	const [row] = z.array(membershipRow).max(1).parse(rows);
-	if (row === undefined) return { kind: "no_workspace" };
-	if (row.role === null) return { kind: "not_member" };
-	return { kind: "member", role: row.role };
+	const [membership] = z
+		.array(membershipRow)
+		.max(1)
+		.parse(await membershipRowsOf(sql, workspace, actor, lock));
+	if (membership !== undefined)
+		return { kind: "member", role: membership.role };
+	const [found] = z
+		.array(workspaceRow)
+		.max(1)
+		.parse(await sql`SELECT id FROM core.workspaces WHERE id = ${workspace}`);
+	return found === undefined
+		? { kind: "no_workspace" }
+		: { kind: "not_member" };
+}
+
+function membershipRowsOf(
+	sql: SQL,
+	workspace: string,
+	actor: Actor,
+	lock: MembershipLock,
+): Promise<unknown[]> {
+	switch (lock) {
+		case "share":
+			return sql`
+				SELECT role FROM core.memberships
+				WHERE workspace_id = ${workspace} AND actor_kind = ${actor.kind} AND actor_id = ${actor.id}
+				FOR SHARE`;
+		case "none":
+			return sql`
+				SELECT role FROM core.memberships
+				WHERE workspace_id = ${workspace} AND actor_kind = ${actor.kind} AND actor_id = ${actor.id}`;
+	}
 }

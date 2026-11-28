@@ -203,7 +203,7 @@ Ein Akteur ruft eine Operation mit ihrem Namen, einem Workspace und einer Eingab
 
 1. sucht die Operation unter den Operationen des Cores (`core.<name>`) und der aktiven Plugins,
 2. öffnet eine Transaktion, für eine `query` nur lesend, mit dem Schema des Plugins als `search_path` (für eine Operation des Cores `core`),
-3. sucht die Mitgliedschaft des Akteurs im Workspace in `core.memberships` und prüft, dass ihre Rolle das Recht der Operation hat (siehe [Rechte und Mitgliedschaften](#rechte-und-mitgliedschaften)),
+3. sucht die Mitgliedschaft des Akteurs im Workspace in `core.memberships`, für eine `mutation` mit `FOR SHARE`, sodass ein Entzug der Mitgliedschaft auf das Ende des Aufrufs wartet, und prüft, dass ihre Rolle das Recht der Operation hat (siehe [Rechte und Mitgliedschaften](#rechte-und-mitgliedschaften)),
 4. prüft die Eingabe gegen das Eingabe-Schema,
 5. führt `execute(input, ctx)` aus; `ctx` nennt `actor`, `workspace`, `auth` (siehe [Rechte und Mitgliedschaften](#rechte-und-mitgliedschaften)), `sql` (eine Funktion des Cores, die eine Anweisung als Tagged Template sofort in der Transaktion ausführt; weitere Methoden des Datenbank-Clients hat sie nicht, wie in Event-Handlern und Jobs), `now()`, `newId()`, `random()`, `publish()` (siehe [Events](#events)) und `enqueue()` (siehe [Jobs](#jobs)),
 6. bildet den Rückgabewert über das Ausgabe-Schema ab,

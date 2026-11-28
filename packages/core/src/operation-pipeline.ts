@@ -27,7 +27,7 @@ import {
 import { enqueueJob } from "./job-queue.ts";
 import type { JobRegistry } from "./job-registry.ts";
 import type { Logger } from "./logger.ts";
-import { findMembership } from "./memberships.ts";
+import { findMembership, type MembershipLock } from "./memberships.ts";
 import type {
 	OperationRegistry,
 	RegisteredOperation,
@@ -353,6 +353,11 @@ const BEGIN_TRANSACTION: Record<
 	mutation: (sql, body) => sql.begin("isolation level read committed", body),
 };
 
+const MEMBERSHIP_LOCK: Record<OperationKind, MembershipLock> = {
+	query: "none",
+	mutation: "share",
+};
+
 const IS_AUDITED: Record<OperationKind, boolean> = {
 	query: false,
 	mutation: true,
@@ -390,6 +395,7 @@ async function authorize(
 		transaction,
 		call.workspace,
 		call.actor,
+		MEMBERSHIP_LOCK[operation.kind],
 	);
 	switch (membership.kind) {
 		case "no_workspace":
