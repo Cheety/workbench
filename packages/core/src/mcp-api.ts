@@ -14,6 +14,11 @@ import {
 	authenticateRequest,
 	type HttpApi,
 } from "./http-api.ts";
+import {
+	IDEMPOTENCY_KEY_PATTERN,
+	TAKES_IDEMPOTENCY_KEY,
+} from "./idempotency-keys.ts";
+import { INVALID_IDEMPOTENCY_KEY } from "./operation-pipeline.ts";
 import type {
 	OperationRegistry,
 	RegisteredOperation,
@@ -51,6 +56,11 @@ const MCP_METHOD_NOT_ALLOWED: Problem = {
 const INVALID_WORKSPACE_ARGUMENT: Problem = {
 	...REQUEST_PROBLEMS.invalid_workspace_id,
 	detail: "the workspace argument of the tool is not a UUID",
+};
+
+const IDEMPOTENCY_KEY_ARGUMENT = {
+	type: "string",
+	pattern: IDEMPOTENCY_KEY_PATTERN,
 };
 
 export type McpApi = Pick<HttpApi, "authenticate" | "pipeline"> & {
@@ -120,6 +130,9 @@ function toolOf(operation: RegisteredOperation): Tool {
 			properties: {
 				workspace: { type: "string", format: "uuid" },
 				input: operation.describeInput(),
+				...(TAKES_IDEMPOTENCY_KEY[operation.kind]
+					? { idempotencyKey: IDEMPOTENCY_KEY_ARGUMENT }
+					: {}),
 			},
 			required: ["workspace", "input"],
 			additionalProperties: false,
@@ -141,11 +154,15 @@ async function callTool(
 	const operation = findOperationOfTool(api.operations, params.name);
 	if (operation === undefined)
 		return toolError(unknownTool(params.name), correlationId);
+	const key = params.arguments?.idempotencyKey ?? null;
+	const idempotencyKey = typeof key === "string" ? key : null;
+	if (key !== idempotencyKey && TAKES_IDEMPOTENCY_KEY[operation.kind])
+		return toolError(INVALID_IDEMPOTENCY_KEY, correlationId);
 	const result = await api.pipeline.invoke({
 		operation: operation.name,
 		actor: authentication.actor,
 		apiTokenId: authentication.apiTokenId,
-		idempotencyKey: null,
+		idempotencyKey,
 		workspace,
 		input: params.arguments?.input,
 		correlationId,

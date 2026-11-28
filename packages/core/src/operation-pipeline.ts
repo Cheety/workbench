@@ -81,7 +81,7 @@ const INTERNAL_ERROR: OperationFailure = {
 	issues: [],
 };
 
-const INVALID_IDEMPOTENCY_KEY: OperationFailure = {
+export const INVALID_IDEMPOTENCY_KEY: OperationFailure = {
 	code: "invalid_idempotency_key",
 	kind: "invalid_input",
 	detail: `the idempotency key must consist of ${IDEMPOTENCY_KEY_RULE}`,

@@ -6,6 +6,7 @@ import {
 	OperationError,
 } from "@workbench/sdk";
 import { z } from "zod";
+import { IDEMPOTENCY_KEY_PATTERN } from "./idempotency-keys.ts";
 import type { PluginPackage } from "./kernel.ts";
 import { OPENAPI_DOCUMENT_PATH } from "./openapi.ts";
 import {
@@ -159,6 +160,7 @@ describe("the operations listed as MCP tools", () => {
 						},
 						required: ["amount"],
 					},
+					idempotencyKey: { type: "string", pattern: IDEMPOTENCY_KEY_PATTERN },
 				},
 				required: ["workspace", "input"],
 				additionalProperties: false,
@@ -176,6 +178,119 @@ describe("the operations listed as MCP tools", () => {
 		expect(
 			tools.find((tool) => tool.name === "ledger_listEntries")?.annotations,
 		).toEqual({ readOnlyHint: true });
+	});
+});
+
+describe("the idempotency key of an MCP tool", () => {
+	test("is offered by a mutation and not by a query", async () => {
+		const api = await startLedgerInstance();
+		const client = await mcp.connectedClient(api.url, await api.issueToken());
+
+		const { tools } = await client.listTools();
+
+		expect(
+			tools.map((tool) => ({
+				name: tool.name,
+				takesKey: "idempotencyKey" in (tool.inputSchema.properties ?? {}),
+			})),
+		).toEqual(
+			expect.arrayContaining([
+				{ name: "ledger_addEntry", takesKey: true },
+				{ name: "ledger_listEntries", takesKey: false },
+			]),
+		);
+	});
+
+	test("answers a repeated mutation with the output of the first call without running it again", async () => {
+		const api = await startLedgerInstance();
+		const client = await mcp.connectedClient(api.url, await api.issueToken());
+		const call = {
+			name: "ledger_addEntry",
+			arguments: {
+				workspace: WORKSPACE,
+				input: { amount: 42 },
+				idempotencyKey: "retry-1",
+			},
+		};
+		const first = await client.callTool(call);
+
+		const repeated = await client.callTool(call);
+
+		const listed = await client.callTool({
+			name: "ledger_listEntries",
+			arguments: { workspace: WORKSPACE, input: {} },
+		});
+		expect(textOf(repeated)).toEqual(textOf(first));
+		expect(textOf(listed).json).toEqual({ entries: [textOf(first).json] });
+	});
+
+	test("rejects the same key with another input with idempotency_key_reused", async () => {
+		const api = await startLedgerInstance();
+		const client = await mcp.connectedClient(api.url, await api.issueToken());
+		await client.callTool({
+			name: "ledger_addEntry",
+			arguments: {
+				workspace: WORKSPACE,
+				input: { amount: 42 },
+				idempotencyKey: "retry-1",
+			},
+		});
+
+		const result = await client.callTool({
+			name: "ledger_addEntry",
+			arguments: {
+				workspace: WORKSPACE,
+				input: { amount: 7 },
+				idempotencyKey: "retry-1",
+			},
+		});
+
+		expect(textOf(result)).toEqual({
+			isError: true,
+			json: expect.objectContaining({ code: "idempotency_key_reused" }),
+		});
+	});
+
+	test.each([
+		["is not a string", 42],
+		["is empty", ""],
+	])(
+		"rejects a key that %s with invalid_idempotency_key",
+		async (_case, key) => {
+			const api = await startLedgerInstance();
+			const client = await mcp.connectedClient(api.url, await api.issueToken());
+
+			const result = await client.callTool({
+				name: "ledger_addEntry",
+				arguments: {
+					workspace: WORKSPACE,
+					input: { amount: 42 },
+					idempotencyKey: key,
+				},
+			});
+
+			expect(textOf(result)).toEqual({
+				isError: true,
+				json: expect.objectContaining({ code: "invalid_idempotency_key" }),
+			});
+		},
+	);
+});
+
+describe("the idempotency key of an MCP tool calling a query", () => {
+	test.each([
+		["a string", "retry-1"],
+		["not a string", 42],
+	])("is ignored when it is %s", async (_case, key) => {
+		const api = await startLedgerInstance();
+		const client = await mcp.connectedClient(api.url, await api.issueToken());
+
+		const result = await client.callTool({
+			name: "ledger_listEntries",
+			arguments: { workspace: WORKSPACE, input: {}, idempotencyKey: key },
+		});
+
+		expect(textOf(result)).toEqual({ isError: false, json: { entries: [] } });
 	});
 });
 

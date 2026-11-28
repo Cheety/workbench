@@ -135,7 +135,7 @@ Eine fachliche Aktion auf dem Server mit Eingabe-Schema, Autorisierung und Ergeb
 _Avoid_: Action, Endpoint, Use Case (in der Plugin-Sprache)
 
 **MCP-Tool**:
-Die Form, in der eine Operation einem MCP-Client erscheint: ein Tool je Operation, benannt nach ihr, mit dem Workspace und ihrer Eingabe als Argumenten.
+Die Form, in der eine Operation einem MCP-Client erscheint: ein Tool je Operation, benannt nach ihr, mit dem Workspace, ihrer Eingabe und, bei einer Mutation, einem Idempotency-Key als Argumenten.
 _Avoid_: Function, Werkzeug, Skill
 
 **Idempotency-Key**:

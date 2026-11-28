@@ -7,6 +7,7 @@ import {
 	OperationError,
 } from "@workbench/sdk";
 import { z } from "zod";
+import { IDEMPOTENCY_KEY_PATTERN } from "./idempotency-keys.ts";
 import type { PluginPackage } from "./kernel.ts";
 import {
 	API_INSTANCE_WORKSPACE,
@@ -92,6 +93,10 @@ async function overMcp(
 		name: operation.replace(".", "_"),
 		arguments: { workspace, input },
 	});
+	return answerOfTool(result);
+}
+
+function answerOfTool(result: unknown): Answer {
 	const { content } = z
 		.object({
 			content: z.tuple([
@@ -122,6 +127,10 @@ describe("the reference operations listed as MCP tools", () => {
 								title: { type: "string", minLength: 1, maxLength: 200 },
 							},
 							required: ["title"],
+						},
+						idempotencyKey: {
+							type: "string",
+							pattern: IDEMPOTENCY_KEY_PATTERN,
 						},
 					},
 					required: ["workspace", "input"],
@@ -229,6 +238,37 @@ describe("an operation of the reference plugin over MCP and over HTTP", () => {
 			});
 		},
 	);
+});
+
+describe("an idempotency key over MCP and over HTTP", () => {
+	test("is the same key, so a mutation repeated over MCP answers what it answered over HTTP without running again", async () => {
+		const api = await startReferenceInstance();
+		const token = await api.issueToken();
+		const response = await api.post(
+			`/api/workspaces/${API_INSTANCE_WORKSPACE}/operations/reference.createNote`,
+			JSON.stringify({ title: "Plan" }),
+			{ Authorization: `Bearer ${token}`, "Idempotency-Key": "retry-1" },
+		);
+		const createdOverHttp = answer.parse(await response.json());
+		const client = await mcp.connectedClient(api.url, token);
+
+		const repeatedOverMcp = await client.callTool({
+			name: "reference_createNote",
+			arguments: {
+				workspace: API_INSTANCE_WORKSPACE,
+				input: { title: "Plan" },
+				idempotencyKey: "retry-1",
+			},
+		});
+
+		const listed = await overHttp(api, token, {
+			operation: "reference.listNotes",
+			workspace: API_INSTANCE_WORKSPACE,
+			input: { limit: 10 },
+		});
+		expect(answerOfTool(repeatedOverMcp)).toEqual(createdOverHttp);
+		expect(listed).toEqual({ notes: [createdOverHttp] });
+	});
 });
 
 describe("a domain error of a plugin over MCP and over HTTP", () => {
