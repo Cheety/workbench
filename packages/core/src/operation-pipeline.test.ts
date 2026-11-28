@@ -116,6 +116,17 @@ const addForeignEntry = defineOperation({
 	},
 });
 
+const addUncheckedEntry = defineOperation({
+	...addEntry,
+	name: "addUncheckedEntry",
+	target: "object",
+	execute: async ({ amount }, ctx) => {
+		const id = ctx.newId();
+		await ctx.sql`INSERT INTO entries (id, workspace_id, amount) VALUES (${id}, ${ctx.workspace}, ${amount})`;
+		return { id, amount };
+	},
+});
+
 const CLIENT_METHODS = [
 	"unsafe",
 	"begin",
@@ -172,6 +183,7 @@ const ledger: PluginPackage = {
 			probeClient,
 			purgeEntries,
 			addForeignEntry,
+			addUncheckedEntry,
 		],
 	}),
 	loadMigrations: async () => [
@@ -604,5 +616,41 @@ describe("a denial raised through ctx.auth", () => {
 				nextCursor: null,
 			},
 		});
+	});
+});
+
+describe("an operation on an object", () => {
+	test("fails as an internal error and writes nothing when execute never asks ctx.auth for access", async () => {
+		const harness = await startLedger();
+		const workspace = await harness.createWorkspace("Accounts", [
+			{ actor: ALICE, role: "owner" },
+		]);
+
+		const added = await harness.call({
+			actor: ALICE,
+			workspace,
+			operation: "ledger.addUncheckedEntry",
+			input: { amount: 5 },
+		});
+		const listed = await harness.call({
+			actor: ALICE,
+			workspace,
+			operation: "ledger.listEntries",
+			input: {},
+		});
+
+		expect(added).toEqual({
+			ok: false,
+			failure: expect.objectContaining({ code: "internal_error" }),
+		});
+		expect(listed).toEqual({ ok: true, output: { entries: [] } });
+		expect(harness.logEntries).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				message: "operation failed",
+				operation: "ledger.addUncheckedEntry",
+				reason: "object_access_unchecked",
+			}),
+		);
 	});
 });

@@ -5,6 +5,7 @@ import {
 	OperationError,
 	type OperationErrorKind,
 	type OperationKind,
+	type OperationTarget,
 } from "@workbench/sdk";
 import type { SQL } from "bun";
 import {
@@ -204,6 +205,15 @@ class JobEnqueuedByQueryError extends Error {
 	}
 }
 
+class ObjectAccessUncheckedError extends Error {
+	constructor(operation: string) {
+		super(
+			`the operation ${quote(operation)} targets an object but never asked ctx.auth for access`,
+		);
+		this.name = "ObjectAccessUncheckedError";
+	}
+}
+
 class ExecuteThrewError extends Error {
 	constructor(cause: unknown) {
 		super("the execute function of the operation threw", { cause });
@@ -395,10 +405,17 @@ async function authorize(
 type CallAccess = {
 	readonly auth: OperationAuth;
 	throwRecordedDenial(): void;
+	hasBeenChecked(): boolean;
+};
+
+const REQUIRES_ACCESS_CHECK: Record<OperationTarget, boolean> = {
+	object: true,
+	workspace: false,
 };
 
 function accessOf(call: OperationCall): CallAccess {
 	let recordedDenial: CallFailedError | undefined;
+	let hasBeenChecked = false;
 	const recordDenial = (reason: DenialReason): CallFailedError => {
 		recordedDenial ??= deniedCall(reason);
 		return recordedDenial;
@@ -406,6 +423,7 @@ function accessOf(call: OperationCall): CallAccess {
 	return {
 		auth: {
 			requireAccess: (object) => {
+				hasBeenChecked = true;
 				if (object === undefined) throw failedCall(OBJECT_NOT_FOUND);
 				if (object.workspace !== call.workspace)
 					throw recordDenial("object_not_found");
@@ -417,6 +435,7 @@ function accessOf(call: OperationCall): CallAccess {
 		throwRecordedDenial: () => {
 			if (recordedDenial !== undefined) throw recordedDenial;
 		},
+		hasBeenChecked: () => hasBeenChecked,
 	};
 }
 
@@ -547,6 +566,8 @@ async function runExecute(
 		throw new ExecuteThrewError(error);
 	}
 	access.throwRecordedDenial();
+	if (REQUIRES_ACCESS_CHECK[operation.target] && !access.hasBeenChecked())
+		throw new ObjectAccessUncheckedError(operation.name);
 	return output;
 }
 
@@ -569,6 +590,8 @@ function logAndMapFailure(
 			reason: "invalid_output",
 			issues: error.issues,
 		});
+	else if (error instanceof ObjectAccessUncheckedError)
+		logger.error("operation failed", { reason: "object_access_unchecked" });
 	else if (error instanceof ExecuteThrewError)
 		logger.error("operation failed", {
 			reason: "execute_threw",
