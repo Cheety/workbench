@@ -1,5 +1,4 @@
 import type { Actor, Sql } from "@workbench/sdk";
-import type { SQL } from "bun";
 import { z } from "zod";
 import { Secret } from "./config.ts";
 
@@ -63,15 +62,14 @@ export function apiTokenHash(token: string): string {
 }
 
 export async function authenticateToken(
-	sql: SQL,
+	sql: Sql,
 	token: string,
 	now: Date,
 ): Promise<Authentication> {
-	const rows: unknown[] = await sql`
+	const [row] = await sql`
 		SELECT id, service_account_id, expires_at, revoked_at, created_by_api_token_id, operations, workspaces
 		FROM core.api_tokens
 		WHERE token_hash = ${apiTokenHash(token)}`;
-	const [row] = rows;
 	if (row === undefined)
 		return { authenticated: false, reason: "unknown_token" };
 	const found = tokenRow.parse(row);
