@@ -242,7 +242,7 @@ const BEGIN_TRANSACTION: Record<
 	(sql: SQL, body: (transaction: SQL) => Promise<unknown>) => Promise<unknown>
 > = {
 	query: (sql, body) => sql.begin("read only", body),
-	mutation: (sql, body) => sql.begin(body),
+	mutation: (sql, body) => sql.begin("isolation level read committed", body),
 };
 
 const IS_AUDITED: Record<OperationKind, boolean> = {

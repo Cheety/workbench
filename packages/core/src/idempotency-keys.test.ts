@@ -10,7 +10,6 @@ import { SQL } from "bun";
 import { z } from "zod";
 import { Secret } from "./config.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
-import { IDEMPOTENCY_KEY_PATTERN } from "./idempotency-keys.ts";
 import { type PluginPackage, startPlugins } from "./kernel.ts";
 import {
 	createOperationPipeline,
@@ -273,13 +272,17 @@ describe("a mutation that failed with an idempotency key", () => {
 	});
 });
 
+const MALFORMED_KEYS = [
+	{ variant: "empty", key: "" },
+	{ variant: "longer than 255 characters", key: "k".repeat(256) },
+	{ variant: "with a control character", key: "retry\n1" },
+	{ variant: "beyond ASCII", key: "wiederholung-ä" },
+];
+
+const LONGEST_KEY = `retry ~!${"k".repeat(247)}`;
+
 describe("a malformed idempotency key", () => {
-	test.each([
-		{ variant: "empty", key: "" },
-		{ variant: "longer than 255 characters", key: "k".repeat(256) },
-		{ variant: "with a control character", key: "retry\n1" },
-		{ variant: "beyond ASCII", key: "wiederholung-ä" },
-	])(
+	test.each(MALFORMED_KEYS)(
 		"is rejected with invalid_idempotency_key when $variant, and nothing runs",
 		async ({ key }) => {
 			const harness = await startLedger();
@@ -308,9 +311,7 @@ describe("a malformed idempotency key", () => {
 		const harness = await startLedger();
 		const workspace = await harness.createWorkspace("Accounts");
 
-		const added = await harness.call(
-			addingEntry(workspace, 42, `retry ~!${"k".repeat(247)}`),
-		);
+		const added = await harness.call(addingEntry(workspace, 42, LONGEST_KEY));
 
 		expect(added).toEqual({
 			ok: true,
@@ -501,8 +502,53 @@ function addingEntryBehindTheLock(
 	});
 }
 
+async function defaultingToIsolation(
+	database: FreshDatabase,
+	isolation: string,
+): Promise<void> {
+	const [{ name }] = z
+		.tuple([z.object({ name: z.string() })])
+		.parse(await database.sql`SELECT current_database() AS name`);
+	await database.sql.unsafe(
+		`ALTER DATABASE "${name}" SET default_transaction_isolation = '${isolation}'`,
+	);
+}
+
 describe("two calls of a mutation with the same idempotency key at the same time", () => {
-	test("run it once, and the later answers as the earlier", async () => {
+	test.each([
+		{ isolation: "read committed" },
+		{ isolation: "repeatable read" },
+		{ isolation: "serializable" },
+	])(
+		"run it once, and the later answers as the earlier, when the database defaults to $isolation",
+		async ({ isolation }) => {
+			const database = await createFreshDatabase();
+			cleanups.push(() => database.drop());
+			await defaultingToIsolation(database, isolation);
+			const pipeline = await startLedgerPipeline(database);
+			const holder = await connectionHoldingTheEntryLock(database);
+
+			const earlier = addingEntryBehindTheLock(pipeline, 42, "call-1");
+			await untilSessionsWaitForALock(database.sql, 1);
+			const later = addingEntryBehindTheLock(pipeline, 42, "call-2");
+			await untilSessionsWaitForALock(database.sql, 2);
+			await holder`SELECT pg_advisory_unlock(${ENTRY_LOCK})`;
+			const answers = await Promise.all([earlier, later]);
+
+			expect(answers[0]).toEqual({
+				ok: true,
+				output: { id: expect.any(String), amount: 42 },
+			});
+			expect(answers[1]).toEqual(answers[0]);
+			expect(
+				await database.sql`SELECT amount FROM plugin_ledger.entries`,
+			).toEqual([{ amount: 42 }]);
+		},
+	);
+});
+
+describe("a call waiting for one with the same idempotency key but another input", () => {
+	test("is rejected with idempotency_key_reused once the earlier has committed, and runs not", async () => {
 		const database = await createFreshDatabase();
 		cleanups.push(() => database.drop());
 		const pipeline = await startLedgerPipeline(database);
@@ -510,16 +556,18 @@ describe("two calls of a mutation with the same idempotency key at the same time
 
 		const earlier = addingEntryBehindTheLock(pipeline, 42, "call-1");
 		await untilSessionsWaitForALock(database.sql, 1);
-		const later = addingEntryBehindTheLock(pipeline, 42, "call-2");
+		const later = addingEntryBehindTheLock(pipeline, 43, "call-2");
 		await untilSessionsWaitForALock(database.sql, 2);
 		await holder`SELECT pg_advisory_unlock(${ENTRY_LOCK})`;
 		const answers = await Promise.all([earlier, later]);
 
-		expect(answers[0]).toEqual({
-			ok: true,
-			output: { id: expect.any(String), amount: 42 },
-		});
-		expect(answers[1]).toEqual(answers[0]);
+		expect(answers).toEqual([
+			{ ok: true, output: { id: expect.any(String), amount: 42 } },
+			{
+				ok: false,
+				failure: expect.objectContaining({ code: "idempotency_key_reused" }),
+			},
+		]);
 		expect(
 			await database.sql`SELECT amount FROM plugin_ledger.entries`,
 		).toEqual([{ amount: 42 }]);
@@ -590,18 +638,35 @@ describe("an idempotency key removed between the claim that found it and its ans
 	});
 });
 
+function insertingKey(database: FreshDatabase, key: string) {
+	return database.sql`
+		INSERT INTO core.idempotency_keys (actor_kind, actor_id, key, operation, workspace_id, input_hash, created_at)
+		VALUES ('user', 'alice', ${key}, 'ledger.addEntry', ${WORKSPACE}, ${"0".repeat(64)}, '2026-11-28T09:00:00.000Z')`;
+}
+
 describe("the table of idempotency keys", () => {
-	test("refuses a key by the same pattern as the pipeline", async () => {
+	test.each(MALFORMED_KEYS)(
+		"refuses a key the pipeline rejects as $variant",
+		async ({ key }) => {
+			const database = await createFreshDatabase();
+			cleanups.push(() => database.drop());
+			await startLedgerPipeline(database);
+
+			const inserted = insertingKey(database, key);
+
+			await expect(inserted).rejects.toMatchObject({ errno: "23514" });
+		},
+	);
+
+	test("keeps a key of 255 visible ASCII characters and spaces, as the pipeline accepts it", async () => {
 		const database = await createFreshDatabase();
 		cleanups.push(() => database.drop());
 		await startLedgerPipeline(database);
 
-		const [check] = await database.sql`
-			SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint
-			WHERE conrelid = 'core.idempotency_keys'::regclass AND conname = 'idempotency_keys_key_check'`;
+		await insertingKey(database, LONGEST_KEY);
 
-		expect(check).toEqual({
-			definition: `CHECK ((key ~ '${IDEMPOTENCY_KEY_PATTERN}'::text))`,
-		});
+		expect(await database.sql`SELECT key FROM core.idempotency_keys`).toEqual([
+			{ key: LONGEST_KEY },
+		]);
 	});
 });
