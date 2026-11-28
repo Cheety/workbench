@@ -137,6 +137,7 @@ async function startedApiInstance(
 	const instanceAdmins: Actor[] = [];
 	const isInstanceAdmin = isInstanceAdminOf(instanceAdmins);
 	let issuedTokens = 0;
+	let createdTokens = 0;
 	let issuedCorrelationIds = 0;
 	const api: HttpApi = {
 		authenticate: (token) => authenticateToken(authenticationSql, token, clock),
@@ -153,6 +154,10 @@ async function startedApiInstance(
 			newJobId: newId,
 			jobsCommitted: () => {},
 			random: () => 0.5,
+			newApiToken: () => {
+				createdTokens += 1;
+				return new Secret(`wbt_created-token-${createdTokens}`);
+			},
 			isInstanceAdmin,
 			logger,
 		}),

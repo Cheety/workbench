@@ -1,4 +1,10 @@
 import {
+	apiTokenManage,
+	createApiTokenOperation,
+	listApiTokensOperation,
+	revokeApiTokenOperation,
+} from "./api-token-operations.ts";
+import {
 	auditRead,
 	instanceAuditRead,
 	listAuditEntries,
@@ -14,6 +20,7 @@ import {
 	instanceOperationOf,
 	type RegisteredOperation,
 	readOperations,
+	withoutIdempotencyKey,
 } from "./operation-registry.ts";
 import { CORE_OWNER } from "./owner.ts";
 import { readRights } from "./rights.ts";
@@ -38,6 +45,7 @@ const EVERY_ACTOR = { by: "every_actor" } as const;
 
 function readCoreOperations(): readonly RegisteredOperation[] {
 	const rights = readRights(CORE_OWNER, [
+		apiTokenManage,
 		auditRead,
 		instanceAuditRead,
 		membershipManage,
@@ -60,6 +68,11 @@ function readCoreOperations(): readonly RegisteredOperation[] {
 		instanceOperationOf(CORE_OWNER, defineRoleOperation, INSTANCE_ADMIN),
 		instanceOperationOf(CORE_OWNER, listInstanceAuditEntries, INSTANCE_ADMIN),
 		instanceOperationOf(CORE_OWNER, listWorkspacesOperation, EVERY_ACTOR),
+		withoutIdempotencyKey(
+			instanceOperationOf(CORE_OWNER, createApiTokenOperation, EVERY_ACTOR),
+		),
+		instanceOperationOf(CORE_OWNER, listApiTokensOperation, EVERY_ACTOR),
+		instanceOperationOf(CORE_OWNER, revokeApiTokenOperation, EVERY_ACTOR),
 	];
 }
 

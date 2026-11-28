@@ -169,8 +169,16 @@ Der Service-Account, den jedes Plugin automatisch erhält und unter dem seine Jo
 _Avoid_: System, System-User
 
 **API-Token**:
-Ein Zugangsschlüssel, der genau einem Akteur gehört und dessen Rechte auf bestimmte Operationen und Workspaces einschränkt, mit Ablaufdatum.
+Ein Zugangsschlüssel, der genau einem Akteur gehört und dessen Rechte auf bestimmte Operationen und Workspaces einschränkt, nie erweitert, mit Ablaufdatum; sein Akteur kann es widerrufen.
 _Avoid_: API-Key, Personal Access Token
+
+**Token-Scope**:
+Die Operationen und Workspaces, auf die ein API-Token die Rechte seines Akteurs einschränkt; ohne Angabe schränkt er nicht ein. Im Code heißt er `scope`.
+_Avoid_: Berechtigung, Recht (das gewährt eine Rolle), Permission
+
+**Widerruf**:
+Das endgültige Ungültigmachen eines API-Tokens durch seinen Akteur vor dem Ablaufdatum; der nächste Aufruf mit ihm wird abgelehnt.
+_Avoid_: Löschen, Sperren, Deaktivieren
 
 **Mitgliedschaft**:
 Die Zugehörigkeit eines Akteurs zu einem Workspace mit einer Rolle; ohne Mitgliedschaft ist ein Workspace für den Akteur unsichtbar.

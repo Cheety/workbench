@@ -181,6 +181,7 @@ function harnessOf(
 		newJobId,
 		jobsCommitted: () => {},
 		random,
+		newApiToken: sequentialTokens(),
 		isInstanceAdmin: isInstanceAdminOf(options.instanceAdmins ?? []),
 		logger,
 	});
@@ -229,7 +230,7 @@ function harnessOf(
 		call: ({ idempotencyKey, ...call }) =>
 			pipeline.invoke({
 				...call,
-				apiTokenId: null,
+				apiToken: null,
 				idempotencyKey: idempotencyKey ?? null,
 				correlationId: newCorrelationId(),
 			}),
@@ -250,6 +251,14 @@ function sequentialIds(group: string): () => string {
 	return () => {
 		issued += 1;
 		return `00000000-0000-4000-${group}-${String(issued).padStart(12, "0")}`;
+	};
+}
+
+function sequentialTokens(): () => Secret {
+	let issued = 0;
+	return () => {
+		issued += 1;
+		return new Secret(`wbt_harness-token-${issued}`);
 	};
 }
 

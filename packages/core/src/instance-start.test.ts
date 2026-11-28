@@ -291,6 +291,7 @@ const renameLabel: RegisteredOperation = {
 	scope: "workspace",
 	target: "workspace",
 	right: "board.label.edit",
+	takesIdempotencyKey: true,
 	grant: { by: "role", grantedTo: new Set(["owner"]) },
 	validateInput: async (value) => ({ valid: true, value }),
 	validateOutput: async (value) => ({ valid: true, value }),

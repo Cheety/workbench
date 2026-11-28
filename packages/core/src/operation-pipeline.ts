@@ -9,12 +9,14 @@ import {
 } from "@workbench/sdk";
 import type { SQL } from "bun";
 import { isSameActor } from "./actor.ts";
+import { type CallingToken, isInScope, type TokenScope } from "./api-tokens.ts";
 import {
 	type AuditOutcome,
 	type DenialReason,
 	type NewAuditEntry,
 	recordAuditEntry,
 } from "./audit.ts";
+import type { Secret } from "./config.ts";
 import { recordEvent } from "./event-outbox.ts";
 import type { EventRegistry } from "./event-registry.ts";
 import { describeThrown } from "./failure-reason.ts";
@@ -24,7 +26,6 @@ import {
 	IdempotencyKeyReusedError,
 	parseIdempotencyKey,
 	runIdempotently,
-	TAKES_IDEMPOTENCY_KEY,
 } from "./idempotency-keys.ts";
 import { enqueueJob } from "./job-queue.ts";
 import type { JobRegistry } from "./job-registry.ts";
@@ -47,7 +48,7 @@ import { statementsIn } from "./transaction-statements.ts";
 export type OperationCall = {
 	readonly operation: string;
 	readonly actor: Actor;
-	readonly apiTokenId: string | null;
+	readonly apiToken: CallingToken | null;
 	readonly idempotencyKey: string | null;
 	readonly workspace: string | null;
 	readonly input: unknown;
@@ -84,6 +85,7 @@ export type OperationPipelineOptions = {
 	readonly newJobId: () => string;
 	readonly jobsCommitted: () => void;
 	readonly random: () => number;
+	readonly newApiToken: () => Secret;
 	readonly isInstanceAdmin: (actor: Actor) => boolean;
 	readonly logger: Logger;
 };
@@ -164,13 +166,33 @@ const NOT_OBJECT_HOLDER: OperationFailure = {
 	issues: [],
 };
 
+const OPERATION_OUTSIDE_TOKEN_SCOPE: OperationFailure = {
+	code: "operation_outside_token_scope",
+	kind: "forbidden",
+	detail: "the API token of the call does not include the operation",
+	issues: [],
+};
+
+const INSTANCE_OUTSIDE_TOKEN_SCOPE: OperationFailure = {
+	code: "instance_outside_token_scope",
+	kind: "forbidden",
+	detail:
+		"the API token of the call is limited to workspaces and cannot call an operation on the instance",
+	issues: [],
+};
+
 const DENIALS: Record<DenialReason, OperationFailure> = {
 	workspace_not_found: WORKSPACE_NOT_FOUND,
 	missing_right: MISSING_RIGHT,
 	object_not_found: OBJECT_NOT_FOUND,
 	not_object_holder: NOT_OBJECT_HOLDER,
 	not_instance_admin: NOT_INSTANCE_ADMIN,
+	operation_outside_token_scope: OPERATION_OUTSIDE_TOKEN_SCOPE,
+	workspace_outside_token_scope: WORKSPACE_NOT_FOUND,
+	instance_outside_token_scope: INSTANCE_OUTSIDE_TOKEN_SCOPE,
 };
+
+const UNLIMITED_SCOPE: TokenScope = { operations: null, workspaces: null };
 
 const INSTANCE_DENIALS: Record<
 	InstanceOperation["grant"]["by"],
@@ -198,10 +220,16 @@ function denialReasonsOf(
 ): readonly DenialReason[] {
 	switch (operation.scope) {
 		case "instance":
-			return INSTANCE_DENIALS[operation.grant.by];
+			return [
+				...INSTANCE_DENIALS[operation.grant.by],
+				"instance_outside_token_scope",
+				"operation_outside_token_scope",
+			];
 		case "workspace":
 			return [
 				...WORKSPACE_DENIALS[operation.grant.by],
+				"workspace_outside_token_scope",
+				"operation_outside_token_scope",
 				...OBJECT_DENIALS[operation.target],
 			];
 	}
@@ -210,7 +238,9 @@ function denialReasonsOf(
 export function denialsOf(
 	operation: RegisteredOperation,
 ): readonly OperationFailure[] {
-	return denialReasonsOf(operation).map((reason) => DENIALS[reason]);
+	return [
+		...new Set(denialReasonsOf(operation).map((reason) => DENIALS[reason])),
+	];
 }
 
 class CallFailedError extends Error {
@@ -335,7 +365,7 @@ async function invoke(
 	const scoped = scopedCallOf(operation, call.workspace);
 	if (!scoped.ok) return failed(scoped.failure);
 	const logger = loggerOf(call, operation, options.logger);
-	const key = idempotencyKeyOf(call, operation.kind);
+	const key = idempotencyKeyOf(call, operation);
 	if (!key.valid) return failed(INVALID_IDEMPOTENCY_KEY);
 	try {
 		const publisher = publisherOf(operation, options);
@@ -346,7 +376,7 @@ async function invoke(
 			async (transaction) => {
 				await authorize(
 					transaction,
-					call.actor,
+					call,
 					scoped.call,
 					options.isInstanceAdmin,
 				);
@@ -356,7 +386,7 @@ async function invoke(
 					const executed = await executeScoped(
 						scoped.call,
 						input.value,
-						{ actor: call.actor, transaction },
+						{ call, transaction },
 						{ options, publisher, enqueuer },
 					);
 					if (IS_AUDITED[operation.kind])
@@ -403,9 +433,13 @@ type CallEffects = {
 async function executeScoped(
 	scoped: ScopedCall,
 	input: unknown,
-	{ actor, transaction }: { readonly actor: Actor; readonly transaction: SQL },
+	{
+		call,
+		transaction,
+	}: { readonly call: OperationCall; readonly transaction: SQL },
 	{ options, publisher, enqueuer }: CallEffects,
 ): Promise<unknown> {
+	const { actor } = call;
 	switch (scoped.scope) {
 		case "workspace": {
 			const access = accessOf(scoped.workspace, actor);
@@ -427,10 +461,13 @@ async function executeScoped(
 		case "instance":
 			return executeOnInstance(scoped.operation, input, {
 				actor,
+				apiToken: call.apiToken,
 				sql: statementsIn(transaction),
 				grantableRights: options.registry.grantableRights(),
+				operationNames: options.registry.operationNames(),
 				now: options.now,
 				newId: options.newId,
+				newApiToken: options.newApiToken,
 			});
 	}
 }
@@ -477,9 +514,9 @@ type IdempotencyKeyOfCall =
 
 function idempotencyKeyOf(
 	call: OperationCall,
-	kind: OperationKind,
+	operation: RegisteredOperation,
 ): IdempotencyKeyOfCall {
-	if (call.idempotencyKey === null || !TAKES_IDEMPOTENCY_KEY[kind])
+	if (call.idempotencyKey === null || !operation.takesIdempotencyKey)
 		return { valid: true, key: null };
 	return parseIdempotencyKey(call.idempotencyKey);
 }
@@ -525,25 +562,45 @@ function inTransaction(
 	return BEGIN_TRANSACTION[operation.kind](sql, body);
 }
 
+type AuthorizedCaller = {
+	readonly actor: Actor;
+	readonly scope: TokenScope;
+};
+
 async function authorize(
 	transaction: SQL,
-	actor: Actor,
+	call: OperationCall,
 	scoped: ScopedCall,
 	isInstanceAdmin: (actor: Actor) => boolean,
 ): Promise<void> {
+	const caller: AuthorizedCaller = {
+		actor: call.actor,
+		scope: call.apiToken?.scope ?? UNLIMITED_SCOPE,
+	};
 	switch (scoped.scope) {
 		case "instance":
-			return authorizeOnInstance(actor, scoped.operation, isInstanceAdmin);
+			return authorizeOnInstance(caller, scoped.operation, isInstanceAdmin);
 		case "workspace":
-			return authorizeOnWorkspace(transaction, actor, scoped, isInstanceAdmin);
+			return authorizeOnWorkspace(transaction, caller, scoped, isInstanceAdmin);
 	}
 }
 
+function requireOperationInScope(
+	scope: TokenScope,
+	operation: RegisteredOperation,
+): void {
+	if (!isInScope(scope.operations, operation.name))
+		throw deniedCall("operation_outside_token_scope");
+}
+
 function authorizeOnInstance(
-	actor: Actor,
+	{ actor, scope }: AuthorizedCaller,
 	operation: InstanceOperation,
 	isInstanceAdmin: (actor: Actor) => boolean,
 ): void {
+	if (scope.workspaces !== null)
+		throw deniedCall("instance_outside_token_scope");
+	requireOperationInScope(scope, operation);
 	switch (operation.grant.by) {
 		case "every_actor":
 			return;
@@ -554,7 +611,7 @@ function authorizeOnInstance(
 
 async function authorizeOnWorkspace(
 	transaction: SQL,
-	actor: Actor,
+	{ actor, scope }: AuthorizedCaller,
 	{
 		operation,
 		workspace,
@@ -568,10 +625,13 @@ async function authorizeOnWorkspace(
 		MEMBERSHIP_LOCK[operation.kind],
 	);
 	if (membership.kind === "no_workspace") throw failedCall(WORKSPACE_NOT_FOUND);
+	if (!isInScope(scope.workspaces, workspace))
+		throw deniedCall("workspace_outside_token_scope");
 	const { grant } = operation;
 	switch (grant.by) {
 		case "instance_admin":
-			if (isInstanceAdmin(actor)) return;
+			if (isInstanceAdmin(actor))
+				return requireOperationInScope(scope, operation);
 			throw deniedCall(
 				membership.kind === "member"
 					? "not_instance_admin"
@@ -580,6 +640,7 @@ async function authorizeOnWorkspace(
 		case "role":
 			if (membership.kind === "not_member")
 				throw deniedCall("workspace_not_found");
+			requireOperationInScope(scope, operation);
 			if (
 				!(await roleGrants(transaction, membership.role, {
 					right: operation.right,
@@ -729,7 +790,7 @@ function newAuditEntryOf(
 		id: sources.newAuditEntryId(),
 		occurredAt: sources.now(),
 		actor: call.actor,
-		apiTokenId: call.apiTokenId,
+		apiTokenId: call.apiToken?.id ?? null,
 		operation: operation.name,
 		workspace: call.workspace ?? auditedWorkspaceOf(outcome),
 		outcome,

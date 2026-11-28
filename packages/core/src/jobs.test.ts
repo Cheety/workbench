@@ -341,6 +341,7 @@ async function startBillingPipeline(jobsCommitted: () => void) {
 		eventsCommitted: () => {},
 		jobsCommitted,
 		random: () => 0.5,
+		newApiToken: () => new Secret("wbt_unused-token"),
 		isInstanceAdmin: () => false,
 		logger,
 	});
@@ -779,7 +780,7 @@ describe("the pipeline", () => {
 			await pipeline.invoke({
 				operation,
 				actor: ALICE,
-				apiTokenId: null,
+				apiToken: null,
 				idempotencyKey: null,
 				workspace: WORKSPACE,
 				input: { amount },

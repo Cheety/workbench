@@ -111,6 +111,159 @@
 				}
 			}
 		},
+		"/api/operations/core.createApiToken": {
+			"post": {
+				"operationId": "core.createApiToken",
+				"parameters": [],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"properties": {
+									"validDays": {
+										"type": "integer",
+										"minimum": 1,
+										"maximum": 3650
+									},
+									"operations": {
+										"anyOf": [
+											{
+												"minItems": 1,
+												"maxItems": 100,
+												"type": "array",
+												"items": {
+													"type": "string",
+													"minLength": 1,
+													"maxLength": 200
+												}
+											},
+											{ "type": "null" }
+										]
+									},
+									"workspaces": {
+										"anyOf": [
+											{
+												"minItems": 1,
+												"maxItems": 100,
+												"type": "array",
+												"items": {
+													"type": "string",
+													"format": "uuid",
+													"pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+												}
+											},
+											{ "type": "null" }
+										]
+									}
+								},
+								"required": ["validDays", "operations", "workspaces"]
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "the output of the operation",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"properties": {
+										"id": { "type": "string" },
+										"token": { "type": "string" },
+										"expiresAt": {
+											"type": "string",
+											"format": "date-time",
+											"pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+										},
+										"operations": {
+											"anyOf": [
+												{ "type": "array", "items": { "type": "string" } },
+												{ "type": "null" }
+											]
+										},
+										"workspaces": {
+											"anyOf": [
+												{ "type": "array", "items": { "type": "string" } },
+												{ "type": "null" }
+											]
+										}
+									},
+									"required": [
+										"id",
+										"token",
+										"expiresAt",
+										"operations",
+										"workspaces"
+									],
+									"additionalProperties": false
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "the request carries no valid API token",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": { "$ref": "#/components/schemas/ProblemDetails" }
+							}
+						}
+					},
+					"403": {
+						"description": "the call was denied: instance_outside_token_scope, operation_outside_token_scope",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": {
+									"allOf": [
+										{ "$ref": "#/components/schemas/ProblemDetails" },
+										{
+											"properties": {
+												"code": {
+													"enum": [
+														"instance_outside_token_scope",
+														"operation_outside_token_scope"
+													]
+												}
+											}
+										}
+									]
+								}
+							}
+						}
+					},
+					"default": {
+						"description": "the operation failed",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": { "$ref": "#/components/schemas/ProblemDetails" }
+							}
+						}
+					}
+				}
+			}
+		},
 		"/api/operations/core.createWorkspace": {
 			"post": {
 				"operationId": "core.createWorkspace",
@@ -173,7 +326,7 @@
 						}
 					},
 					"403": {
-						"description": "the call was denied: not_instance_admin",
+						"description": "the call was denied: not_instance_admin, instance_outside_token_scope, operation_outside_token_scope",
 						"headers": {
 							"X-Correlation-ID": {
 								"$ref": "#/components/headers/CorrelationId"
@@ -186,7 +339,13 @@
 										{ "$ref": "#/components/schemas/ProblemDetails" },
 										{
 											"properties": {
-												"code": { "enum": ["not_instance_admin"] }
+												"code": {
+													"enum": [
+														"not_instance_admin",
+														"instance_outside_token_scope",
+														"operation_outside_token_scope"
+													]
+												}
 											}
 										}
 									]
@@ -287,7 +446,7 @@
 						}
 					},
 					"403": {
-						"description": "the call was denied: not_instance_admin",
+						"description": "the call was denied: not_instance_admin, instance_outside_token_scope, operation_outside_token_scope",
 						"headers": {
 							"X-Correlation-ID": {
 								"$ref": "#/components/headers/CorrelationId"
@@ -300,7 +459,13 @@
 										{ "$ref": "#/components/schemas/ProblemDetails" },
 										{
 											"properties": {
-												"code": { "enum": ["not_instance_admin"] }
+												"code": {
+													"enum": [
+														"not_instance_admin",
+														"instance_outside_token_scope",
+														"operation_outside_token_scope"
+													]
+												}
 											}
 										}
 									]
@@ -429,7 +594,7 @@
 						}
 					},
 					"403": {
-						"description": "the call was denied: not_instance_admin",
+						"description": "the call was denied: not_instance_admin, operation_outside_token_scope",
 						"headers": {
 							"X-Correlation-ID": {
 								"$ref": "#/components/headers/CorrelationId"
@@ -442,7 +607,12 @@
 										{ "$ref": "#/components/schemas/ProblemDetails" },
 										{
 											"properties": {
-												"code": { "enum": ["not_instance_admin"] }
+												"code": {
+													"enum": [
+														"not_instance_admin",
+														"operation_outside_token_scope"
+													]
+												}
 											}
 										}
 									]
@@ -465,6 +635,163 @@
 										{
 											"properties": {
 												"code": { "enum": ["workspace_not_found"] }
+											}
+										}
+									]
+								}
+							}
+						}
+					},
+					"default": {
+						"description": "the operation failed",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": { "$ref": "#/components/schemas/ProblemDetails" }
+							}
+						}
+					}
+				}
+			}
+		},
+		"/api/operations/core.listApiTokens": {
+			"post": {
+				"operationId": "core.listApiTokens",
+				"parameters": [],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"properties": {
+									"limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+									"cursor": {
+										"anyOf": [
+											{ "type": "string", "maxLength": 200 },
+											{ "type": "null" }
+										]
+									}
+								},
+								"required": ["limit", "cursor"]
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "the output of the operation",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"properties": {
+										"apiTokens": {
+											"type": "array",
+											"items": {
+												"type": "object",
+												"properties": {
+													"id": { "type": "string" },
+													"createdAt": {
+														"type": "string",
+														"format": "date-time",
+														"pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+													},
+													"expiresAt": {
+														"type": "string",
+														"format": "date-time",
+														"pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+													},
+													"revokedAt": {
+														"anyOf": [
+															{
+																"type": "string",
+																"format": "date-time",
+																"pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+															},
+															{ "type": "null" }
+														]
+													},
+													"operations": {
+														"anyOf": [
+															{
+																"type": "array",
+																"items": { "type": "string" }
+															},
+															{ "type": "null" }
+														]
+													},
+													"workspaces": {
+														"anyOf": [
+															{
+																"type": "array",
+																"items": { "type": "string" }
+															},
+															{ "type": "null" }
+														]
+													}
+												},
+												"required": [
+													"id",
+													"createdAt",
+													"expiresAt",
+													"revokedAt",
+													"operations",
+													"workspaces"
+												],
+												"additionalProperties": false
+											}
+										},
+										"nextCursor": { "type": ["string", "null"] }
+									},
+									"required": ["apiTokens", "nextCursor"],
+									"additionalProperties": false
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "the request carries no valid API token",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": { "$ref": "#/components/schemas/ProblemDetails" }
+							}
+						}
+					},
+					"403": {
+						"description": "the call was denied: instance_outside_token_scope, operation_outside_token_scope",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": {
+									"allOf": [
+										{ "$ref": "#/components/schemas/ProblemDetails" },
+										{
+											"properties": {
+												"code": {
+													"enum": [
+														"instance_outside_token_scope",
+														"operation_outside_token_scope"
+													]
+												}
 											}
 										}
 									]
@@ -640,7 +967,10 @@
 																	"missing_right",
 																	"object_not_found",
 																	"not_object_holder",
-																	"not_instance_admin"
+																	"not_instance_admin",
+																	"operation_outside_token_scope",
+																	"workspace_outside_token_scope",
+																	"instance_outside_token_scope"
 																]
 															}
 														},
@@ -681,7 +1011,7 @@
 						}
 					},
 					"403": {
-						"description": "the call was denied: missing_right",
+						"description": "the call was denied: missing_right, operation_outside_token_scope",
 						"headers": {
 							"X-Correlation-ID": {
 								"$ref": "#/components/headers/CorrelationId"
@@ -692,7 +1022,16 @@
 								"schema": {
 									"allOf": [
 										{ "$ref": "#/components/schemas/ProblemDetails" },
-										{ "properties": { "code": { "enum": ["missing_right"] } } }
+										{
+											"properties": {
+												"code": {
+													"enum": [
+														"missing_right",
+														"operation_outside_token_scope"
+													]
+												}
+											}
+										}
 									]
 								}
 							}
@@ -881,7 +1220,10 @@
 																	"missing_right",
 																	"object_not_found",
 																	"not_object_holder",
-																	"not_instance_admin"
+																	"not_instance_admin",
+																	"operation_outside_token_scope",
+																	"workspace_outside_token_scope",
+																	"instance_outside_token_scope"
 																]
 															}
 														},
@@ -922,7 +1264,7 @@
 						}
 					},
 					"403": {
-						"description": "the call was denied: not_instance_admin",
+						"description": "the call was denied: not_instance_admin, instance_outside_token_scope, operation_outside_token_scope",
 						"headers": {
 							"X-Correlation-ID": {
 								"$ref": "#/components/headers/CorrelationId"
@@ -935,7 +1277,13 @@
 										{ "$ref": "#/components/schemas/ProblemDetails" },
 										{
 											"properties": {
-												"code": { "enum": ["not_instance_admin"] }
+												"code": {
+													"enum": [
+														"not_instance_admin",
+														"instance_outside_token_scope",
+														"operation_outside_token_scope"
+													]
+												}
 											}
 										}
 									]
@@ -1030,6 +1378,145 @@
 						"content": {
 							"application/problem+json": {
 								"schema": { "$ref": "#/components/schemas/ProblemDetails" }
+							}
+						}
+					},
+					"403": {
+						"description": "the call was denied: instance_outside_token_scope, operation_outside_token_scope",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": {
+									"allOf": [
+										{ "$ref": "#/components/schemas/ProblemDetails" },
+										{
+											"properties": {
+												"code": {
+													"enum": [
+														"instance_outside_token_scope",
+														"operation_outside_token_scope"
+													]
+												}
+											}
+										}
+									]
+								}
+							}
+						}
+					},
+					"default": {
+						"description": "the operation failed",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": { "$ref": "#/components/schemas/ProblemDetails" }
+							}
+						}
+					}
+				}
+			}
+		},
+		"/api/operations/core.revokeApiToken": {
+			"post": {
+				"operationId": "core.revokeApiToken",
+				"parameters": [
+					{
+						"name": "Idempotency-Key",
+						"in": "header",
+						"required": false,
+						"description": "a key of the caller under which a repeated call receives the answer of the first instead of running the mutation again",
+						"schema": { "type": "string", "pattern": "^[ -+\\--~]{1,255}$" }
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"properties": {
+									"id": {
+										"type": "string",
+										"format": "uuid",
+										"pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+									}
+								},
+								"required": ["id"]
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "the output of the operation",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"properties": {
+										"id": { "type": "string" },
+										"revokedAt": {
+											"type": "string",
+											"format": "date-time",
+											"pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+										}
+									},
+									"required": ["id", "revokedAt"],
+									"additionalProperties": false
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "the request carries no valid API token",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": { "$ref": "#/components/schemas/ProblemDetails" }
+							}
+						}
+					},
+					"403": {
+						"description": "the call was denied: instance_outside_token_scope, operation_outside_token_scope",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": {
+									"allOf": [
+										{ "$ref": "#/components/schemas/ProblemDetails" },
+										{
+											"properties": {
+												"code": {
+													"enum": [
+														"instance_outside_token_scope",
+														"operation_outside_token_scope"
+													]
+												}
+											}
+										}
+									]
+								}
 							}
 						}
 					},
@@ -1139,7 +1626,7 @@
 						}
 					},
 					"403": {
-						"description": "the call was denied: not_instance_admin",
+						"description": "the call was denied: not_instance_admin, operation_outside_token_scope",
 						"headers": {
 							"X-Correlation-ID": {
 								"$ref": "#/components/headers/CorrelationId"
@@ -1152,7 +1639,12 @@
 										{ "$ref": "#/components/schemas/ProblemDetails" },
 										{
 											"properties": {
-												"code": { "enum": ["not_instance_admin"] }
+												"code": {
+													"enum": [
+														"not_instance_admin",
+														"operation_outside_token_scope"
+													]
+												}
 											}
 										}
 									]
@@ -1271,7 +1763,7 @@
 						}
 					},
 					"403": {
-						"description": "the call was denied: missing_right",
+						"description": "the call was denied: missing_right, operation_outside_token_scope",
 						"headers": {
 							"X-Correlation-ID": {
 								"$ref": "#/components/headers/CorrelationId"
@@ -1282,7 +1774,16 @@
 								"schema": {
 									"allOf": [
 										{ "$ref": "#/components/schemas/ProblemDetails" },
-										{ "properties": { "code": { "enum": ["missing_right"] } } }
+										{
+											"properties": {
+												"code": {
+													"enum": [
+														"missing_right",
+														"operation_outside_token_scope"
+													]
+												}
+											}
+										}
 									]
 								}
 							}
@@ -1398,7 +1899,7 @@
 						}
 					},
 					"403": {
-						"description": "the call was denied: missing_right",
+						"description": "the call was denied: missing_right, operation_outside_token_scope",
 						"headers": {
 							"X-Correlation-ID": {
 								"$ref": "#/components/headers/CorrelationId"
@@ -1409,7 +1910,16 @@
 								"schema": {
 									"allOf": [
 										{ "$ref": "#/components/schemas/ProblemDetails" },
-										{ "properties": { "code": { "enum": ["missing_right"] } } }
+										{
+											"properties": {
+												"code": {
+													"enum": [
+														"missing_right",
+														"operation_outside_token_scope"
+													]
+												}
+											}
+										}
 									]
 								}
 							}
@@ -1531,7 +2041,7 @@
 						}
 					},
 					"403": {
-						"description": "the call was denied: missing_right, not_object_holder",
+						"description": "the call was denied: missing_right, operation_outside_token_scope, not_object_holder",
 						"headers": {
 							"X-Correlation-ID": {
 								"$ref": "#/components/headers/CorrelationId"
@@ -1545,7 +2055,11 @@
 										{
 											"properties": {
 												"code": {
-													"enum": ["missing_right", "not_object_holder"]
+													"enum": [
+														"missing_right",
+														"operation_outside_token_scope",
+														"not_object_holder"
+													]
 												}
 											}
 										}

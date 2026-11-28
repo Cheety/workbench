@@ -17,6 +17,9 @@ export const DENIAL_REASONS = [
 	"object_not_found",
 	"not_object_holder",
 	"not_instance_admin",
+	"operation_outside_token_scope",
+	"workspace_outside_token_scope",
+	"instance_outside_token_scope",
 ] as const;
 
 export type DenialReason = (typeof DENIAL_REASONS)[number];

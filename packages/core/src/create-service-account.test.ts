@@ -80,7 +80,11 @@ describe("creating a service account by command", () => {
 		).toEqual({
 			authenticated: true,
 			actor: { kind: "service_account", id: serviceAccount },
-			apiTokenId: expect.any(String),
+			apiToken: {
+				id: expect.any(String),
+				expiresAt: new Date(expiresAt),
+				scope: { operations: null, workspaces: null },
+			},
 		});
 	});
 

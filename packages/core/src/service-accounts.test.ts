@@ -71,7 +71,11 @@ describe("creating a service account", () => {
 		).toEqual({
 			authenticated: true,
 			actor: { kind: "service_account", id: issued.serviceAccountId },
-			apiTokenId: expect.any(String),
+			apiToken: {
+				id: expect.any(String),
+				expiresAt: THIRTY_DAYS_LATER,
+				scope: { operations: null, workspaces: null },
+			},
 		});
 		expect(
 			await authenticateToken(

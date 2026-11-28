@@ -102,6 +102,7 @@ export function createInstanceStart(
 			find: (name) => operations.find(name),
 			list: () => operations.list(),
 			grantableRights: () => operations.grantableRights(),
+			operationNames: () => operations.operationNames(),
 		},
 		events: {
 			findEvent: (name) => events.findEvent(name),

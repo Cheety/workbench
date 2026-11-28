@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { SQL } from "bun";
-import { authenticateToken } from "./api-tokens.ts";
+import { authenticateToken, newApiToken } from "./api-tokens.ts";
 import {
 	type Config,
 	InvalidConfigError,
@@ -210,6 +210,8 @@ const api: HttpApi = {
 		newJobId: () => crypto.randomUUID(),
 		jobsCommitted: jobQueue.wake,
 		random: Math.random,
+		newApiToken: () =>
+			newApiToken((length) => crypto.getRandomValues(new Uint8Array(length))),
 		isInstanceAdmin: isInstanceAdminOf(config.instanceAdmins),
 		logger,
 	}),
