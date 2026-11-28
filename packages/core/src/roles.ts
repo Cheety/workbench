@@ -1,6 +1,7 @@
 import {
 	defineRight,
 	OperationError,
+	type Sql,
 	START_ROLES,
 	type StartRole,
 } from "@workbench/sdk";
@@ -19,6 +20,14 @@ export function isStartRole(role: RoleName): role is RoleName & StartRole {
 }
 
 const grantedRow = z.object({ granted: z.boolean() });
+
+export type RoleShare = "shared" | "no_role";
+
+export async function shareRole(sql: Sql, role: RoleName): Promise<RoleShare> {
+	const roles =
+		await sql`SELECT name FROM core.roles WHERE name = ${role} FOR SHARE`;
+	return roles.length === 0 ? "no_role" : "shared";
+}
 
 export async function customRoleGrants(
 	sql: SQL,
