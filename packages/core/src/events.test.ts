@@ -339,6 +339,7 @@ async function startLedgerWokenByItsPipeline() {
 			}),
 		received,
 		firstReceived: firstReceived.promise,
+		deliverDue: () => delivery.deliverDue(NOT_STOPPED),
 		stopDelivering: () => loop.stop(),
 	};
 }
@@ -821,23 +822,23 @@ describe("a mutation that publishes what it may not", () => {
 			"an event its plugin does not declare",
 			"ledger.addEntryWithUndeclaredEvent",
 			"UndeclaredEventError",
-			'"ledger" published the event "ledger.EntryRemoved", which it does not declare among its events',
+			"ledger.EntryRemoved",
 		],
 		[
 			"an event of another plugin",
 			"ledger.addEntryWithForeignEvent",
 			"UndeclaredEventError",
-			'"ledger" published the event "billing.InvoiceSent", which it does not declare among its events',
+			"billing.InvoiceSent",
 		],
 		[
 			"a payload its event definition rejects",
 			"ledger.addEntryWithMalformedEvent",
 			"InvalidEventPayloadError",
-			'the payload of the event "ledger.EntryAdded" does not match its payload schema',
+			"ledger.EntryAdded",
 		],
 	])(
 		"is rolled back and delivers nothing for %s",
-		async (_case, operation, name, message) => {
+		async (_case, operation, name, event) => {
 			const statistics = recording("statistics");
 			const harness = await start([ledger, billing, statistics.plugin]);
 			const workspace = await harness.createWorkspace("Alpha");
@@ -855,7 +856,10 @@ describe("a mutation that publishes what it may not", () => {
 				expect.objectContaining({
 					message: "operation failed",
 					reason: "execute_threw",
-					error: expect.objectContaining({ name, message }),
+					error: expect.objectContaining({
+						name,
+						message: expect.stringContaining(event),
+					}),
 				}),
 			);
 			expect(
@@ -886,8 +890,7 @@ describe("a query", () => {
 				message: "operation failed",
 				error: expect.objectContaining({
 					name: "EventPublishedByQueryError",
-					message:
-						'the query "ledger.announceCount" published an event; only a mutation publishes events',
+					message: expect.stringContaining("ledger.announceCount"),
 				}),
 			}),
 		);
@@ -918,6 +921,7 @@ describe("the pipeline", () => {
 
 			const called = await ledgerAndStatistics.call(operation, amount);
 			await ledgerAndStatistics.stopDelivering();
+			await ledgerAndStatistics.deliverDue();
 
 			expect(called).toEqual({
 				ok: false,

@@ -17,6 +17,11 @@ export type Authentication =
 	  }
 	| { readonly authenticated: false; readonly reason: RejectedTokenReason };
 
+export type AuthenticatedToken = Extract<
+	Authentication,
+	{ readonly authenticated: true }
+>;
+
 const tokenRow = z.object({
 	id: z.string(),
 	service_account_id: z.string(),

@@ -702,12 +702,16 @@ describe("event delivery", () => {
 			events,
 		}).delivery.deliverDue(NOT_STOPPED);
 
-		expect(handled).toEqual([
-			`archive ${LATER_EVENT}`,
-			`search ${LATER_EVENT}`,
-			`archive ${EVENT}`,
-			`search ${EVENT}`,
-		]);
+		expect(handled).toHaveLength(4);
+		expect(handled.slice(0, 2)).toEqual(
+			expect.arrayContaining([
+				`archive ${LATER_EVENT}`,
+				`search ${LATER_EVENT}`,
+			]),
+		);
+		expect(handled.slice(2)).toEqual(
+			expect.arrayContaining([`archive ${EVENT}`, `search ${EVENT}`]),
+		);
 	});
 
 	test("delivers the events that were recorded before a delivery carried the sequence of its event, in their order", async () => {

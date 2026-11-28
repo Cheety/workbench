@@ -134,6 +134,10 @@ _Avoid_: Geteiltes Layout, Layout-Vorlage
 Eine fachliche Aktion auf dem Server mit Eingabe-Schema, Autorisierung und Ergebnis; jede Operation ist über UI, HTTP-API, MCP und CLI erreichbar.
 _Avoid_: Action, Endpoint, Use Case (in der Plugin-Sprache)
 
+**MCP-Tool**:
+Die Form, in der eine Operation einem MCP-Client erscheint: ein Tool je Operation, benannt nach ihr, mit dem Workspace, ihrer Eingabe und, bei einer Mutation, einem Idempotency-Key als Argumenten.
+_Avoid_: Function, Werkzeug, Skill
+
 **Idempotency-Key**:
 Ein vom Akteur gewählter Schlüssel, unter dem der Core die Antwort einer gelungenen Mutation mindestens 24 Stunden lang festhält, damit ein wiederholter Aufruf mit demselben Schlüssel und derselben Eingabe sie nicht noch einmal ausführt, sondern dieselbe Antwort erhält.
 _Avoid_: Request-ID, Dedup-Key, Korrelations-ID (die ordnet nur Log-Einträge einer Anfrage zu)

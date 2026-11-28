@@ -10,6 +10,7 @@
 		"start": "bun src/main.ts"
 	},
 	"dependencies": {
+		"@modelcontextprotocol/sdk": "1.32.2",
 		"@workbench/sdk": "workspace:*",
 		"zod": "4.6.7"
 	}

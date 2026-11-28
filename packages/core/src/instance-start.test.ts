@@ -323,9 +323,10 @@ const registries: [
 		{ operations: registerOperations([renameLabel]) },
 		(instance) => ({
 			operation: instance.operations.find("board.renameLabel")?.name,
+			listed: instance.operations.list().map((operation) => operation.name),
 		}),
-		{ operation: undefined },
-		{ operation: "board.renameLabel" },
+		{ operation: undefined, listed: [] },
+		{ operation: "board.renameLabel", listed: ["board.renameLabel"] },
 	],
 	[
 		"events and their subscriptions",

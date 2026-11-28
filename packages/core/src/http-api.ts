@@ -1,4 +1,4 @@
-import type { Authentication } from "./api-tokens.ts";
+import type { AuthenticatedToken, Authentication } from "./api-tokens.ts";
 import type { Logger } from "./logger.ts";
 import type { OperationPipeline } from "./operation-pipeline.ts";
 import {
@@ -9,6 +9,8 @@ import {
 import { isWorkspaceId } from "./workspaces.ts";
 
 export const API_PATH_PREFIX = "/api/";
+
+export const API_VERSION = "1";
 
 export const OPERATION_PATH_TEMPLATE =
 	"/api/workspaces/{workspace}/operations/{operation}";
@@ -41,6 +43,31 @@ type ApiAuthentication =
 	| Authentication
 	| { readonly authenticated: false; readonly reason: "missing_token" };
 
+export type RequestAuthentication =
+	| AuthenticatedToken
+	| { readonly authenticated: false; readonly response: Response };
+
+export async function authenticateRequest(
+	api: Pick<HttpApi, "authenticate">,
+	{ request, correlationId, logger }: Omit<ApiRequest, "path">,
+): Promise<RequestAuthentication> {
+	const token = bearerToken(request);
+	const authentication: ApiAuthentication =
+		token === undefined
+			? { authenticated: false, reason: "missing_token" }
+			: await api.authenticate(token);
+	if (authentication.authenticated) return authentication;
+	logger.warn("request not authenticated", {
+		reason: authentication.reason,
+	});
+	const response = problemResponse(
+		REQUEST_PROBLEMS.unauthenticated,
+		correlationId,
+	);
+	response.headers.set("WWW-Authenticate", "Bearer");
+	return { authenticated: false, response };
+}
+
 export async function answerApiRequest(
 	api: HttpApi,
 	{ request, path, correlationId, logger }: ApiRequest,
@@ -54,22 +81,12 @@ export async function answerApiRequest(
 		response.headers.set("Allow", OPERATION_METHOD);
 		return response;
 	}
-	const token = bearerToken(request);
-	const authentication: ApiAuthentication =
-		token === undefined
-			? { authenticated: false, reason: "missing_token" }
-			: await api.authenticate(token);
-	if (!authentication.authenticated) {
-		logger.warn("request not authenticated", {
-			reason: authentication.reason,
-		});
-		const response = problemResponse(
-			REQUEST_PROBLEMS.unauthenticated,
-			correlationId,
-		);
-		response.headers.set("WWW-Authenticate", "Bearer");
-		return response;
-	}
+	const authentication = await authenticateRequest(api, {
+		request,
+		correlationId,
+		logger,
+	});
+	if (!authentication.authenticated) return authentication.response;
 	if (route === null)
 		return problemResponse(REQUEST_PROBLEMS.route_not_found, correlationId);
 	const [, encodedWorkspace = "", encodedOperation = ""] = route;

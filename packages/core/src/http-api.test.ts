@@ -4,36 +4,18 @@ import {
 	defineOperation,
 	definePlugin,
 } from "@workbench/sdk";
-import { SQL } from "bun";
 import { z } from "zod";
-import { apiTokenHash, authenticateToken } from "./api-tokens.ts";
-import { Secret } from "./config.ts";
-import { setSystemTimer } from "./hook-timeout.ts";
-import { type PluginPackage, startPlugins } from "./kernel.ts";
-import { createOperationPipeline } from "./operation-pipeline.ts";
+import { apiTokenHash } from "./api-tokens.ts";
+import type { PluginPackage } from "./kernel.ts";
 import {
-	CORE_MIGRATIONS_DIRECTORY,
-	type MigrationRunner,
-	migrateCoreSchema,
-	migrateSchemas,
-} from "./schema-migrations.ts";
-import { type RunningServer, startServer } from "./server.ts";
-import { createServiceAccount } from "./service-accounts.ts";
-import {
-	createFreshDatabase,
-	type FreshDatabase,
-	PostgresGate,
-} from "./testing/postgres.ts";
-import { type LogEntry, recordingLogger } from "./testing/recording-logger.ts";
-import { createWorkspace } from "./workspaces.ts";
-
-const NOW = new Date("2026-11-26T08:00:00.000Z");
+	API_INSTANCE_WORKSPACE,
+	type ApiInstance,
+	startApiInstance,
+} from "./testing/api-instance.ts";
 
 const IN_A_MONTH = new Date("2026-12-26T08:00:00.000Z");
 
-const WORKSPACE = "00000000-0000-4000-8000-00000000aaaa";
-
-const NOT_STOPPED = new AbortController().signal;
+const WORKSPACE = API_INSTANCE_WORKSPACE;
 
 const entry = z.object({ id: z.string(), amount: z.number().int() });
 
@@ -84,132 +66,16 @@ const ledger: PluginPackage = {
 	],
 };
 
-type ApiInstance = {
-	readonly database: FreshDatabase;
-	readonly logEntries: readonly LogEntry[];
-	refuseAuthenticationDatabase(): void;
-	issueToken(): Promise<string>;
-	setClock(now: Date): void;
-	post(
-		path: string,
-		body: string,
-		headers: Headers | Record<string, string>,
-	): Promise<Response>;
-	send(method: string, path: string): Promise<Response>;
-};
-
-const cleanups: (() => Promise<void>)[] = [];
+const instances: ApiInstance[] = [];
 
 afterEach(async () => {
-	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+	for (const instance of instances.splice(0)) await instance.stop();
 });
 
-async function startApiInstance(): Promise<ApiInstance> {
-	const { logger, entries } = recordingLogger();
-	const database = await createFreshDatabase();
-	cleanups.push(() => database.drop());
-	const authenticationGate = PostgresGate.create(database.url);
-	authenticationGate.forward();
-	const authenticationSql = new SQL(authenticationGate.url, {
-		max: 1,
-		connectionTimeout: 10,
-	});
-	cleanups.push(async () => {
-		await authenticationSql.close();
-		authenticationGate.close();
-	});
-	const runner: MigrationRunner = {
-		databaseUrl: new Secret(database.url),
-		connectionTimeoutMs: 10_000,
-		statementTimeoutMs: 60_000,
-		lockRetryDelayMs: () => 0,
-		setTimer: setSystemTimer,
-		logger,
-	};
-	await migrateCoreSchema(runner, CORE_MIGRATIONS_DIRECTORY, NOT_STOPPED);
-	const plugins = await startPlugins({
-		discover: async () => ({ packages: [ledger], unreadable: [] }),
-		enabledPlugins: ["ledger"],
-		capabilityProviders: {},
-		migrateSchemas: (schemas) => migrateSchemas(runner, schemas, NOT_STOPPED),
-		hookTimeout: { ms: 10_000, setTimer: setSystemTimer },
-		logger,
-	});
-	cleanups.push(async () => {
-		await plugins.deactivate();
-	});
-	await createWorkspace(database.sql, {
-		id: WORKSPACE,
-		name: "Accounts",
-		createdAt: NOW,
-	});
-	let issuedIds = 0;
-	const newId = () => {
-		issuedIds += 1;
-		return `00000000-0000-4000-8000-${String(issuedIds).padStart(12, "0")}`;
-	};
-	let clock = NOW;
-	let issuedTokens = 0;
-	let issuedCorrelationIds = 0;
-	const server: RunningServer = startServer({
-		port: 0,
-		logger,
-		checkDatabase: async () => ({ reachable: true }),
-		newCorrelationId: () => {
-			issuedCorrelationIds += 1;
-			return `request-${issuedCorrelationIds}`;
-		},
-		startupStatus: () => "started",
-		api: {
-			authenticate: (token) =>
-				authenticateToken(authenticationSql, token, clock),
-			pipeline: createOperationPipeline({
-				sql: database.sql,
-				registry: plugins.operations,
-				events: plugins.events,
-				now: () => clock,
-				newId,
-				newAuditEntryId: newId,
-				newEventId: newId,
-				eventsCommitted: () => {},
-				jobs: plugins.jobs,
-				newJobId: newId,
-				jobsCommitted: () => {},
-				random: () => 0.5,
-				logger,
-			}),
-		},
-	});
-	cleanups.push(() => server.stop());
-	return {
-		database,
-		logEntries: entries,
-		refuseAuthenticationDatabase: () => authenticationGate.refuse(),
-		issueToken: async () => {
-			issuedTokens += 1;
-			const issued = await createServiceAccount(
-				database.sql,
-				{ name: `agent ${issuedTokens}`, validDays: 30 },
-				{
-					now: () => clock,
-					newId,
-					newToken: () => new Secret(`wbt_test-token-${issuedTokens}`),
-				},
-			);
-			return issued.token.reveal();
-		},
-		setClock: (now) => {
-			clock = now;
-		},
-		post: (path, body, headers) =>
-			fetch(`http://127.0.0.1:${server.port}${path}`, {
-				method: "POST",
-				body,
-				headers,
-			}),
-		send: (method, path) =>
-			fetch(`http://127.0.0.1:${server.port}${path}`, { method }),
-	};
+async function startLedgerInstance(): Promise<ApiInstance> {
+	const instance = await startApiInstance([ledger]);
+	instances.push(instance);
+	return instance;
 }
 
 function operationPath(operation: string): string {
@@ -222,7 +88,7 @@ function bearer(token: string): Record<string, string> {
 
 describe("an operation called over HTTP", () => {
 	test("answers a mutation with its output when the token is valid", async () => {
-		const api = await startApiInstance();
+		const api = await startLedgerInstance();
 		const token = await api.issueToken();
 
 		const response = await api.post(
@@ -241,7 +107,7 @@ describe("an operation called over HTTP", () => {
 	test.each(["bearer", "BEARER"])(
 		"accepts the token in the scheme spelled %s",
 		async (scheme) => {
-			const api = await startApiInstance();
+			const api = await startLedgerInstance();
 			const token = await api.issueToken();
 
 			const response = await api.post(
@@ -255,7 +121,7 @@ describe("an operation called over HTTP", () => {
 	);
 
 	test("answers a query with what a mutation wrote before", async () => {
-		const api = await startApiInstance();
+		const api = await startLedgerInstance();
 		const token = await api.issueToken();
 		const added = await api.post(
 			operationPath("ledger.addEntry"),
@@ -279,7 +145,7 @@ describe("an operation called over HTTP", () => {
 
 describe("a mutation called over HTTP with an Idempotency-Key", () => {
 	test("is run once, and a repeated call receives the same body", async () => {
-		const api = await startApiInstance();
+		const api = await startLedgerInstance();
 		const token = await api.issueToken();
 		const headers = { ...bearer(token), "Idempotency-Key": "retry-1" };
 		const first = await api.post(
@@ -302,7 +168,7 @@ describe("a mutation called over HTTP with an Idempotency-Key", () => {
 	});
 
 	test("reads a key quoted as a structured field string as the key inside the quotes", async () => {
-		const api = await startApiInstance();
+		const api = await startLedgerInstance();
 		const token = await api.issueToken();
 		const first = await api.post(
 			operationPath("ledger.addEntry"),
@@ -323,7 +189,7 @@ describe("a mutation called over HTTP with an Idempotency-Key", () => {
 	});
 
 	test("answers 422 idempotency_key_reused when the key comes again with another body", async () => {
-		const api = await startApiInstance();
+		const api = await startLedgerInstance();
 		const token = await api.issueToken();
 		const headers = { ...bearer(token), "Idempotency-Key": "retry-1" };
 		await api.post(
@@ -353,7 +219,7 @@ describe("a mutation called over HTTP with an Idempotency-Key", () => {
 	])(
 		"answers 400 invalid_idempotency_key for $case, and runs nothing",
 		async ({ values }) => {
-			const api = await startApiInstance();
+			const api = await startLedgerInstance();
 			const token = await api.issueToken();
 			const headers = new Headers(bearer(token));
 			for (const value of values) headers.append("Idempotency-Key", value);
@@ -375,7 +241,7 @@ describe("a mutation called over HTTP with an Idempotency-Key", () => {
 	);
 
 	test("answers 400 invalid_idempotency_key when the key is empty, and runs nothing", async () => {
-		const api = await startApiInstance();
+		const api = await startLedgerInstance();
 		const token = await api.issueToken();
 
 		const response = await api.post(
@@ -396,7 +262,7 @@ describe("a mutation called over HTTP with an Idempotency-Key", () => {
 
 describe("a query called over HTTP with an Idempotency-Key", () => {
 	test("ignores the header sent twice", async () => {
-		const api = await startApiInstance();
+		const api = await startLedgerInstance();
 		const token = await api.issueToken();
 		const headers = new Headers(bearer(token));
 		headers.append("Idempotency-Key", "a");
@@ -440,7 +306,7 @@ describe("a call without a valid token", () => {
 	])(
 		"is rejected with 401 problem details when it carries $case",
 		async ({ reason, headers }) => {
-			const api = await startApiInstance();
+			const api = await startLedgerInstance();
 
 			const response = await api.post(
 				operationPath("ledger.addEntry"),
@@ -474,7 +340,7 @@ describe("a call without a valid token", () => {
 	);
 
 	test("leaves the operation unexecuted", async () => {
-		const api = await startApiInstance();
+		const api = await startLedgerInstance();
 		const token = await api.issueToken();
 
 		await api.post(
@@ -494,7 +360,7 @@ describe("a call without a valid token", () => {
 
 describe("the audit read over HTTP", () => {
 	test("names the service account and the API token of a mutation by their ids, never the token or its hash", async () => {
-		const api = await startApiInstance();
+		const api = await startLedgerInstance();
 		const token = await api.issueToken();
 		const [issued] = z
 			.array(z.object({ id: z.string(), service_account_id: z.string() }))
@@ -547,7 +413,7 @@ describe("a call with another method than POST", () => {
 	test.each(["GET", "PUT", "DELETE"])(
 		"is answered with 405 problem details allowing POST for %s, before authentication",
 		async (method) => {
-			const api = await startApiInstance();
+			const api = await startLedgerInstance();
 
 			const response = await api.send(method, operationPath("ledger.addEntry"));
 
@@ -571,7 +437,7 @@ describe("a call with another method than POST", () => {
 
 describe("a failing call over HTTP", () => {
 	test("answers with the problem details of the failure", async () => {
-		const api = await startApiInstance();
+		const api = await startLedgerInstance();
 		const token = await api.issueToken();
 
 		const response = await api.post(
@@ -594,7 +460,7 @@ describe("a failing call over HTTP", () => {
 	});
 
 	test("answers 400 problem details when the body is not JSON", async () => {
-		const api = await startApiInstance();
+		const api = await startLedgerInstance();
 		const token = await api.issueToken();
 
 		const response = await api.post(
@@ -611,7 +477,7 @@ describe("a failing call over HTTP", () => {
 	});
 
 	test("answers 413 problem details when the body exceeds 1 MiB", async () => {
-		const api = await startApiInstance();
+		const api = await startLedgerInstance();
 		const token = await api.issueToken();
 
 		const response = await api.post(
@@ -628,7 +494,7 @@ describe("a failing call over HTTP", () => {
 	});
 
 	test("accepts a body of exactly 1 MiB", async () => {
-		const api = await startApiInstance();
+		const api = await startLedgerInstance();
 		const token = await api.issueToken();
 		const body = JSON.stringify({ amount: 42, padding: "" });
 
@@ -653,7 +519,7 @@ describe("a failing call over HTTP", () => {
 	])(
 		"answers 400 problem details when the $case in the path is not valid percent-encoding",
 		async ({ path }) => {
-			const api = await startApiInstance();
+			const api = await startLedgerInstance();
 			const token = await api.issueToken();
 
 			const response = await api.post(
@@ -671,7 +537,7 @@ describe("a failing call over HTTP", () => {
 	);
 
 	test("answers 400 problem details when the workspace in the path is not a UUID", async () => {
-		const api = await startApiInstance();
+		const api = await startLedgerInstance();
 		const token = await api.issueToken();
 
 		const response = await api.post(
@@ -688,7 +554,7 @@ describe("a failing call over HTTP", () => {
 	});
 
 	test("answers 404 problem details for an operation no plugin registered", async () => {
-		const api = await startApiInstance();
+		const api = await startLedgerInstance();
 		const token = await api.issueToken();
 
 		const response = await api.post(
@@ -702,7 +568,7 @@ describe("a failing call over HTTP", () => {
 	});
 
 	test("answers an internal error neutrally and keeps the details in the log", async () => {
-		const api = await startApiInstance();
+		const api = await startLedgerInstance();
 		const token = await api.issueToken();
 
 		const response = await api.post(
@@ -735,7 +601,7 @@ describe("a failing call over HTTP", () => {
 	});
 
 	test("answers an internal error neutrally when the database is unreachable during authentication", async () => {
-		const api = await startApiInstance();
+		const api = await startLedgerInstance();
 		const token = await api.issueToken();
 		api.refuseAuthenticationDatabase();
 

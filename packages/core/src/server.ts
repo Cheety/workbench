@@ -1,6 +1,7 @@
 import { describeThrown } from "./failure-reason.ts";
 import { API_PATH_PREFIX, answerApiRequest, type HttpApi } from "./http-api.ts";
 import type { Logger } from "./logger.ts";
+import { answerMcpRequest, MCP_PATH, type McpApi } from "./mcp-api.ts";
 import type { DatabaseCheck } from "./postgres.ts";
 import {
 	problemResponse,
@@ -37,6 +38,7 @@ export type ServerOptions = {
 	readonly newCorrelationId: () => string;
 	readonly startupStatus: () => StartupStatus;
 	readonly api: HttpApi;
+	readonly mcp: McpApi;
 };
 
 export type RunningServer = {
@@ -100,6 +102,7 @@ async function route(
 				REQUEST_PROBLEMS.instance_not_ready[startup],
 				correlationId,
 			);
+		if (path === MCP_PATH) return answerMcpRequest(options.mcp, incoming);
 		return answerApiRequest(options.api, incoming);
 	}
 	return problemResponse(REQUEST_PROBLEMS.route_not_found, correlationId);

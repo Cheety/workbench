@@ -26,6 +26,7 @@ export type RegisteredOperation = {
 
 export type OperationRegistry = {
 	find(name: string): RegisteredOperation | undefined;
+	list(): readonly RegisteredOperation[];
 };
 
 export type OperationsRead = {
@@ -178,5 +179,6 @@ export function registerOperations(
 	);
 	return {
 		find: (name) => byName.get(name),
+		list: () => [...byName.values()],
 	};
 }

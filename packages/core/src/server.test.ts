@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { authenticateToken } from "./api-tokens.ts";
 import { Secret } from "./config.ts";
 import { registerEvents } from "./event-registry.ts";
+import type { HttpApi } from "./http-api.ts";
 import { registerJobs } from "./job-registry.ts";
 import { createOperationPipeline } from "./operation-pipeline.ts";
 import { registerOperations } from "./operation-registry.ts";
@@ -42,6 +43,25 @@ async function startTestServer(startupStatus: StartupStatus = "started") {
 	const { sql } = database;
 	const { logger, entries } = recordingLogger();
 	let nextId = 1;
+	const operations = registerOperations([]);
+	const api: HttpApi = {
+		authenticate: (token) => authenticateToken(sql, token, NOW),
+		pipeline: createOperationPipeline({
+			sql,
+			registry: operations,
+			events: registerEvents({ active: [], notActive: [] }),
+			now: () => NOW,
+			newId: () => "00000000-0000-4000-8000-000000000001",
+			newAuditEntryId: () => "00000000-0000-4000-a000-000000000001",
+			newEventId: () => "00000000-0000-4000-e000-000000000001",
+			eventsCommitted: () => {},
+			jobs: registerJobs([]),
+			newJobId: () => "00000000-0000-4000-b000-000000000001",
+			jobsCommitted: () => {},
+			random: () => 0.5,
+			logger,
+		}),
+	};
 	const server = startServer({
 		port: 0,
 		logger,
@@ -51,24 +71,8 @@ async function startTestServer(startupStatus: StartupStatus = "started") {
 		}),
 		newCorrelationId: () => `generated-${nextId++}`,
 		startupStatus: () => startupStatus,
-		api: {
-			authenticate: (token) => authenticateToken(sql, token, NOW),
-			pipeline: createOperationPipeline({
-				sql,
-				registry: registerOperations([]),
-				events: registerEvents({ active: [], notActive: [] }),
-				now: () => NOW,
-				newId: () => "00000000-0000-4000-8000-000000000001",
-				newAuditEntryId: () => "00000000-0000-4000-a000-000000000001",
-				newEventId: () => "00000000-0000-4000-e000-000000000001",
-				eventsCommitted: () => {},
-				jobs: registerJobs([]),
-				newJobId: () => "00000000-0000-4000-b000-000000000001",
-				jobsCommitted: () => {},
-				random: () => 0.5,
-				logger,
-			}),
-		},
+		api,
+		mcp: { ...api, operations },
 	});
 	running = server;
 	return {
@@ -278,6 +282,18 @@ describe("the HTTP API", () => {
 			code: "instance_not_ready",
 			correlationId: "generated-1",
 			issues: [],
+		});
+	});
+
+	test("answers 503 problem details at the MCP endpoint while the instance is still starting", async () => {
+		const { post } = await startTestServer("starting");
+
+		const response = await post("/api/mcp");
+
+		expect(response.status).toBe(503);
+		expect(await response.json()).toMatchObject({
+			code: "instance_not_ready",
+			detail: "the instance is still starting",
 		});
 	});
 

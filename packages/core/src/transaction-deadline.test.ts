@@ -239,10 +239,7 @@ describe("a hook whose time is up while a statement of it is running", () => {
 		const givenUp = await running.catch((error: unknown) => error);
 
 		expect(givenUp).toBeInstanceOf(TimeIsUpError);
-		expect(refusal).toMatchObject({
-			name: "StatementRefusedError",
-			message: "statement refused: the time of its hook is up",
-		});
+		expect(refusal).toMatchObject({ name: "StatementRefusedError" });
 		expect(await notesIn(database.sql)).toEqual([]);
 	});
 

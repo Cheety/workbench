@@ -125,7 +125,7 @@ Seine SQL-Migrationen liegen in einem Verzeichnis des Plugin-Pakets, das die `pa
 - Jede Migration läuft in einer eigenen Transaktion mit dem Schema des Plugins als `search_path`; Tabellen werden daher ohne Schema angelegt.
 - Angewandte Migrationen hält die Tabelle `core.migrations` fest (Schema, Dateiname, Zeitpunkt); ein erneuter Start wendet nur neue Migrationen an. Eine angewandte Migration wird nie geändert, sondern durch eine neue ergänzt.
 - Die Migrationen des Schemas `core` liegen in `packages/core/migrations` und laufen genauso, mit `core` als `search_path`. Sie legen `core.workspaces` an, die Tabelle der Workspaces (ADR-0002), `core.service_accounts` und `core.api_tokens` für die Service-Accounts und ihre API-Tokens (siehe [HTTP-API](#http-api)) `core.audit_entries` für das [Audit](#audit) sowie `core.events` und `core.event_deliveries`, die Outbox der [Events](#events), `core.jobs`, die Job-Queue der [Jobs](#jobs), und `core.idempotency_keys` für die [Idempotency-Keys](#idempotency-keys). Schlägt eine davon fehl, meldet das Log `instance failed to start` mit `reason` `core_schema_not_migrated`, und die Instanz lädt keine Plugins.
-- Jeder Migrationslauf (erst `core`, dann die Schemas der Plugins) hält dieselbe Postgres-Advisory-Lock. Starten zwei Prozesse gleichzeitig, wartet der zweite (Log-Eintrag `migration lock held by another run, waiting`) und wendet nichts doppelt an. Ein Signal beendet das Warten; eine laufende Migration läuft zu Ende, weitere beginnen nicht. Jede Anweisung eines Laufs darf höchstens 60 s dauern, das Warten auf Tabellensperren eingeschlossen; dauert sie länger, schlägt die Migration fehl (`migration failed`) und der Lauf gibt die Lock frei (Begründung in ADR-0008).
+- Jeder Migrationslauf (erst `core`, dann die Schemas der Plugins) hält dieselbe Postgres-Advisory-Lock. Starten zwei Prozesse gleichzeitig, wartet der zweite (Log-Eintrag `migration lock held by another run, waiting`) und wendet nichts doppelt an. Ein Signal beendet das Warten; eine laufende Migration läuft zu Ende, weitere beginnen nicht. Jede Anweisung eines Laufs darf höchstens 60 s dauern, das Warten auf Tabellensperren eingeschlossen; dauert sie länger, schlägt die Migration fehl (`migration failed`) und der Lauf gibt die Lock frei (Begründung in ADR-0008). Lässt sich die Lock danach nicht freigeben, etwa weil die Verbindung während einer Migration abbrach, steht der Eintrag `migration lock not released` mit dem Fehler in `error` im Log; Postgres gibt die Lock mit der beendeten Verbindung ohnehin frei.
 - Schlägt eine Migration fehl, wird sie zurückgerollt; die folgenden Migrationen desselben Schemas laufen nicht, die anderer Schemas schon. Das Log nennt Schema, Migration und Fehler (`migration failed`), das Plugin wird nicht geladen (`migration_failed`), und die Instanz meldet nicht „bereit“.
 - Nennt die `package.json` Migrationen, deklariert das Manifest aber nicht `database`, ist das Manifest ungültig.
 
@@ -492,9 +492,9 @@ curl -X POST "http://127.0.0.1:3000/api/workspaces/$WORKSPACE/operations/referen
 | `unauthenticated`         | 401    | Kein gültiges API-Token.                                                                                                    |
 | `invalid_input`           | 400    | Der Body ist kein JSON, oder die Eingabe passt nicht zum Eingabe-Schema.                                                    |
 | `route_not_found`         | 404    | Weder Methode noch Pfad passen zu einer Route.                                                                              |
-| `method_not_allowed`      | 405    | Der Pfad einer Operation mit anderer Methode als `POST`.                                                                    |
+| `method_not_allowed`      | 405    | Der Pfad einer Operation oder der MCP-Endpunkt mit anderer Methode als `POST`.                                              |
 | `malformed_path`          | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                                                                          |
-| `invalid_workspace_id`    | 400    | Der Workspace im Pfad ist keine UUID.                                                                                       |
+| `invalid_workspace_id`    | 400    | Der Workspace im Pfad oder im Argument `workspace` eines MCP-Tools ist keine UUID.                                          |
 | `workspace_not_found`     | 404    | Kein Workspace hat diese UUID.                                                                                              |
 | `unknown_operation`       | 404    | Weder der Core noch ein aktives Plugin hat eine Operation dieses Namens.                                                    |
 | `body_too_large`          | 413    | Der Body ist größer als 1 MiB.                                                                                              |
@@ -536,6 +536,21 @@ bun run openapi
 ```
 
 Jede Operation erscheint mit ihrem Namen als `operationId`, Ein- und Ausgabe-Schema als JSON Schema und Problem Details für jedes Scheitern. Die Schemas kommen aus [Standard JSON Schema](https://standardschema.dev) (`~standard.jsonSchema`, etwa von zod 4); ein Schema ohne diese Erweiterung erscheint als `{}`. `bun run check` scheitert, wenn die Datei nicht zu den Operationen passt; dann `bun run openapi` ausführen und das Ergebnis committen.
+
+### MCP
+
+Jede Operation des Cores und der aktiven Plugins ist auch als Tool des [Model Context Protocol](https://modelcontextprotocol.io) erreichbar, als dünner Adapter auf dieselbe Pipeline wie die HTTP-API (ADR-0018). Ein MCP-Client verbindet sich per Streamable HTTP mit `http://<host>/api/mcp` und schickt das API-Token als Header, etwa für Claude Code:
+
+```sh
+claude mcp add --transport http workbench "http://127.0.0.1:3000/api/mcp" --header "Authorization: Bearer $TOKEN"
+```
+
+- Der Endpunkt nimmt nur `POST` an, zustandslos und ohne Session; die Antwort ist JSON, kein SSE-Stream. `GET` und `DELETE` beantwortet er vor der Prüfung des Tokens mit 405 und `Allow: POST`, als Problem Details mit `code` `method_not_allowed`. Solange die Instanz startet oder ihr Start gescheitert ist, antwortet er wie die HTTP-API mit 503 (`instance_not_ready`).
+- Jede Anfrage braucht ein gültiges API-Token als `Authorization: Bearer <token>`, wie die HTTP-API: Ohne gültiges Token antwortet der Endpunkt mit 401 und `WWW-Authenticate: Bearer` (`unauthenticated`), listet keine Tools und ruft keines auf; das Log nennt den Grund im Eintrag `request not authenticated`. OAuth bietet der Endpunkt nicht an. Der Akteur eines Aufrufs ist der Service-Account des Tokens, und eine Mutation schreibt wie über HTTP einen Audit-Eintrag mit dem Token.
+- Der Name eines Tools ist der Name der Operation mit `_` statt `.`, etwa `reference_createNote` für `reference.createNote`. Seine Argumente sind `workspace`, die UUID des Workspace, und `input`, die Eingabe der Operation; das Eingabe-Schema des Tools nennt unter `input` das JSON Schema aus dem [API-Vertrag](#api-vertrag). Eine Query trägt die Annotation `readOnlyHint: true`. Der Server nennt sich `workbench` in der Version des [API-Vertrags](#api-vertrag) (`info.version`). Ein Tool-Name, den die Liste der Tools nicht nennt, auch der Name der Operation selbst, scheitert als Tool-Fehler mit `unknown_operation`.
+- Das Ergebnis eines Tools ist ein Textblock mit der Ausgabe als JSON, mit denselben Feldern und Werten wie der Body der HTTP-API. Scheitert ein Aufruf, ist das Ergebnis ein Tool-Fehler (`isError: true`), dessen Text die Problem Details der HTTP-API mit demselben `code` sind (siehe die Tabelle unter [HTTP-API](#http-api)); fehlt `workspace` oder ist es keine UUID, ist der Code `invalid_workspace_id`.
+- Den [Idempotency-Key](#idempotency-keys) einer Mutation nennt das Argument `idempotencyKey`, ein String; das Eingabe-Schema eines Tools nennt es nur an einer Mutation. Es ist derselbe Key wie im Header `Idempotency-Key` der HTTP-API: Ein Aufruf über MCP mit dem Key eines Aufrufs über HTTP desselben Akteurs erhält dessen Antwort. Ist das Argument bei einer Mutation kein gültiger Key, auch kein String, scheitert der Aufruf als Tool-Fehler mit `invalid_idempotency_key`; eine Query beachtet es nicht.
+- Der Body einer Anfrage ist höchstens 1 MiB groß; einen größeren lehnt der Endpunkt mit 413 als Fehler von JSON-RPC ab.
 
 ### Contract
 
