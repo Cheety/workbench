@@ -14,9 +14,10 @@ import {
 } from "./idempotency-keys.ts";
 import type { JsonSchema } from "./json-schema.ts";
 import type { PluginPackage } from "./kernel.ts";
+import { denialsOf } from "./operation-pipeline.ts";
 import type { RegisteredOperation } from "./operation-registry.ts";
 import { catalogPlugins } from "./plugin-catalog.ts";
-import { PROBLEM_CONTENT_TYPE } from "./problem-details.ts";
+import { PROBLEM_CONTENT_TYPE, statusOf } from "./problem-details.ts";
 import { CORRELATION_ID_HEADER, VALID_CORRELATION_ID } from "./server.ts";
 
 export const OPENAPI_DOCUMENT_PATH = fileURLToPath(
@@ -252,6 +253,7 @@ function describeOperation(operation: RegisteredOperation): OpenApiOperation {
 				},
 			},
 			"401": UNAUTHENTICATED_RESPONSE,
+			...deniedResponsesOf(operation),
 			default: {
 				description: "the operation failed",
 				headers: RESPONSE_HEADERS,
@@ -259,4 +261,32 @@ function describeOperation(operation: RegisteredOperation): OpenApiOperation {
 			},
 		},
 	};
+}
+
+function deniedResponsesOf(operation: RegisteredOperation): Responses {
+	const codesByStatus = Map.groupBy(denialsOf(operation.target), (failure) =>
+		String(statusOf(failure.kind)),
+	);
+	return Object.fromEntries(
+		[...codesByStatus].map(([status, failures]) => {
+			const codes = failures.map((failure) => failure.code);
+			return [
+				status,
+				{
+					description: `the call was denied: ${codes.join(", ")}`,
+					headers: RESPONSE_HEADERS,
+					content: {
+						[PROBLEM_CONTENT_TYPE]: {
+							schema: {
+								allOf: [
+									{ $ref: PROBLEM_DETAILS_REF },
+									{ properties: { code: { enum: codes } } },
+								],
+							},
+						},
+					},
+				},
+			];
+		}),
+	);
 }

@@ -143,6 +143,22 @@ const DENIALS: Record<DenialReason, OperationFailure> = {
 	not_object_holder: NOT_OBJECT_HOLDER,
 };
 
+const DENIALS_BY_TARGET: Record<OperationTarget, readonly DenialReason[]> = {
+	workspace: ["workspace_not_found", "missing_right"],
+	object: [
+		"workspace_not_found",
+		"missing_right",
+		"object_not_found",
+		"not_object_holder",
+	],
+};
+
+export function denialsOf(
+	target: OperationTarget,
+): readonly OperationFailure[] {
+	return DENIALS_BY_TARGET[target].map((reason) => DENIALS[reason]);
+}
+
 class CallFailedError extends Error {
 	readonly failure: OperationFailure;
 	readonly denial: DenialReason | null;

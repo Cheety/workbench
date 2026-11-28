@@ -138,6 +138,10 @@ const STATUS_OF: Record<
 	not_ready: { status: 503, title: "Service Unavailable" },
 };
 
+export function statusOf(kind: ProblemKind): number {
+	return STATUS_OF[kind].status;
+}
+
 export function toProblemDetails(
 	problem: Problem,
 	correlationId: string,

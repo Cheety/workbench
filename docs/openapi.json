@@ -270,6 +270,46 @@
 							}
 						}
 					},
+					"403": {
+						"description": "the call was denied: missing_right",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": {
+									"allOf": [
+										{ "$ref": "#/components/schemas/ProblemDetails" },
+										{ "properties": { "code": { "enum": ["missing_right"] } } }
+									]
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "the call was denied: workspace_not_found",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": {
+									"allOf": [
+										{ "$ref": "#/components/schemas/ProblemDetails" },
+										{
+											"properties": {
+												"code": { "enum": ["workspace_not_found"] }
+											}
+										}
+									]
+								}
+							}
+						}
+					},
 					"default": {
 						"description": "the operation failed",
 						"headers": {
@@ -358,6 +398,46 @@
 							}
 						}
 					},
+					"403": {
+						"description": "the call was denied: missing_right",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": {
+									"allOf": [
+										{ "$ref": "#/components/schemas/ProblemDetails" },
+										{ "properties": { "code": { "enum": ["missing_right"] } } }
+									]
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "the call was denied: workspace_not_found",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": {
+									"allOf": [
+										{ "$ref": "#/components/schemas/ProblemDetails" },
+										{
+											"properties": {
+												"code": { "enum": ["workspace_not_found"] }
+											}
+										}
+									]
+								}
+							}
+						}
+					},
 					"default": {
 						"description": "the operation failed",
 						"headers": {
@@ -442,6 +522,46 @@
 						"content": {
 							"application/problem+json": {
 								"schema": { "$ref": "#/components/schemas/ProblemDetails" }
+							}
+						}
+					},
+					"403": {
+						"description": "the call was denied: missing_right",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": {
+									"allOf": [
+										{ "$ref": "#/components/schemas/ProblemDetails" },
+										{ "properties": { "code": { "enum": ["missing_right"] } } }
+									]
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "the call was denied: workspace_not_found",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": {
+									"allOf": [
+										{ "$ref": "#/components/schemas/ProblemDetails" },
+										{
+											"properties": {
+												"code": { "enum": ["workspace_not_found"] }
+											}
+										}
+									]
+								}
 							}
 						}
 					},
@@ -535,6 +655,54 @@
 						"content": {
 							"application/problem+json": {
 								"schema": { "$ref": "#/components/schemas/ProblemDetails" }
+							}
+						}
+					},
+					"403": {
+						"description": "the call was denied: missing_right, not_object_holder",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": {
+									"allOf": [
+										{ "$ref": "#/components/schemas/ProblemDetails" },
+										{
+											"properties": {
+												"code": {
+													"enum": ["missing_right", "not_object_holder"]
+												}
+											}
+										}
+									]
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "the call was denied: workspace_not_found, object_not_found",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": {
+									"allOf": [
+										{ "$ref": "#/components/schemas/ProblemDetails" },
+										{
+											"properties": {
+												"code": {
+													"enum": ["workspace_not_found", "object_not_found"]
+												}
+											}
+										}
+									]
+								}
 							}
 						}
 					},

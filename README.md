@@ -611,7 +611,7 @@ Der Service-Account hat zunächst keine Mitgliedschaft und damit Zugriff auf kei
 bun run openapi
 ```
 
-Die Liste der Operationen erscheint als `listOperations`. Jede Operation erscheint mit ihrem Namen als `operationId`, Ein- und Ausgabe-Schema als JSON Schema und Problem Details für jedes Scheitern. Die Schemas kommen aus [Standard JSON Schema](https://standardschema.dev) (`~standard.jsonSchema`, etwa von zod 4); ein Schema ohne diese Erweiterung erscheint als `{}`. `bun run check` scheitert, wenn die Datei nicht zu den Operationen passt; dann `bun run openapi` ausführen und das Ergebnis committen.
+Die Liste der Operationen erscheint als `listOperations`. Jede Operation erscheint mit ihrem Namen als `operationId`, Ein- und Ausgabe-Schema als JSON Schema und Problem Details für jedes Scheitern. Die Antworten 403 und 404 nennen die Codes einer Verweigerung in `code` als `enum`: jede Operation 403 `missing_right` und 404 `workspace_not_found`, eine Operation mit `target` `object` dazu 403 `not_object_holder` und 404 `object_not_found`. Die Schemas kommen aus [Standard JSON Schema](https://standardschema.dev) (`~standard.jsonSchema`, etwa von zod 4); ein Schema ohne diese Erweiterung erscheint als `{}`. `bun run check` scheitert, wenn die Datei nicht zu den Operationen passt; dann `bun run openapi` ausführen und das Ergebnis committen.
 
 ### MCP
 
