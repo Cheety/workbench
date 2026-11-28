@@ -333,6 +333,79 @@ describe("an API token scoped to operations", () => {
 	});
 });
 
+function workspaceIds(count: number): string[] {
+	return Array.from(
+		{ length: count },
+		(_, index) => `00000000-0000-4000-9000-${String(index).padStart(12, "0")}`,
+	);
+}
+
+function operationNames(count: number): string[] {
+	return Array.from({ length: count }, (_, index) => `ledger.entry${index}`);
+}
+
+describe("the scope of a new API token", () => {
+	test.each([
+		{
+			case: "an operation twice",
+			field: "operations",
+			scope: {
+				operations: ["ledger.readEntries", "ledger.readEntries"],
+				workspaces: null,
+			},
+		},
+		{
+			case: "a workspace twice",
+			field: "workspaces",
+			scope: { operations: null, workspaces: [WORKSPACE, WORKSPACE] },
+		},
+		{
+			case: "101 operations",
+			field: "operations",
+			scope: { operations: operationNames(101), workspaces: null },
+		},
+		{
+			case: "101 workspaces",
+			field: "workspaces",
+			scope: { operations: null, workspaces: workspaceIds(101) },
+		},
+	])(
+		"is rejected with 400 invalid_input when it names $case",
+		async ({ field, scope }) => {
+			const api = await startLedgerInstance();
+			const owner = await api.issueToken("owner");
+
+			const response = await api.post(
+				onInstance("core.createApiToken"),
+				JSON.stringify({ ...scope, validDays: 7 }),
+				bearer(owner),
+			);
+
+			expect(response.status).toBe(400);
+			expect(await response.json()).toMatchObject({
+				code: "invalid_input",
+				issues: [{ path: [field] }],
+			});
+		},
+	);
+
+	test.each(["operations", "workspaces"])(
+		"cannot be stored with more than 100 %s",
+		async (column) => {
+			const api = await startLedgerInstance();
+			const owner = await api.issueIdentifiedToken("owner");
+			const listed = JSON.stringify(workspaceIds(101));
+
+			const stored = api.database.sql.unsafe(
+				`UPDATE core.api_tokens SET ${column} = $1::text::jsonb WHERE id = $2`,
+				[listed, owner.apiTokenId],
+			);
+
+			await expect(stored).rejects.toThrow(`api_tokens_${column}_check`);
+		},
+	);
+});
+
 describe("an API token scoped to workspaces", () => {
 	test("is refused another workspace its actor is a member of with 404 workspace_not_found", async () => {
 		const api = await startLedgerInstance();
