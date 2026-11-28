@@ -642,18 +642,7 @@ const documentedOperationList = z.object({
 					"200": z.object({
 						content: z.object({
 							"application/json": z.object({
-								schema: z.object({
-									properties: z.object({
-										operations: z.object({
-											items: z.object({
-												required: z.array(z.string()),
-												properties: z.object({
-													kind: z.object({ enum: z.array(z.unknown()) }),
-												}),
-											}),
-										}),
-									}),
-								}),
+								schema: z.record(z.string(), z.unknown()),
 							}),
 						}),
 					}),
@@ -661,10 +650,6 @@ const documentedOperationList = z.object({
 			}),
 		}),
 	}),
-});
-
-const listedOperations = z.object({
-	operations: z.array(z.record(z.string(), z.unknown())),
 });
 
 describe("the operations listed over HTTP", () => {
@@ -692,23 +677,19 @@ describe("the operations listed over HTTP", () => {
 		const document = documentedOperationList.parse(
 			await describeHttpApi([ledger], setSystemTimer),
 		);
-		const listedOperation =
+		const documentedList = z.fromJSONSchema(
 			document.paths["/api/operations"].get.responses["200"].content[
 				"application/json"
-			].schema.properties.operations.items;
+			].schema,
+		);
 
 		const response = await fetch(`${api.url}/api/operations`, {
 			headers: bearer(token),
 		});
 
-		const { operations } = listedOperations.parse(await response.json());
-		expect(operations).not.toHaveLength(0);
-		for (const operation of operations) {
-			expect(Object.keys(operation)).toEqual(
-				expect.arrayContaining(listedOperation.required),
-			);
-			expect(listedOperation.properties.kind.enum).toContain(operation.kind);
-		}
+		expect(
+			documentedList.safeParse(await response.json()).error?.issues,
+		).toBeUndefined();
 	});
 
 	test("are not listed without a valid token", async () => {
