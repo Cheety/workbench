@@ -7,7 +7,7 @@ import {
 import type { SQL } from "bun";
 import { z } from "zod";
 import type { AuditSubject } from "./audit-subject.ts";
-import { type Keyset, pageOf } from "./keyset-pages.ts";
+import { type Keyset, pageOf, pageRequestSchema } from "./keyset-pages.ts";
 import { defineInstanceOperation } from "./operation-registry.ts";
 import { type RoleName, roleNameSchema } from "./role-name.ts";
 
@@ -34,8 +34,6 @@ export type NewAuditEntry = {
 	readonly workspace: string | null;
 	readonly outcome: AuditOutcome;
 };
-
-const MAX_LISTED_AUDIT_ENTRIES = 100;
 
 const MAX_CURSOR_LENGTH = 200;
 
@@ -196,17 +194,14 @@ export const instanceAuditRead = defineRight({
 	defaultRoles: [],
 });
 
-const auditPageInput = z.object({
-	limit: z.number().int().min(1).max(MAX_LISTED_AUDIT_ENTRIES),
-	cursor: z.string().max(MAX_CURSOR_LENGTH).nullable(),
-});
+const auditPageRequest = pageRequestSchema(MAX_CURSOR_LENGTH);
 
 export const listAuditEntries = defineOperation({
 	name: "listAuditEntries",
 	kind: "query",
 	target: "workspace",
 	right: auditRead.name,
-	input: auditPageInput,
+	input: auditPageRequest,
 	output: z.object({
 		entries: z.array(workspaceAuditEntry),
 		nextCursor: z.string().nullable(),
@@ -242,7 +237,7 @@ export const listInstanceAuditEntries = defineInstanceOperation({
 	name: "listInstanceAuditEntries",
 	kind: "query",
 	right: instanceAuditRead.name,
-	input: auditPageInput,
+	input: auditPageRequest,
 	output: z.object({
 		entries: z.array(instanceAuditEntry),
 		nextCursor: z.string().nullable(),

@@ -1,10 +1,21 @@
 import { OperationError } from "@workbench/sdk";
 import { z } from "zod";
 
+const MAX_PAGE_SIZE = 100;
+
 export type PageRequest = {
 	readonly limit: number;
 	readonly cursor: string | null;
 };
+
+export function pageRequestSchema(
+	maxCursorLength: number,
+): z.ZodType<PageRequest> {
+	return z.object({
+		limit: z.number().int().min(1).max(MAX_PAGE_SIZE),
+		cursor: z.string().max(maxCursorLength).nullable(),
+	});
+}
 
 export type Page<Row> = {
 	readonly rows: readonly Row[];
