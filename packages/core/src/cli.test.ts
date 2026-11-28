@@ -441,6 +441,37 @@ describe("an input on the command line", () => {
 	});
 
 	test.each([
+		{ case: "a line break", key: "retry\n1" },
+		{ case: "a comma", key: "retry,1" },
+		{ case: "more than 255 characters", key: "r".repeat(256) },
+	])(
+		"with an idempotency key with $case is refused with exit code 2 before anything reaches the instance",
+		async ({ key }) => {
+			const api = await startReferenceInstance();
+
+			const run = await runCli(
+				[
+					...callArgs(["reference", "create-note"], API_INSTANCE_WORKSPACE, {
+						title: "Plan",
+					}),
+					"--idempotency-key",
+					key,
+				],
+				await accessTo(api),
+			);
+
+			expect(run.exitCode).toBe(2);
+			expect(run.stdout).toBe("");
+			expect(run.stderr).toStartWith(
+				"--idempotency-key must be 1 to 255 visible ASCII characters or spaces, without a comma\nusage: workbench",
+			);
+			expect(api.logEntries).not.toContainEqual(
+				expect.objectContaining({ message: "request completed" }),
+			);
+		},
+	);
+
+	test.each([
 		{ case: "no command", args: [] },
 		{ case: "only a plugin", args: ["reference"] },
 		{

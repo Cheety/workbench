@@ -575,7 +575,7 @@ bun run workbench reference create-note --workspace "$WORKSPACE" --input '{"titl
   ```
 
 - Ist die Instanz nicht erreichbar oder antwortet sie nicht binnen 120 s, meldet das Kommando `the instance at <origin> cannot be reached`; antwortet dort etwas anderes als die Instanz, etwa ein Proxy, `the instance answered with HTTP <status> and an unexpected body`, jeweils mit Exit-Code 1.
-- Ein ungültiger Aufruf endet mit Exit-Code 2, bevor etwas die Instanz erreicht: ein unbekanntes Kommando oder eine unbekannte Option, ein fehlendes `--workspace` oder `--input`, eine Eingabe, die kein JSON ist (`--input is not JSON`). Die Standardfehlerausgabe nennt den Grund und darunter `usage: workbench …`, aber keinen übergebenen Wert.
+- Ein ungültiger Aufruf endet mit Exit-Code 2, bevor etwas die Instanz erreicht: ein unbekanntes Kommando oder eine unbekannte Option, ein fehlendes `--workspace` oder `--input`, eine Eingabe, die kein JSON ist (`--input is not JSON`), ein Idempotency-Key, den die Instanz nicht annähme (`--idempotency-key must be 1 to 255 visible ASCII characters or spaces, without a comma`). Die Standardfehlerausgabe nennt den Grund und darunter `usage: workbench …`, aber keinen übergebenen Wert.
 
 Das API-Token kommt nie als Argument, damit es in keiner Prozessliste, Shell-History und keinem Log steht; eine Option `--token` gibt es nicht. Token und Adresse der Instanz kommen aus der Umgebung oder aus einer Konfigurationsdatei, die Umgebung geht je Wert vor:
 

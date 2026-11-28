@@ -12,6 +12,11 @@ import {
 	OPERATION_LIST_PATH,
 	OPERATION_PATH_TEMPLATE,
 } from "./http-api.ts";
+import {
+	IDEMPOTENCY_KEY_RULE,
+	type IdempotencyKey,
+	parseIdempotencyKey,
+} from "./idempotency-keys.ts";
 import { type JsonText, parseJsonText } from "./json-text.ts";
 import {
 	findQualifiedOperationName,
@@ -42,7 +47,7 @@ type Invocation =
 			readonly operation: string;
 			readonly workspace: string;
 			readonly input: string;
-			readonly idempotencyKey: string | undefined;
+			readonly idempotencyKey: IdempotencyKey | undefined;
 	  };
 
 type ParsedInvocation =
@@ -123,6 +128,16 @@ function readInvocation(args: readonly string[]): ParsedInvocation {
 	if (input === undefined) return { ok: false, problem: "--input is required" };
 	if (!parseJsonText(input).parsed)
 		return { ok: false, problem: "--input is not JSON" };
+	const idempotencyKey = values["idempotency-key"];
+	const parsedKey =
+		idempotencyKey === undefined
+			? undefined
+			: parseIdempotencyKey(idempotencyKey);
+	if (parsedKey !== undefined && !parsedKey.valid)
+		return {
+			ok: false,
+			problem: `--idempotency-key must be ${IDEMPOTENCY_KEY_RULE}`,
+		};
 	return {
 		ok: true,
 		invocation: {
@@ -133,7 +148,7 @@ function readInvocation(args: readonly string[]): ParsedInvocation {
 			}),
 			workspace,
 			input,
-			idempotencyKey: values["idempotency-key"],
+			idempotencyKey: parsedKey?.key,
 		},
 	};
 }
