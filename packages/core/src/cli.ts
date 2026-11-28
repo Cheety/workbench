@@ -12,7 +12,7 @@ import {
 	OPERATION_LIST_PATH,
 	OPERATION_PATH_TEMPLATE,
 } from "./http-api.ts";
-import { parseJsonText } from "./json-text.ts";
+import { type JsonText, parseJsonText } from "./json-text.ts";
 import {
 	findQualifiedOperationName,
 	type QualifiedOperationName,
@@ -50,7 +50,12 @@ type ParsedInvocation =
 	| { readonly ok: false; readonly problem: string };
 
 type Sent =
-	| { readonly reached: true; readonly response: Response }
+	| {
+			readonly reached: true;
+			readonly status: number;
+			readonly ok: boolean;
+			readonly body: JsonText;
+	  }
 	| { readonly reached: false };
 
 type Exchange = {
@@ -280,10 +285,9 @@ async function invoke(
 		);
 		return EXIT_CODES.failed;
 	}
-	const { response } = sent;
-	const body = parseJsonText(await response.text());
+	const { status, ok, body } = sent;
 	const answer =
-		response.ok && body.parsed ? exchange.findAnswer(body.value) : undefined;
+		ok && body.parsed ? exchange.findAnswer(body.value) : undefined;
 	if (answer !== undefined) {
 		output.writeOutput(answer);
 		return EXIT_CODES.succeeded;
@@ -295,7 +299,7 @@ async function invoke(
 		`${
 			problem.success
 				? describeProblem(problem.data)
-				: `the instance answered with HTTP ${response.status} and an unexpected body`
+				: `the instance answered with HTTP ${status} and an unexpected body`
 		}\n`,
 	);
 	return EXIT_CODES.failed;
@@ -311,7 +315,8 @@ async function send(
 			...init,
 			signal: expired,
 		});
-		return { reached: true, response };
+		const body = parseJsonText(await response.text());
+		return { reached: true, status: response.status, ok: response.ok, body };
 	} catch (error) {
 		if (error instanceof TypeError || expired.aborted)
 			return { reached: false };

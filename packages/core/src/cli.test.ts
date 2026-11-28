@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -30,6 +31,8 @@ const REFERENCE_DIRECTORY = join(
 const UNKNOWN_WORKSPACE = "00000000-0000-4000-8000-00000000bbbb";
 
 const REQUEST_DEADLINE_MS = 120_000;
+
+const BODY_PART_BYTES = 32 * 1024 * 1024;
 
 const closeBook = defineOperation({
 	name: "closeBook",
@@ -709,6 +712,48 @@ describe("an instance that does not answer before the deadline of the command li
 			expect(timer.delaysMs).toEqual([REQUEST_DEADLINE_MS]);
 		} finally {
 			await silent.stop(true);
+		}
+	});
+
+	test("is reported as unreachable with exit code 1 when its body stops before it ends", async () => {
+		const sentPart = Promise.withResolvers<void>();
+		const sockets: Socket[] = [];
+		const stalling = createServer((socket) => {
+			sockets.push(socket);
+			socket.once("data", () => {
+				socket.write(
+					`HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${2 * BODY_PART_BYTES}\r\n\r\n`,
+				);
+				socket.write(Buffer.alloc(BODY_PART_BYTES, " "), () =>
+					sentPart.resolve(),
+				);
+			});
+		});
+		const listening = Promise.withResolvers<void>();
+		stalling.listen(0, "127.0.0.1", () => listening.resolve());
+		await listening.promise;
+		const address = stalling.address();
+		if (address === null || typeof address === "string")
+			throw new Error("the stalling server listens on no port");
+		const timer = manualTimer();
+		try {
+			const running = runCliInProcess(
+				["operations"],
+				`http://127.0.0.1:${address.port}`,
+				timer,
+			);
+			await sentPart.promise;
+
+			timer.expire();
+
+			expect(await running).toEqual({
+				exitCode: 1,
+				stdout: "",
+				stderr: `the instance at http://127.0.0.1:${address.port} cannot be reached\n`,
+			});
+		} finally {
+			for (const socket of sockets) socket.destroy();
+			stalling.close();
 		}
 	});
 });
