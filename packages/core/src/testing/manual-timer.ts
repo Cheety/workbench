@@ -9,14 +9,16 @@ export type ManualTimer = {
 	expire(): void;
 };
 
+type PendingTimer = { readonly expire: () => void; readonly delayMs: number };
+
 export function manualTimer(): ManualTimer {
 	const delaysMs: number[] = [];
-	const pending: { readonly expire: () => void }[] = [];
+	const pending: PendingTimer[] = [];
 	let announce: (() => void) | undefined;
 	return {
 		setTimer: (expire, delayMs) => {
 			delaysMs.push(delayMs);
-			const timer = { expire };
+			const timer = { expire, delayMs };
 			pending.push(timer);
 			announce?.();
 			announce = undefined;
@@ -33,9 +35,14 @@ export function manualTimer(): ManualTimer {
 				announce = resolve;
 			}),
 		expire: () => {
-			const latest = pending.pop();
-			if (latest === undefined) throw new Error("no timer is pending");
-			latest.expire();
+			const soonest = pending.reduce<PendingTimer | undefined>(
+				(found, timer) =>
+					found === undefined || timer.delayMs < found.delayMs ? timer : found,
+				undefined,
+			);
+			if (soonest === undefined) throw new Error("no timer is pending");
+			pending.splice(pending.indexOf(soonest), 1);
+			soonest.expire();
 		},
 	};
 }
