@@ -252,6 +252,22 @@ function cancellationBehindAGate(database: FreshDatabase): {
 	return { gate, cancellation };
 }
 
+function unreachablePostgres(database: FreshDatabase): {
+	readonly sql: SQL;
+	readonly cancellation: SQL;
+} {
+	const gate = PostgresGate.create(database.url);
+	gate.refuse();
+	const sql = new SQL(gate.url, { max: 1, connectionTimeout: 1 });
+	const cancellation = new SQL(gate.url, { max: 1, connectionTimeout: 1 });
+	cleanups.push(async () => {
+		await cancellation.close();
+		await sql.close();
+		gate.close();
+	});
+	return { sql, cancellation };
+}
+
 async function refuseNewConnections(database: FreshDatabase): Promise<void> {
 	const name = new URL(database.url).pathname.slice(1);
 	const admin = new SQL(TEST_DATABASE_URL, { max: 1 });
@@ -1559,11 +1575,12 @@ describe("the job loop on the queue", () => {
 	});
 
 	test("tells the operator when a run of the queue fails as a whole, and waits for the next interval", async () => {
-		const database = await freshDatabase();
+		const database = await migratedDatabase();
 		const jobs = registryOf(sendingReminders(async () => {}));
+		const unreachable = unreachablePostgres(database);
 		const { queue, entries } = queueOf({
-			sql: database.sql,
-			cancellation: database.cancellation,
+			sql: unreachable.sql,
+			cancellation: unreachable.cancellation,
 			jobs,
 		});
 		const timer = manualTimer();
@@ -1595,9 +1612,10 @@ describe("the job loop on the queue", () => {
 describe("the job queue", () => {
 	test("asks Postgres for nothing until the core schema exists", async () => {
 		const database = await freshDatabase();
+		const unreachable = unreachablePostgres(database);
 		const { queue } = queueOf({
-			sql: database.sql,
-			cancellation: database.cancellation,
+			sql: unreachable.sql,
+			cancellation: unreachable.cancellation,
 			jobs: registryOf(sendingReminders(async () => {})),
 			hasCoreSchema: () => false,
 		});
