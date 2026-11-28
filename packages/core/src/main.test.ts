@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { Glob, type Subprocess, type TCPSocketListener } from "bun";
 import { z } from "zod";
 import { CORE_MIGRATIONS_DIRECTORY } from "./schema-migrations.ts";
+import { mcpTestbed } from "./testing/mcp-testbed.ts";
 import {
 	createFreshDatabase,
 	type FreshDatabase,
@@ -25,7 +26,10 @@ const databases: FreshDatabase[] = [];
 let occupiedPort: TCPSocketListener | undefined;
 let openGate: PostgresGate | undefined;
 
+const mcp = mcpTestbed();
+
 afterEach(async () => {
+	await mcp.tearDown();
 	for (const instance of instances.splice(0)) {
 		instance.kill("SIGKILL");
 		await instance.exited;
@@ -99,6 +103,34 @@ function readLog(stream: ReadableStream<Uint8Array>) {
 		until: (message: string) => collect(message),
 		rest: () => collect(),
 	};
+}
+
+const WORKSPACE = {
+	id: "00000000-0000-4000-8000-00000000aaaa",
+	name: "Alpha",
+	createdAt: new Date("2026-11-26T08:00:00.000Z"),
+};
+
+async function operatorToken(database: FreshDatabase): Promise<string> {
+	const command = Bun.spawn(
+		[
+			process.execPath,
+			CREATE_SERVICE_ACCOUNT,
+			"--name",
+			"agent",
+			"--valid-days",
+			"1",
+		],
+		{
+			env: { PATH: process.env.PATH ?? "", DATABASE_URL: database.url },
+			stdout: "pipe",
+			stderr: "pipe",
+		},
+	);
+	const { token } = z
+		.object({ token: z.string() })
+		.parse(JSON.parse(await new Response(command.stdout).text()));
+	return token;
 }
 
 function serverStarted(entries: readonly LogEntry[]): LogEntry {
@@ -436,30 +468,8 @@ describe("migrations at start", () => {
 describe("HTTP API of an instance", () => {
 	test("runs the mutation and the query of the reference plugin for a token the operator created", async () => {
 		const database = await freshDatabase();
-		const command = Bun.spawn(
-			[
-				process.execPath,
-				CREATE_SERVICE_ACCOUNT,
-				"--name",
-				"agent",
-				"--valid-days",
-				"1",
-			],
-			{
-				env: { PATH: process.env.PATH ?? "", DATABASE_URL: database.url },
-				stdout: "pipe",
-				stderr: "pipe",
-			},
-		);
-		const { token } = z
-			.object({ token: z.string() })
-			.parse(JSON.parse(await new Response(command.stdout).text()));
-		const workspace = "00000000-0000-4000-8000-00000000aaaa";
-		await createWorkspace(database.sql, {
-			id: workspace,
-			name: "Alpha",
-			createdAt: new Date("2026-11-26T08:00:00.000Z"),
-		});
+		const token = await operatorToken(database);
+		await createWorkspace(database.sql, WORKSPACE);
 		const instance = spawnInstance({
 			DATABASE_URL: database.url,
 			PORT: "0",
@@ -469,7 +479,7 @@ describe("HTTP API of an instance", () => {
 		const started = serverStarted(await log.until("instance started"));
 		const call = (operation: string, input: unknown) =>
 			fetch(
-				`http://127.0.0.1:${started.port}/api/workspaces/${workspace}/operations/${operation}`,
+				`http://127.0.0.1:${started.port}/api/workspaces/${WORKSPACE.id}/operations/${operation}`,
 				{
 					method: "POST",
 					headers: { Authorization: `Bearer ${token}` },
@@ -485,5 +495,42 @@ describe("HTTP API of an instance", () => {
 		expect(note).toMatchObject({ title: "Plan" });
 		expect(listed.status).toBe(200);
 		expect(await listed.json()).toEqual({ notes: [note] });
+	});
+});
+
+describe("MCP endpoint of an instance", () => {
+	test("lists the tools of the reference plugin and runs one for a token the operator created", async () => {
+		const database = await freshDatabase();
+		const token = await operatorToken(database);
+		await createWorkspace(database.sql, WORKSPACE);
+		const instance = spawnInstance({
+			DATABASE_URL: database.url,
+			PORT: "0",
+			PLUGINS: "reference",
+		});
+		const log = readLog(instance.stdout);
+		const started = serverStarted(await log.until("instance started"));
+		const client = await mcp.connectedClient(
+			`http://127.0.0.1:${started.port}`,
+			token,
+		);
+
+		const { tools } = await client.listTools();
+		const created = await client.callTool({
+			name: "reference_createNote",
+			arguments: { workspace: WORKSPACE.id, input: { title: " Plan " } },
+		});
+
+		expect(tools.map((tool) => tool.name)).toContain("reference_createNote");
+		const { isError, content } = z
+			.object({
+				isError: z.boolean().optional(),
+				content: z.tuple([
+					z.object({ type: z.literal("text"), text: z.string() }),
+				]),
+			})
+			.parse(created);
+		expect(isError).toBeUndefined();
+		expect(JSON.parse(content[0].text)).toMatchObject({ title: "Plan" });
 	});
 });
