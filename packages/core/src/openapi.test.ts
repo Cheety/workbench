@@ -42,6 +42,10 @@ const board: PluginPackage = {
 	version: "1.0.0",
 	loadDefinition: async () => ({
 		...definePlugin({ manifest: { name: "board" } }),
+		rights: [
+			{ name: "board.label.edit", defaultRoles: ["owner"] },
+			{ name: "board.label.read", defaultRoles: ["owner"] },
+		],
 		operations: [renameLabel, countLabels],
 	}),
 };

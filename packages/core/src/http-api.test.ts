@@ -58,6 +58,10 @@ const ledger: PluginPackage = {
 		...definePlugin({
 			manifest: { name: "ledger", capabilities: [DATABASE_CAPABILITY] },
 		}),
+		rights: [
+			{ name: "ledger.entry.add", defaultRoles: ["owner"] },
+			{ name: "ledger.entry.read", defaultRoles: ["owner"] },
+		],
 		operations: [addEntry, listEntries],
 	}),
 	loadMigrations: async () => [
@@ -91,7 +95,7 @@ function bearer(token: string): Record<string, string> {
 describe("an operation called over HTTP", () => {
 	test("answers a mutation with its output when the token is valid", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 
 		const response = await api.post(
 			operationPath("ledger.addEntry"),
@@ -110,7 +114,7 @@ describe("an operation called over HTTP", () => {
 		"accepts the token in the scheme spelled %s",
 		async (scheme) => {
 			const api = await startLedgerInstance();
-			const token = await api.issueToken();
+			const token = await api.issueToken("owner");
 
 			const response = await api.post(
 				operationPath("ledger.addEntry"),
@@ -124,7 +128,7 @@ describe("an operation called over HTTP", () => {
 
 	test("answers a query with what a mutation wrote before", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 		const added = await api.post(
 			operationPath("ledger.addEntry"),
 			JSON.stringify({ amount: 42 }),
@@ -148,7 +152,7 @@ describe("an operation called over HTTP", () => {
 describe("a mutation called over HTTP with an Idempotency-Key", () => {
 	test("is run once, and a repeated call receives the same body", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 		const headers = { ...bearer(token), "Idempotency-Key": "retry-1" };
 		const first = await api.post(
 			operationPath("ledger.addEntry"),
@@ -171,7 +175,7 @@ describe("a mutation called over HTTP with an Idempotency-Key", () => {
 
 	test("reads a key quoted as a structured field string as the key inside the quotes", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 		const first = await api.post(
 			operationPath("ledger.addEntry"),
 			JSON.stringify({ amount: 42 }),
@@ -192,7 +196,7 @@ describe("a mutation called over HTTP with an Idempotency-Key", () => {
 
 	test("answers 422 idempotency_key_reused when the key comes again with another body", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 		const headers = { ...bearer(token), "Idempotency-Key": "retry-1" };
 		await api.post(
 			operationPath("ledger.addEntry"),
@@ -222,7 +226,7 @@ describe("a mutation called over HTTP with an Idempotency-Key", () => {
 		"answers 400 invalid_idempotency_key for $case, and runs nothing",
 		async ({ values }) => {
 			const api = await startLedgerInstance();
-			const token = await api.issueToken();
+			const token = await api.issueToken("owner");
 			const headers = new Headers(bearer(token));
 			for (const value of values) headers.append("Idempotency-Key", value);
 
@@ -244,7 +248,7 @@ describe("a mutation called over HTTP with an Idempotency-Key", () => {
 
 	test("answers 400 invalid_idempotency_key when the key is empty, and runs nothing", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 
 		const response = await api.post(
 			operationPath("ledger.addEntry"),
@@ -265,7 +269,7 @@ describe("a mutation called over HTTP with an Idempotency-Key", () => {
 describe("a query called over HTTP with an Idempotency-Key", () => {
 	test("ignores the header sent twice", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 		const headers = new Headers(bearer(token));
 		headers.append("Idempotency-Key", "a");
 		headers.append("Idempotency-Key", "b");
@@ -288,7 +292,7 @@ describe("a call without a valid token", () => {
 			case: "a token in another scheme",
 			reason: "missing_token",
 			headers: async (api: ApiInstance) => ({
-				Authorization: `Basic ${await api.issueToken()}`,
+				Authorization: `Basic ${await api.issueToken("owner")}`,
 			}),
 		},
 		{
@@ -300,7 +304,7 @@ describe("a call without a valid token", () => {
 			case: "an expired token",
 			reason: "expired_token",
 			headers: async (api: ApiInstance) => {
-				const token = await api.issueToken();
+				const token = await api.issueToken("owner");
 				api.setClock(IN_A_MONTH);
 				return bearer(token);
 			},
@@ -343,7 +347,7 @@ describe("a call without a valid token", () => {
 
 	test("leaves the operation unexecuted", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 
 		await api.post(
 			operationPath("ledger.addEntry"),
@@ -363,7 +367,7 @@ describe("a call without a valid token", () => {
 describe("the audit read over HTTP", () => {
 	test("names the service account and the API token of a mutation by their ids, never the token or its hash", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 		const [issued] = z
 			.array(z.object({ id: z.string(), service_account_id: z.string() }))
 			.parse(
@@ -440,7 +444,7 @@ describe("a call with another method than POST", () => {
 describe("a failing call over HTTP", () => {
 	test("answers with the problem details of the failure", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 
 		const response = await api.post(
 			operationPath("ledger.addEntry"),
@@ -461,9 +465,28 @@ describe("a failing call over HTTP", () => {
 		});
 	});
 
+	test("answers 403 problem details to a token whose role lacks the right of the operation", async () => {
+		const api = await startLedgerInstance();
+		const token = await api.issueToken("viewer");
+
+		const response = await api.post(
+			operationPath("ledger.addEntry"),
+			JSON.stringify({ amount: 42 }),
+			bearer(token),
+		);
+
+		expect(response.status).toBe(403);
+		expect(await response.json()).toMatchObject({
+			type: "urn:workbench:problem:missing_right",
+			title: "Forbidden",
+			status: 403,
+			code: "missing_right",
+		});
+	});
+
 	test("answers 400 problem details when the body is not JSON", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 
 		const response = await api.post(
 			operationPath("ledger.addEntry"),
@@ -480,7 +503,7 @@ describe("a failing call over HTTP", () => {
 
 	test("answers 413 problem details when the body exceeds 1 MiB", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 
 		const response = await api.post(
 			operationPath("ledger.addEntry"),
@@ -497,7 +520,7 @@ describe("a failing call over HTTP", () => {
 
 	test("accepts a body of exactly 1 MiB", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 		const body = JSON.stringify({ amount: 42, padding: "" });
 
 		const response = await api.post(
@@ -522,7 +545,7 @@ describe("a failing call over HTTP", () => {
 		"answers 400 problem details when the $case in the path is not valid percent-encoding",
 		async ({ path }) => {
 			const api = await startLedgerInstance();
-			const token = await api.issueToken();
+			const token = await api.issueToken("owner");
 
 			const response = await api.post(
 				path,
@@ -540,7 +563,7 @@ describe("a failing call over HTTP", () => {
 
 	test("answers 400 problem details when the workspace in the path is not a UUID", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 
 		const response = await api.post(
 			"/api/workspaces/accounts/operations/ledger.addEntry",
@@ -557,7 +580,7 @@ describe("a failing call over HTTP", () => {
 
 	test("answers 404 problem details for an operation no plugin registered", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 
 		const response = await api.post(
 			operationPath("ledger.closeBook"),
@@ -571,7 +594,7 @@ describe("a failing call over HTTP", () => {
 
 	test("answers an internal error neutrally and keeps the details in the log", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 
 		const response = await api.post(
 			operationPath("ledger.addEntry"),
@@ -604,7 +627,7 @@ describe("a failing call over HTTP", () => {
 
 	test("answers an internal error neutrally when the database is unreachable during authentication", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 		api.refuseAuthenticationDatabase();
 
 		const response = await api.post(
@@ -655,7 +678,7 @@ const documentedOperationList = z.object({
 describe("the operations listed over HTTP", () => {
 	test("name every operation of the core and the active plugins with its kind, sorted by name", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 
 		const response = await fetch(`${api.url}/api/operations`, {
 			headers: bearer(token),
@@ -673,7 +696,7 @@ describe("the operations listed over HTTP", () => {
 
 	test("match the schema of the list in the OpenAPI document", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 		const document = documentedOperationList.parse(
 			await describeHttpApi([ledger], setSystemTimer),
 		);

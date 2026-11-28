@@ -83,7 +83,9 @@ Den ersten Service-Account legt der Betreiber im Container an (siehe [Service-Ac
 docker compose exec workbench bun run --silent create-service-account --name "deploy agent" --valid-days 90
 ```
 
-`scripts/smoke-test.sh` baut das Image, prüft Nutzer, Umgebung und Dateien des Images, startet zwei Compose-Projekte nebeneinander auf frischen Volumes mit allen Plugins, die die Plugin-Pakete unter `packages/` nennen, wartet auf ihre Readiness, prüft, dass jede Migration des Cores und dieser Plugin-Pakete genau einmal angewandt ist, ruft in beiden `reference.createNote` per HTTP auf, prüft, dass das Token des einen Projekts im anderen mit 401 abgelehnt wird und dass die Container jedes Projekts nur dessen eigenes Volume `postgres-data` und eigene Netze `default` und `database` nutzen, und räumt beide Projekte samt Volumes, den Container der Dateiprüfung und das Image ab. Es prüft vorher, dass das `Dockerfile` auf der Bun-Version aus `.bun-version` baut, und bricht ab, wenn das Image schon existiert, statt ein fremdes Image zu überschreiben und zu löschen. Scheitert eine Prüfung, endet es mit `smoke test failed: …` und den Logs beider Projekte.
+Ein Workspace und die Mitgliedschaft des Service-Accounts darin entstehen bisher per SQL im Container von Postgres (siehe [Rechte und Mitgliedschaften](#rechte-und-mitgliedschaften)).
+
+`scripts/smoke-test.sh` baut das Image, prüft Nutzer, Umgebung und Dateien des Images, startet zwei Compose-Projekte nebeneinander auf frischen Volumes mit allen Plugins, die die Plugin-Pakete unter `packages/` nennen, wartet auf ihre Readiness, prüft, dass jede Migration des Cores und dieser Plugin-Pakete genau einmal angewandt ist, gibt dem Service-Account eines Tokens die Rolle `owner` in einem Workspace, ruft in beiden `reference.createNote` per HTTP auf, prüft, dass das Token des einen Projekts im anderen mit 401 abgelehnt wird und dass die Container jedes Projekts nur dessen eigenes Volume `postgres-data` und eigene Netze `default` und `database` nutzen, und räumt beide Projekte samt Volumes, den Container der Dateiprüfung und das Image ab. Es prüft vorher, dass das `Dockerfile` auf der Bun-Version aus `.bun-version` baut, und bricht ab, wenn das Image schon existiert, statt ein fremdes Image zu überschreiben und zu löschen. Scheitert eine Prüfung, endet es mit `smoke test failed: …` und den Logs beider Projekte.
 
 ## Plugins
 
@@ -125,20 +127,20 @@ Ein Paket, dessen `package.json` nicht lesbar ist oder `workbench.plugin` in and
 
 Kann ein Plugin nicht geladen werden, startet die Instanz trotzdem. Das Log nennt jeden Ladefehler als Eintrag `plugin not loaded` mit `plugin`, `reason` und einer ausformulierten Meldung in `detail`; der Eintrag `plugins started` fasst aktive (`active`) und nicht geladene (`notLoaded`) Plugins zusammen. Hat Code des Plugins oder der Core beim Bereitstellen einer Capability einen Fehler geworfen, steht er mit Name, Meldung und Stacktrace in `error`, ebenso im Eintrag `plugin failed to deactivate`. Fehlermeldungen eines Plugins stehen damit im Log und dürfen keine Secrets enthalten.
 
-| `reason`                 | Bedeutung                                                                                                                    |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `invalid_manifest`       | Manifest, Operationen, Events, Event-Abos, Jobs oder Paketversion ungültig, Einstieg nicht ladbar, Name anders als im Paket. |
-| `load_timed_out`         | Der Einstieg des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` geladen.                                         |
-| `unknown_plugin`         | In `PLUGINS` genannt, aber kein Plugin-Paket stellt das Plugin bereit.                                                       |
-| `duplicate_plugin`       | Mehrere Plugin-Pakete deklarieren denselben Plugin-Namen; keines davon wird geladen.                                         |
-| `missing_dependency`     | Kein Plugin-Paket stellt ein vorausgesetztes Plugin bereit, oder es ist nicht in `PLUGINS` aktiviert.                        |
-| `version_mismatch`       | Die Version eines vorausgesetzten Plugins erfüllt die Range nicht.                                                           |
-| `dependency_not_loaded`  | Ein vorausgesetztes Plugin wurde selbst nicht geladen; `detail` nennt dessen Ursache.                                        |
-| `dependency_cycle`       | Plugins setzen einander im Kreis voraus; jedes Plugin des Kreises erhält diesen Grund.                                       |
-| `capability_unavailable` | Der Core konnte eine deklarierte Capability nicht bereitstellen; `activate` wurde nicht aufgerufen.                          |
-| `migration_failed`       | Das Schema des Plugins konnte nicht migriert werden; `detail` nennt die Migration und den Fehler.                            |
-| `activation_failed`      | `activate` des Plugins ist fehlgeschlagen.                                                                                   |
-| `activation_timed_out`   | `activate` des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` fertig.                                            |
+| `reason`                 | Bedeutung                                                                                                                            |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `invalid_manifest`       | Manifest, Rechte, Operationen, Events, Event-Abos, Jobs oder Paketversion ungültig, Einstieg nicht ladbar, Name anders als im Paket. |
+| `load_timed_out`         | Der Einstieg des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` geladen.                                                 |
+| `unknown_plugin`         | In `PLUGINS` genannt, aber kein Plugin-Paket stellt das Plugin bereit.                                                               |
+| `duplicate_plugin`       | Mehrere Plugin-Pakete deklarieren denselben Plugin-Namen; keines davon wird geladen.                                                 |
+| `missing_dependency`     | Kein Plugin-Paket stellt ein vorausgesetztes Plugin bereit, oder es ist nicht in `PLUGINS` aktiviert.                                |
+| `version_mismatch`       | Die Version eines vorausgesetzten Plugins erfüllt die Range nicht.                                                                   |
+| `dependency_not_loaded`  | Ein vorausgesetztes Plugin wurde selbst nicht geladen; `detail` nennt dessen Ursache.                                                |
+| `dependency_cycle`       | Plugins setzen einander im Kreis voraus; jedes Plugin des Kreises erhält diesen Grund.                                               |
+| `capability_unavailable` | Der Core konnte eine deklarierte Capability nicht bereitstellen; `activate` wurde nicht aufgerufen.                                  |
+| `migration_failed`       | Das Schema des Plugins konnte nicht migriert werden; `detail` nennt die Migration und den Fehler.                                    |
+| `activation_failed`      | `activate` des Plugins ist fehlgeschlagen.                                                                                           |
+| `activation_timed_out`   | `activate` des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` fertig.                                                    |
 
 ### Migrationen
 
@@ -161,21 +163,26 @@ Seine SQL-Migrationen liegen in einem Verzeichnis des Plugin-Pakets, das die `pa
 - Jede Datei mit der Endung `.sql` ist eine Migration. Ihr Name besteht aus vier Ziffern, einem Unterstrich und Kleinbuchstaben, Ziffern oder Unterstrichen, z. B. `0001_create_notes.sql`; die Migrationen laufen in der Reihenfolge ihrer Namen. Andere Dateien bleiben unbeachtet.
 - Jede Migration läuft in einer eigenen Transaktion mit dem Schema des Plugins als `search_path`; Tabellen werden daher ohne Schema angelegt.
 - Angewandte Migrationen hält die Tabelle `core.migrations` fest (Schema, Dateiname, Zeitpunkt); ein erneuter Start wendet nur neue Migrationen an. Eine angewandte Migration wird nie geändert, sondern durch eine neue ergänzt.
-- Die Migrationen des Schemas `core` liegen in `packages/core/migrations` und laufen genauso, mit `core` als `search_path`. Sie legen `core.workspaces` an, die Tabelle der Workspaces (ADR-0002), `core.service_accounts` und `core.api_tokens` für die Service-Accounts und ihre API-Tokens (siehe [HTTP-API](#http-api)) `core.audit_entries` für das [Audit](#audit) sowie `core.events` und `core.event_deliveries`, die Outbox der [Events](#events), `core.jobs`, die Job-Queue der [Jobs](#jobs), und `core.idempotency_keys` für die [Idempotency-Keys](#idempotency-keys). Schlägt eine davon fehl, meldet das Log `instance failed to start` mit `reason` `core_schema_not_migrated`, und die Instanz lädt keine Plugins.
+- Die Migrationen des Schemas `core` liegen in `packages/core/migrations` und laufen genauso, mit `core` als `search_path`. Sie legen `core.workspaces` an, die Tabelle der Workspaces (ADR-0002), `core.service_accounts` und `core.api_tokens` für die Service-Accounts und ihre API-Tokens (siehe [HTTP-API](#http-api)), `core.memberships` für die Mitgliedschaften (siehe [Rechte und Mitgliedschaften](#rechte-und-mitgliedschaften)), `core.audit_entries` für das [Audit](#audit) sowie `core.events` und `core.event_deliveries`, die Outbox der [Events](#events), `core.jobs`, die Job-Queue der [Jobs](#jobs), und `core.idempotency_keys` für die [Idempotency-Keys](#idempotency-keys). Schlägt eine davon fehl, meldet das Log `instance failed to start` mit `reason` `core_schema_not_migrated`, und die Instanz lädt keine Plugins.
 - Jeder Migrationslauf (erst `core`, dann die Schemas der Plugins) hält dieselbe Postgres-Advisory-Lock. Starten zwei Prozesse gleichzeitig, wartet der zweite (Log-Eintrag `migration lock held by another run, waiting`) und wendet nichts doppelt an. Ein Signal beendet das Warten; eine laufende Migration läuft zu Ende, weitere beginnen nicht. Jede Anweisung eines Laufs darf höchstens 60 s dauern, das Warten auf Tabellensperren eingeschlossen; dauert sie länger, schlägt die Migration fehl (`migration failed`) und der Lauf gibt die Lock frei (Begründung in ADR-0008). Lässt sich die Lock danach nicht freigeben, etwa weil die Verbindung während einer Migration abbrach, steht der Eintrag `migration lock not released` mit dem Fehler in `error` im Log; Postgres gibt die Lock mit der beendeten Verbindung ohnehin frei.
 - Schlägt eine Migration fehl, wird sie zurückgerollt; die folgenden Migrationen desselben Schemas laufen nicht, die anderer Schemas schon. Das Log nennt Schema, Migration und Fehler (`migration failed`), das Plugin wird nicht geladen (`migration_failed`), und die Instanz meldet nicht „bereit“.
 - Nennt die `package.json` Migrationen, deklariert das Manifest aber nicht `database`, ist das Manifest ungültig.
 
 ### Operationen
 
-Ein Plugin deklariert seine Operationen in `definePlugin({ manifest, operations })`, jede mit `defineOperation()` aus `@workbench/sdk`:
+Ein Plugin deklariert seine Rechte und Operationen in `definePlugin({ manifest, rights, operations })`, jedes Recht mit `defineRight()`, jede Operation mit `defineOperation()` aus `@workbench/sdk`:
 
 ```ts
+const labelEdit = defineRight({
+	name: "board.label.edit",
+	defaultRoles: ["owner", "editor"],
+});
+
 const renameLabel = defineOperation({
 	name: "renameLabel",
 	kind: "mutation",
 	target: "workspace",
-	right: "board.label.edit",
+	right: labelEdit.name,
 	input: z.object({ label: z.string().min(1) }),
 	output: z.object({ label: z.string() }),
 	execute: async (input, ctx) => ({ label: input.label }),
@@ -184,20 +191,21 @@ const renameLabel = defineOperation({
 
 - `name` ist Verb und Objekt in camelCase (`createLabel`). Die Registry vergibt den Namen `<plugin>.<name>`, hier `board.renameLabel`.
 - `kind` ist `query` (nur lesen) oder `mutation`, `target` ist `object` oder `workspace`. Bisher wird `target` nur beim Laden geprüft; die Pipeline ruft jede Operation auf einem Workspace auf. Operationen auf einem einzelnen Objekt (`object`) folgen in einem späteren Ticket.
-- `right` nennt genau ein Recht des eigenen Plugins: `<plugin>.` gefolgt von Abschnitten aus Kleinbuchstaben, Ziffern und Bindestrichen, durch Punkte getrennt (`board.label.edit`). Das Recht wird bisher nur beim Laden geprüft, aber beim Aufruf nicht durchgesetzt: Jeder Akteur darf jede Operation aufrufen. Die Prüfung folgt in einem späteren Ticket mit Identität und Zugriff.
+- `right` nennt genau ein Recht, das das eigene Plugin in `rights` deklariert: `<plugin>.` gefolgt von Abschnitten aus Kleinbuchstaben, Ziffern und Bindestrichen, durch Punkte getrennt (`board.label.edit`).
+- Ein Recht nennt in `defaultRoles` die Startrollen `owner`, `editor` und `viewer`, denen es zusteht, jede höchstens einmal. Ein Recht mit leerer Liste steht niemandem zu (ADR-0021). Eigene Rollen und eine Pflege der Zuordnung durch den Instanz-Admin folgen mit der Verwaltung von Rollen (#16).
 - `input` und `output` sind Schemas nach [Standard Schema](https://standardschema.dev), etwa von zod 4 (ADR-0010).
 
-Eine Operation mit unbekannter Art oder unbekanntem Ziel, ohne Recht oder mit mehreren, mit dem Recht eines anderen Plugins, ohne Schema, ohne `execute` oder mit einem Namen, den das Plugin schon deklariert, macht das Plugin ungültig: Es wird nicht geladen (`invalid_manifest`), und `detail` nennt jede fehlerhafte Operation.
+Eine Operation mit unbekannter Art oder unbekanntem Ziel, ohne Recht oder mit mehreren, mit dem Recht eines anderen Plugins oder einem Recht, das das Plugin nicht deklariert, ohne Schema, ohne `execute` oder mit einem Namen, den das Plugin schon deklariert, macht das Plugin ungültig, ebenso ein Recht mit dem Namen eines anderen Plugins, ohne `defaultRoles`, mit einer Rolle, die keine Startrolle ist oder doppelt vorkommt, oder ein doppelt deklariertes Recht: Es wird nicht geladen (`invalid_manifest`), und `detail` nennt jede fehlerhafte Operation und jedes fehlerhafte Recht.
 
 ### Aufruf einer Operation
 
 Ein Akteur ruft eine Operation mit ihrem Namen, einem Workspace und einer Eingabe auf. Die Pipeline des Cores
 
 1. sucht die Operation unter den Operationen des Cores (`core.<name>`) und der aktiven Plugins,
-2. prüft die Eingabe gegen das Eingabe-Schema,
-3. öffnet eine Transaktion, für eine `query` nur lesend, mit dem Schema des Plugins als `search_path` (für eine Operation des Cores `core`),
-4. prüft, dass der Workspace in `core.workspaces` existiert,
-5. führt `execute(input, ctx)` aus; `ctx` nennt `actor`, `workspace`, `sql` (eine Funktion des Cores, die eine Anweisung als Tagged Template sofort in der Transaktion ausführt; weitere Methoden des Datenbank-Clients hat sie nicht, wie in Event-Handlern und Jobs), `now()`, `newId()`, `random()`, `publish()` (siehe [Events](#events)) und `enqueue()` (siehe [Jobs](#jobs)),
+2. öffnet eine Transaktion, für eine `query` nur lesend, mit dem Schema des Plugins als `search_path` (für eine Operation des Cores `core`),
+3. sucht die Mitgliedschaft des Akteurs im Workspace in `core.memberships` und prüft, dass ihre Rolle das Recht der Operation hat (siehe [Rechte und Mitgliedschaften](#rechte-und-mitgliedschaften)),
+4. prüft die Eingabe gegen das Eingabe-Schema,
+5. führt `execute(input, ctx)` aus; `ctx` nennt `actor`, `workspace`, `auth` (siehe [Rechte und Mitgliedschaften](#rechte-und-mitgliedschaften)), `sql` (eine Funktion des Cores, die eine Anweisung als Tagged Template sofort in der Transaktion ausführt; weitere Methoden des Datenbank-Clients hat sie nicht, wie in Event-Handlern und Jobs), `now()`, `newId()`, `random()`, `publish()` (siehe [Events](#events)) und `enqueue()` (siehe [Jobs](#jobs)),
 6. bildet den Rückgabewert über das Ausgabe-Schema ab,
 7. schreibt für eine `mutation` einen Audit-Eintrag in dieselbe Transaktion (siehe [Audit](#audit)) und schreibt die Transaktion fest.
 
@@ -209,13 +217,16 @@ Wirft `execute`, passt die Ausgabe nicht zum Schema oder lässt sich der Audit-E
 | `invalid_idempotency_key` | `invalid_input` | Der Idempotency-Key hat nicht 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen ohne Komma.                                                        |
 | `idempotency_key_reused`  | `rejected`      | Der Idempotency-Key wurde schon für eine andere Operation, einen anderen Workspace oder eine andere Eingabe verwendet.                              |
 | `unknown_operation`       | `not_found`     | Weder der Core noch ein aktives Plugin hat eine Operation dieses Namens.                                                                            |
-| `workspace_not_found`     | `not_found`     | Der Workspace existiert nicht.                                                                                                                      |
+| `workspace_not_found`     | `not_found`     | Der Workspace existiert nicht, oder der Akteur hat keine Mitgliedschaft in ihm.                                                                     |
+| `missing_right`           | `forbidden`     | Die Rolle der Mitgliedschaft des Akteurs hat das Recht der Operation nicht.                                                                         |
+| `object_not_found`        | `not_found`     | `ctx.auth` fand das Objekt nicht oder in einem anderen Workspace.                                                                                   |
+| `not_object_owner`        | `forbidden`     | `ctx.auth` fand das Objekt im Besitz eines anderen Akteurs.                                                                                         |
 | `internal_error`          | `internal`      | `execute` warf einen anderen Fehler als `OperationError`, die Ausgabe passt nicht zum Schema, oder die Pipeline scheiterte außerhalb von `execute`. |
 | `<plugin>.<code>`         | aus dem Fehler  | `execute` warf einen `OperationError`.                                                                                                              |
 
 Ein `internal_error` steht mit `correlationId`, `operation` und `reason` im Log als Eintrag `operation failed`: `execute_threw`, wenn `execute` warf, mit dem Fehler in `error`; `invalid_output` mit den Befunden des Ausgabe-Schemas in `issues`; oder `pipeline_failed`, wenn die Pipeline außerhalb von `execute` scheiterte (etwa ein Schema, das wirft oder ein Ergebnis liefert, das nicht Standard Schema entspricht, ein unerreichbares Postgres beim Öffnen der Transaktion oder beim Prüfen des Workspace, ein Audit-Eintrag, der sich nicht schreiben lässt, ein gescheitertes Festschreiben), mit dem Fehler in `error`.
 
-Jedes Scheitern lässt sich als Problem Details nach RFC 9457 abbilden (`toProblemDetails` in `packages/core/src/problem-details.ts`), mit `type` `urn:workbench:problem:<code>`, `title` und `status` nach der Art (`invalid_input` 400, `not_found` 404, `conflict` 409, `rejected` 422, `internal` 500), `detail`, `code`, `correlationId` und `issues`:
+Jedes Scheitern lässt sich als Problem Details nach RFC 9457 abbilden (`toProblemDetails` in `packages/core/src/problem-details.ts`), mit `type` `urn:workbench:problem:<code>`, `title` und `status` nach der Art (`invalid_input` 400, `forbidden` 403, `not_found` 404, `conflict` 409, `rejected` 422, `internal` 500), `detail`, `code`, `correlationId` und `issues`:
 
 ```json
 {
@@ -229,7 +240,27 @@ Jedes Scheitern lässt sich als Problem Details nach RFC 9457 abbilden (`toProbl
 }
 ```
 
-Die Pipeline prüft bisher keine Rechte; das folgt mit Identität und Zugriff.
+#### Rechte und Mitgliedschaften
+
+Jede Operation verlangt eine Mitgliedschaft des Akteurs im Workspace des Aufrufs, deny by default (ADR-0021). `core.memberships` hält je Workspace und Akteur (Art und ID) genau eine Rolle, eine der Startrollen `owner`, `editor` oder `viewer`.
+
+- Ohne Mitgliedschaft antwortet die Pipeline mit `workspace_not_found`, genau wie für einen Workspace, den es nicht gibt, und prüft die Eingabe nicht; der Akteur erfährt so nicht, ob der Workspace existiert.
+- Gewährt die Rolle das Recht der Operation nicht, scheitert der Aufruf mit `missing_right` (Art `forbidden`, per HTTP 403). Eine Rolle hat ein Recht genau dann, wenn das Plugin sie in den `defaultRoles` des Rechts nennt.
+- Das Referenz-Plugin gibt `reference.note.read` allen drei Startrollen, `reference.note.create` und `reference.note.edit` nur `owner` und `editor`; ein `viewer` kann also `reference.listNotes` aufrufen, `reference.createNote` nicht. Das Recht `core.audit.read` des Cores hat nur `owner`.
+- Bis Workspaces und Mitgliedschaften über Operationen verwaltet werden (#16), legt der Betreiber eine Mitgliedschaft per SQL an, etwa für einen Service-Account: `INSERT INTO core.memberships (workspace_id, actor_kind, actor_id, role, created_at) VALUES ('<workspace>', 'service_account', '<serviceAccount>', 'owner', now())`.
+
+Für Zugriffe auf einzelne Objekte im Use Case gibt es `ctx.auth.requireAccess(object)`. Das Plugin liest sein Objekt nur über dessen ID, ohne Filter auf den Workspace, und reicht dessen Workspace und Besitzer (`owner`, ein Akteur oder `null`, wenn das Objekt keinen Besitzer hat) weiter; `requireAccess` gibt das Objekt unverändert zurück oder wirft:
+
+```ts
+const [row] =
+	await ctx.sql`SELECT workspace_id, owner_kind, owner_id FROM notes WHERE id = ${noteId} FOR UPDATE`;
+ctx.auth.requireAccess(row === undefined ? undefined : accessedNoteOf(row));
+```
+
+- `undefined` (kein Objekt) und ein Objekt eines anderen Workspace scheitern gleich, mit `object_not_found`, sodass ein Akteur fremde Objekte nicht von fehlenden unterscheiden kann.
+- Ein Objekt mit einem anderen Akteur als Besitzer scheitert mit `not_object_owner`.
+
+Ein verweigerter Zugriff hinterlässt einen Audit-Eintrag mit dem Ergebnis `denied` (siehe [Audit](#audit)): eine fehlende Mitgliedschaft in einem existierenden Workspace, ein fehlendes Recht, und ein Objekt eines anderen Workspace oder Besitzers aus `ctx.auth`. Kein Eintrag entsteht für einen Workspace, den es nicht gibt, und für ein Objekt, das es nicht gibt. Die Pipeline rollt die Transaktion des Aufrufs zurück und schreibt den Eintrag in einer eigenen; lässt er sich nicht schreiben, scheitert der Aufruf mit `internal_error` (`reason` `pipeline_failed`).
 
 #### Idempotency-Keys
 
@@ -245,7 +276,7 @@ Ein Akteur kann einer Mutation einen Idempotency-Key mitgeben, damit eine Wieder
 
 ### Audit
 
-Jede Mutation, die gelingt, hinterlässt genau einen Audit-Eintrag in `core.audit_entries`, ohne Zutun des Plugins (ADR-0014). Die Pipeline schreibt ihn in der Transaktion der Mutation: Wird sie zurückgerollt, gibt es keinen Eintrag, und lässt sich der Eintrag nicht schreiben, gibt es keine Mutation. Eine Query hinterlässt keinen Eintrag, eine gescheiterte Mutation steht nur im Log (`operation failed`).
+Jede Mutation, die gelingt, hinterlässt genau einen Audit-Eintrag in `core.audit_entries`, ohne Zutun des Plugins (ADR-0014). Die Pipeline schreibt ihn in der Transaktion der Mutation: Wird sie zurückgerollt, gibt es keinen Eintrag, und lässt sich der Eintrag nicht schreiben, gibt es keine Mutation. Eine Query hinterlässt keinen Eintrag, eine gescheiterte Mutation steht nur im Log (`operation failed`). Ein verweigerter Zugriff auf eine Query oder Mutation hinterlässt einen Eintrag mit `result` `denied` (siehe [Rechte und Mitgliedschaften](#rechte-und-mitgliedschaften)).
 
 Die Query `core.listAuditEntries` liefert die Einträge des Workspaces im Pfad, die neuesten zuerst, seitenweise. Die Eingabe nennt `limit` (1 bis 100) und `cursor`: `null` für die erste Seite, danach `nextCursor` der Seite davor.
 
@@ -267,9 +298,9 @@ Die Query `core.listAuditEntries` liefert die Einträge des Workspaces im Pfad, 
 ```
 
 - `actor` nennt Art (`user`, `service_account`) und ID des Akteurs, `apiTokenId` die ID des API-Tokens, mit dem der Aufruf kam, oder `null` für einen Aufruf ohne Token (etwa über das Test-Harness). So lässt sich unterscheiden, ob ein Mensch oder ein Agent gehandelt hat. Ein Eintrag enthält nie ein Token, seinen Hash oder die Eingabe der Mutation.
-- `occurredAt` ist der Zeitpunkt in UTC, auf Millisekunden genau, `workspace` das Ziel der Mutation, `result` bisher immer `succeeded`.
+- `occurredAt` ist der Zeitpunkt in UTC, auf Millisekunden genau, `workspace` das Ziel des Aufrufs, `result` `succeeded` für eine gelungene Mutation oder `denied` für einen verweigerten Zugriff.
 - `nextCursor` ist `null`, wenn keine älteren Einträge folgen. Ein Cursor ist undurchsichtig und gilt nur als Ganzes, Zeichen für Zeichen so, wie eine Seite ihn nennt; einen, der keine Position im Audit nennt, lehnt die Operation mit `core.invalid_cursor` ab (Art `rejected`, per HTTP 422). Einträge desselben Zeitpunkts ordnet ihre ID, sodass keine Seite einen Eintrag wiederholt oder auslässt, auch wenn inzwischen neue entstehen.
-- Die Operation verweist auf das Recht `core.audit.read`, das für den Instanz-Admin gedacht ist. Solange Rechte nicht durchgesetzt werden (siehe [Operationen](#operationen)), darf jeder Akteur mit gültigem Token das Audit jedes Workspaces lesen.
+- Die Operation verweist auf das Recht `core.audit.read`, das nur die Startrolle `owner` hat: Nur ein Owner des Workspace liest dessen Audit (ADR-0021); einen Instanz-Admin, der es unabhängig von Mitgliedschaften liest, gibt es noch nicht.
 
 ### Events
 
@@ -488,7 +519,9 @@ import {
 const harness = await startOperationHarness({
 	plugins: [await pluginPackageAt(join(import.meta.dir, ".."))],
 });
-const workspace = await harness.createWorkspace("Alpha");
+const workspace = await harness.createWorkspace("Alpha", [
+	{ actor: { kind: "user", id: "alice" }, role: "editor" },
+]);
 const result = await harness.call({
 	actor: { kind: "user", id: "alice" },
 	workspace,
@@ -498,7 +531,7 @@ const result = await harness.call({
 await harness.stop();
 ```
 
-Ein Aufruf kann einen `idempotencyKey` nennen; ohne ihn gilt er als Aufruf ohne Key (siehe [Idempotency-Keys](#idempotency-keys)).
+`createWorkspace` legt den Workspace mit den genannten Mitgliedschaften an; ein Akteur ohne Mitgliedschaft erhält `workspace_not_found` (siehe [Rechte und Mitgliedschaften](#rechte-und-mitgliedschaften)). Ein Aufruf kann einen `idempotencyKey` nennen; ohne ihn gilt er als Aufruf ohne Key (siehe [Idempotency-Keys](#idempotency-keys)).
 
 `result` ist `{ ok: true, output }` oder `{ ok: false, failure }` mit `code`, `kind`, `detail` und `issues`. Ohne Angabe gibt das Harness eine feste Uhr (`2026-11-26T08:00:00.000Z`), fortlaufende IDs im UUID-Format (`00000000-0000-4000-8000-000000000001`, …), den Audit-Einträgen fortlaufende IDs aus einer eigenen Folge (`00000000-0000-4000-a000-000000000001`, …), sodass eine Mutation die IDs der folgenden Operationen nicht verschiebt, den Events fortlaufende IDs aus einer dritten Folge (`00000000-0000-4000-e000-000000000001`, …), den Jobs aus einer vierten (`00000000-0000-4000-b000-000000000001`, …), `random()` = `0.5` und jedem Aufruf eine fortlaufende Correlation-ID (`harness-call-1`, …), unter der die Pipeline loggt; `now`, `newId`, `newAuditEntryId`, `random` und `newCorrelationId` lassen sich als Optionen übergeben. Lädt ein Plugin nicht, wirft `startOperationHarness` einen `HarnessStartError` mit dem Ladefehler. `harness.logEntries` enthält die Log-Einträge.
 
@@ -506,7 +539,7 @@ Events stellt das Harness nicht von selbst zu: `await harness.deliverEvents()` r
 
 Auch Jobs führt das Harness nicht von selbst aus: `await harness.runJobs()` versucht jeden fälligen Job einmal und kehrt dann zurück. Ein gescheiterter Job wird erst wieder fällig, wenn die Uhr des Harness (`now`) weiter ist als seine Wartezeit; ein Test stellt die Uhr vor, statt zu warten. Für einen Cron-Job reiht der erste Aufruf die nächste Fälligkeit nach der Uhr des Harness ein; ist die Uhr danach bei ihr angekommen, führt der nächste Aufruf ihn aus, auch für die Fälligkeiten, über die der Test die Uhr hinweggestellt hat, höchstens die zehn jüngsten. Stellt ein Test die Uhr um Tage vor, löscht `runJobs()` wie die Instanz erledigte Jobs nach 7 und Jobs im Dead-Letter nach 30 Tagen aus `core.jobs`.
 
-Das Referenz-Plugin bietet so die Mutation `reference.createNote` (Eingabe `title`, 1 bis 200 Zeichen nach Entfernen von Leerraum am Rand) und die Query `reference.listNotes` (Eingabe `limit`, 1 bis 100; die neuesten zuerst), beide auf den Notizen eines Workspaces in `plugin_reference.notes`. `reference.createNote` publiziert das Event `reference.NoteCreated` (Version 1, Payload `noteId`), dessen Definition `noteCreated` im Contract des Plugins liegt (siehe [Events](#events)). Seine Tests in `packages/plugin-reference/src/operations.test.ts` zeigen das Harness im Einsatz.
+Das Referenz-Plugin bietet so die Mutation `reference.createNote` (Eingabe `title`, 1 bis 200 Zeichen nach Entfernen von Leerraum am Rand; der Akteur wird Besitzer der Notiz), die Query `reference.listNotes` (Eingabe `limit`, 1 bis 100; die neuesten zuerst) und die Mutation `reference.renameNote` (Eingabe `noteId` und `title`; nur der Besitzer benennt eine Notiz um, geprüft über `ctx.auth`, eine Notiz ohne Besitzer aus der Zeit vor `0003_add_owner_to_notes.sql` jeder mit dem Recht), alle auf den Notizen eines Workspaces in `plugin_reference.notes`. `reference.createNote` publiziert das Event `reference.NoteCreated` (Version 1, Payload `noteId`), dessen Definition `noteCreated` im Contract des Plugins liegt (siehe [Events](#events)). Seine Tests in `packages/plugin-reference/src/operations.test.ts` zeigen das Harness im Einsatz.
 
 ### HTTP-API
 
@@ -533,7 +566,10 @@ curl -X POST "http://127.0.0.1:3000/api/workspaces/$WORKSPACE/operations/referen
 | `method_not_allowed`      | 405    | Der Pfad einer Operation oder der MCP-Endpunkt mit anderer Methode als `POST`, die Liste der Operationen mit anderer als `GET`. |
 | `malformed_path`          | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                                                                              |
 | `invalid_workspace_id`    | 400    | Der Workspace im Pfad oder im Argument `workspace` eines MCP-Tools ist keine UUID.                                              |
-| `workspace_not_found`     | 404    | Kein Workspace hat diese UUID.                                                                                                  |
+| `workspace_not_found`     | 404    | Kein Workspace hat diese UUID, oder der Service-Account des Tokens hat keine Mitgliedschaft in ihm.                             |
+| `missing_right`           | 403    | Die Rolle der Mitgliedschaft hat das Recht der Operation nicht.                                                                 |
+| `object_not_found`        | 404    | Die Operation fand das Objekt nicht oder in einem anderen Workspace.                                                            |
+| `not_object_owner`        | 403    | Das Objekt gehört einem anderen Akteur.                                                                                         |
 | `unknown_operation`       | 404    | Weder der Core noch ein aktives Plugin hat eine Operation dieses Namens.                                                        |
 | `body_too_large`          | 413    | Der Body ist größer als 1 MiB.                                                                                                  |
 | `invalid_idempotency_key` | 400    | Der Header `Idempotency-Key` hat nicht 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen ohne Komma, oder er kam mehrfach.     |
@@ -563,7 +599,7 @@ Das Kommando liest dieselben Umgebungsvariablen wie die Instanz (mindestens `DAT
 - Der Klartext des Tokens erscheint nur in dieser Ausgabe. Die Instanz speichert nur seinen SHA-256-Hash (ADR-0012); ein verlorenes Token lässt sich nicht wieder anzeigen, sondern nur neu anlegen.
 - Fehlt eine Option, ist ein Wert ungültig oder ist eine Option unbekannt, endet das Kommando mit Exit-Code 1 und der Zeile `usage: create-service-account …` auf der Standardfehlerausgabe. Scheitert die Datenbank, endet es mit Exit-Code 1 und dem Log-Eintrag `service account not created` mit `reason` (`core_schema_not_migrated` oder `database_failed`) auf der Standardfehlerausgabe.
 
-Scope (Operationen, Workspaces), Widerruf und Rechte folgen mit Identität und Zugriff; bisher darf jedes gültige Token jede Operation in jedem Workspace aufrufen.
+Der Service-Account hat zunächst keine Mitgliedschaft und damit Zugriff auf keinen Workspace; der Betreiber gibt ihm eine per SQL (siehe [Rechte und Mitgliedschaften](#rechte-und-mitgliedschaften)). Scope (Operationen, Workspaces) und Widerruf folgen mit Identität und Zugriff.
 
 #### API-Vertrag
 

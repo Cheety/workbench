@@ -4,6 +4,7 @@ import {
 	DATABASE_CAPABILITY,
 	defineOperation,
 	definePlugin,
+	defineRight,
 	type OperationContext,
 	OperationError,
 } from "@workbench/sdk";
@@ -20,13 +21,36 @@ const ALICE: Actor = { kind: "user", id: "alice" };
 
 const AUDITOR: Actor = { kind: "user", id: "auditor" };
 
+const AGENT: Actor = { kind: "service_account", id: "agent" };
+
+const VIEWER: Actor = { kind: "user", id: "viewer" };
+
+const STRANGER: Actor = { kind: "user", id: "stranger" };
+
+const MEMBERS = [
+	{ actor: ALICE, role: "editor" },
+	{ actor: AUDITOR, role: "owner" },
+	{ actor: AGENT, role: "editor" },
+	{ actor: VIEWER, role: "viewer" },
+] as const;
+
+const entryAdd = defineRight({
+	name: "ledger.entry.add",
+	defaultRoles: ["owner", "editor"],
+});
+
+const entryRead = defineRight({
+	name: "ledger.entry.read",
+	defaultRoles: ["owner", "editor", "viewer"],
+});
+
 const entry = z.object({ id: z.string(), amount: z.number().int() });
 
 const addEntry = defineOperation({
 	name: "addEntry",
 	kind: "mutation",
 	target: "workspace",
-	right: "ledger.entry.add",
+	right: entryAdd.name,
 	input: z.object({ amount: z.number().int() }),
 	output: entry,
 	execute: async ({ amount }, ctx) => {
@@ -57,7 +81,7 @@ const listEntries = defineOperation({
 	name: "listEntries",
 	kind: "query",
 	target: "workspace",
-	right: "ledger.entry.read",
+	right: entryRead.name,
 	input: z.object({}),
 	output: z.object({ entries: z.array(entry) }),
 	execute: async (_input, ctx) => {
@@ -75,6 +99,7 @@ const ledger: PluginPackage = {
 		...definePlugin({
 			manifest: { name: "ledger", capabilities: [DATABASE_CAPABILITY] },
 		}),
+		rights: [entryAdd, entryRead],
 		operations: [addEntry, addMalformedEntry, listEntries],
 	}),
 	loadMigrations: async () => [
@@ -100,7 +125,11 @@ const bell: PluginPackage = {
 	pluginName: "bell",
 	version: "1.0.0",
 	loadDefinition: async () =>
-		definePlugin({ manifest: { name: "bell" }, operations: [ringBell] }),
+		definePlugin({
+			manifest: { name: "bell" },
+			rights: [{ name: "bell.bell.ring", defaultRoles: ["owner", "editor"] }],
+			operations: [ringBell],
+		}),
 };
 
 const harnesses: OperationHarness[] = [];
@@ -231,7 +260,7 @@ describe("the audit of a workspace", () => {
 		const harness = await startLedger({
 			now: () => new Date("2026-11-27T09:30:00.000+01:00"),
 		});
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 		await harness.call({
 			actor: ALICE,
 			workspace,
@@ -266,7 +295,7 @@ describe("the audit of a workspace", () => {
 			now: clock.now,
 			newAuditEntryId: issuing(HIGHEST_ID, LOWEST_ID),
 		});
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 		clock.set("2026-11-27T08:01:00.000Z");
 		await harness.call({
 			actor: ALICE,
@@ -276,7 +305,7 @@ describe("the audit of a workspace", () => {
 		});
 		clock.set("2026-11-27T08:02:00.000Z");
 		await harness.call({
-			actor: { kind: "service_account", id: "agent" },
+			actor: AGENT,
 			workspace,
 			operation: "bell.ringBell",
 			input: {},
@@ -306,7 +335,7 @@ describe("the audit of a workspace", () => {
 
 	test("holds no entry for a query", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 		await harness.call({
 			actor: ALICE,
 			workspace,
@@ -334,7 +363,7 @@ describe("the audit of a workspace", () => {
 		["whose input was invalid", "ledger.addEntry", { amount: "a lot" }],
 	])("holds no entry for a mutation %s", async (_case, operation, input) => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 		const called = await harness.call({
 			actor: ALICE,
 			workspace,
@@ -351,10 +380,66 @@ describe("the audit of a workspace", () => {
 		});
 	});
 
+	test.each([
+		[
+			"a mutation the role of the actor does not grant",
+			VIEWER,
+			"ledger.addEntry",
+			{ amount: 42 },
+		],
+		[
+			"a query of an actor without membership",
+			STRANGER,
+			"ledger.listEntries",
+			{},
+		],
+	])("names %s as denied", async (_case, actor, operation, input) => {
+		const harness = await startLedger();
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
+		await harness.call({ actor, workspace, operation, input });
+
+		const listed = await listAuditEntries(harness, workspace, FIRST_TEN);
+
+		expect(listed).toEqual({
+			ok: true,
+			output: {
+				entries: [
+					{
+						id: expect.any(String),
+						occurredAt: "2026-11-26T08:00:00.000Z",
+						actor,
+						apiTokenId: null,
+						operation,
+						workspace,
+						result: "denied",
+					},
+				],
+				nextCursor: null,
+			},
+		});
+	});
+
+	test("is closed to a member whose role is not owner", async () => {
+		const harness = await startLedger();
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
+
+		const listed = await harness.call({
+			actor: ALICE,
+			workspace,
+			operation: "core.listAuditEntries",
+			input: FIRST_TEN,
+		});
+
+		expect(listed).toEqual({
+			ok: false,
+			failure: expect.objectContaining({ code: "missing_right" }),
+		});
+	});
+
 	test("holds only the entries of the workspace it is asked for", async () => {
 		const harness = await startLedger();
-		const accounts = await harness.createWorkspace("Accounts");
-		const archive = await harness.createWorkspace("Archive");
+		const accounts = await harness.createWorkspace("Accounts", MEMBERS);
+		const archive = await harness.createWorkspace("Archive", MEMBERS);
 		await harness.call({
 			actor: ALICE,
 			workspace: accounts,
@@ -378,7 +463,7 @@ describe("a page of the audit", () => {
 			now: clock.now,
 			newAuditEntryId: issuing(HIGHEST_ID, LOWEST_ID, MIDDLE_ID),
 		});
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 		clock.set("2026-11-27T08:01:00.000Z");
 		await addEntries(harness, workspace, 1);
 		clock.set("2026-11-27T08:02:00.000Z");
@@ -415,7 +500,7 @@ describe("a page of the audit", () => {
 			now: clock.now,
 			newAuditEntryId: issuing(MIDDLE_ID, HIGHEST_ID, LOWEST_ID),
 		});
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 		clock.set("2026-11-27T08:01:00.000Z");
 		await addEntries(harness, workspace, 1);
 		clock.set("2026-11-27T08:02:00.000Z");
@@ -446,7 +531,7 @@ describe("a page of the audit", () => {
 
 	test("names no next cursor when it holds the last entries exactly up to the limit", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 		await addEntries(harness, workspace, 2);
 
 		const page = pageOf(
@@ -461,7 +546,7 @@ describe("a page of the audit", () => {
 		const harness = await startLedger({
 			newAuditEntryId: issuing(MIDDLE_ID, HIGHEST_ID, LOWEST_ID),
 		});
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 		await addEntries(harness, workspace, 3);
 
 		const first = pageOf(
@@ -505,7 +590,7 @@ describe("a page of the audit", () => {
 		["that carries more than its position", (cursor) => `${cursor}~~`],
 	])("is refused for a cursor %s", async (_case, tamper) => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 		const cursor = tamper(await nextCursorOf(harness, workspace));
 
 		const listed = await listAuditEntries(harness, workspace, {
@@ -530,7 +615,7 @@ describe("a page of the audit", () => {
 		["no cursor at all", { limit: 10 }],
 	])("is refused as invalid input for %s", async (_case, input) => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 
 		const listed = await harness.call({
 			actor: AUDITOR,
@@ -569,7 +654,7 @@ describe("a mutation whose audit entry cannot be written", () => {
 			plugins: [ledger, auditRefusal],
 		});
 		harnesses.push(harness);
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 
 		const added = await harness.call({
 			actor: ALICE,
@@ -591,6 +676,36 @@ describe("a mutation whose audit entry cannot be written", () => {
 		});
 		expect(listed).toEqual({ ok: true, output: { entries: [] } });
 		expect(pageOf(audited)).toEqual({ entries: [], nextCursor: null });
+		expect(harness.logEntries).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				message: "operation failed",
+				operation: "ledger.addEntry",
+				reason: "pipeline_failed",
+			}),
+		);
+	});
+});
+
+describe("a denied call whose audit entry cannot be written", () => {
+	test("fails as an internal error instead of going unrecorded", async () => {
+		const harness = await startOperationHarness({
+			plugins: [ledger, auditRefusal],
+		});
+		harnesses.push(harness);
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
+
+		const added = await harness.call({
+			actor: VIEWER,
+			workspace,
+			operation: "ledger.addEntry",
+			input: { amount: 42 },
+		});
+
+		expect(added).toEqual({
+			ok: false,
+			failure: expect.objectContaining({ code: "internal_error" }),
+		});
 		expect(harness.logEntries).toContainEqual(
 			expect.objectContaining({
 				level: "error",

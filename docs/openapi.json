@@ -181,7 +181,10 @@
 													"apiTokenId": { "type": ["string", "null"] },
 													"operation": { "type": "string" },
 													"workspace": { "type": "string" },
-													"result": { "type": "string", "enum": ["succeeded"] }
+													"result": {
+														"type": "string",
+														"enum": ["succeeded", "denied"]
+													}
 												},
 												"required": [
 													"id",
@@ -373,6 +376,99 @@
 										}
 									},
 									"required": ["notes"],
+									"additionalProperties": false
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "the request carries no valid API token",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": { "$ref": "#/components/schemas/ProblemDetails" }
+							}
+						}
+					},
+					"default": {
+						"description": "the operation failed",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": { "$ref": "#/components/schemas/ProblemDetails" }
+							}
+						}
+					}
+				}
+			}
+		},
+		"/api/workspaces/{workspace}/operations/reference.renameNote": {
+			"post": {
+				"operationId": "reference.renameNote",
+				"parameters": [
+					{
+						"name": "workspace",
+						"in": "path",
+						"required": true,
+						"schema": { "type": "string", "format": "uuid" }
+					},
+					{
+						"name": "Idempotency-Key",
+						"in": "header",
+						"required": false,
+						"description": "a key of the caller under which a repeated call receives the answer of the first instead of running the mutation again",
+						"schema": { "type": "string", "pattern": "^[ -+\\--~]{1,255}$" }
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"properties": {
+									"noteId": {
+										"type": "string",
+										"format": "uuid",
+										"pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+									},
+									"title": {
+										"type": "string",
+										"minLength": 1,
+										"maxLength": 200
+									}
+								},
+								"required": ["noteId", "title"]
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "the output of the operation",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"properties": {
+										"id": { "type": "string" },
+										"title": { "type": "string" },
+										"createdAt": { "type": "string" }
+									},
+									"required": ["id", "title", "createdAt"],
 									"additionalProperties": false
 								}
 							}

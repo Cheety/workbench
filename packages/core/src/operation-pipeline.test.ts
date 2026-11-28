@@ -88,6 +88,16 @@ const auditEntries = defineOperation({
 	},
 });
 
+const purgeEntries = defineOperation({
+	...addEntry,
+	name: "purgeEntries",
+	right: "ledger.entry.purge",
+	execute: async () => ({
+		id: "00000000-0000-4000-8000-00000000ffff",
+		amount: 0,
+	}),
+});
+
 const CLIENT_METHODS = [
 	"unsafe",
 	"begin",
@@ -130,6 +140,11 @@ const ledger: PluginPackage = {
 		...definePlugin({
 			manifest: { name: "ledger", capabilities: [DATABASE_CAPABILITY] },
 		}),
+		rights: [
+			{ name: "ledger.entry.add", defaultRoles: ["owner"] },
+			{ name: "ledger.entry.read", defaultRoles: ["owner"] },
+			{ name: "ledger.entry.purge", defaultRoles: [] },
+		],
 		operations: [
 			addEntry,
 			addMalformedEntry,
@@ -137,6 +152,7 @@ const ledger: PluginPackage = {
 			addEntryWhileReading,
 			auditEntries,
 			probeClient,
+			purgeEntries,
 		],
 	}),
 	loadMigrations: async () => [
@@ -172,7 +188,9 @@ function outputOf(result: OperationResult): z.infer<typeof entry> {
 describe("an actor calling an operation", () => {
 	test("reads with a query what a mutation wrote", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const added = await harness.call({
 			actor: ALICE,
@@ -197,7 +215,9 @@ describe("an actor calling an operation", () => {
 
 	test("receives only what the output schema maps", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const added = await harness.call({
 			actor: ALICE,
@@ -214,7 +234,9 @@ describe("an actor calling an operation", () => {
 
 	test("is told invalid_input with the issues when the input does not match the schema", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const added = await harness.call({
 			actor: ALICE,
@@ -236,7 +258,9 @@ describe("an actor calling an operation", () => {
 
 	test("finds nothing written by a mutation whose execute rejected the call", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const added = await harness.call({
 			actor: ALICE,
@@ -265,7 +289,9 @@ describe("an actor calling an operation", () => {
 
 	test("is told internal_error without internals when execute throws unexpectedly, and the log has the details", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const added = await harness.call({
 			actor: ALICE,
@@ -307,7 +333,9 @@ describe("an actor calling an operation", () => {
 
 	test("is told internal_error when the pipeline fails outside execute, and the log tells it apart from a throwing execute", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const audited = await harness.call({
 			actor: ALICE,
@@ -335,7 +363,9 @@ describe("an actor calling an operation", () => {
 
 	test("is told internal_error and finds nothing written when execute returns an output the schema rejects", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const added = await harness.call({
 			actor: ALICE,
@@ -366,7 +396,9 @@ describe("an actor calling an operation", () => {
 
 	test("cannot write from a query", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const sneaked = await harness.call({
 			actor: ALICE,
@@ -397,7 +429,9 @@ describe("an actor calling an operation", () => {
 
 	test("hands execute no method of the database client beyond a statement as tagged template", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const probed = await harness.call({
 			actor: ALICE,
@@ -414,7 +448,9 @@ describe("an actor calling an operation", () => {
 
 	test("is told unknown_operation for a name no active plugin registered", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const called = await harness.call({
 			actor: ALICE,
@@ -455,6 +491,53 @@ describe("an actor calling an operation", () => {
 				detail: "the workspace does not exist",
 				issues: [],
 			},
+		});
+	});
+});
+
+describe("the right of an operation", () => {
+	test.each(["owner", "editor", "viewer"] as const)(
+		"is granted to no %s when the plugin maps it to no role",
+		async (role) => {
+			const harness = await startLedger();
+			const workspace = await harness.createWorkspace("Accounts", [
+				{ actor: ALICE, role },
+			]);
+
+			const purged = await harness.call({
+				actor: ALICE,
+				workspace,
+				operation: "ledger.purgeEntries",
+				input: { amount: 1 },
+			});
+
+			expect(purged).toEqual({
+				ok: false,
+				failure: {
+					code: "missing_right",
+					kind: "forbidden",
+					detail:
+						"the role of the actor in the workspace does not grant the right of the operation",
+					issues: [],
+				},
+			});
+		},
+	);
+
+	test("is checked before the input, so a non-member learns nothing from an invalid input", async () => {
+		const harness = await startLedger();
+		const workspace = await harness.createWorkspace("Accounts", []);
+
+		const added = await harness.call({
+			actor: ALICE,
+			workspace,
+			operation: "ledger.addEntry",
+			input: { amount: "a lot" },
+		});
+
+		expect(added).toEqual({
+			ok: false,
+			failure: expect.objectContaining({ code: "workspace_not_found" }),
 		});
 	});
 });

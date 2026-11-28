@@ -78,16 +78,20 @@ curl -si http://127.0.0.1:3123/health/live -H 'X-Correlation-ID: verify-1'
 docker compose -f compose.dev.yaml exec -T postgres psql -U workbench -d workbench_verify -c 'TABLE core.migrations' -c '\dt plugin_reference.*'
 ```
 
-`core.migrations` hat die Spalten `schema_name`, `migration` und `applied_at`; dort stehen `core | 0001_create_workspaces.sql` und für das Referenz-Plugin `plugin_reference | 0001_create_notes.sql` und `plugin_reference | 0002_add_workspace_to_notes.sql`, und `\dt` zeigt dessen Tabelle `notes`.
+`core.migrations` hat die Spalten `schema_name`, `migration` und `applied_at`; dort stehen `core | 0001_create_workspaces.sql` und für das Referenz-Plugin `plugin_reference | 0001_create_notes.sql` bis `plugin_reference | 0003_add_owner_to_notes.sql`, und `\dt` zeigt dessen Tabelle `notes`.
 
 ## Ein Event in der Outbox ansehen
 
-Den Server wie oben mit `PLUGINS=reference` starten. Dann einen Workspace und ein API-Token anlegen, das Token liegt danach in `/tmp/workbench-verify.token`:
+Den Server wie oben mit `PLUGINS=reference` starten. Dann einen Workspace und ein API-Token anlegen und dem Service-Account des Tokens die Rolle `owner` im Workspace geben, das Token liegt danach in `/tmp/workbench-verify.token`:
 
 ```sh
 docker compose -f compose.dev.yaml exec -T postgres psql -U workbench -d workbench_verify -c "INSERT INTO core.workspaces (id, name, created_at) VALUES ('00000000-0000-4000-8000-00000000aaaa', 'Verify', now())"
-DATABASE_URL=postgres://workbench:workbench@127.0.0.1:54329/workbench_verify bun packages/core/src/create-service-account.ts --name verify --valid-days 1 | sed -E 's/.*"token":"([^"]+)".*/\1/' > /tmp/workbench-verify.token
+DATABASE_URL=postgres://workbench:workbench@127.0.0.1:54329/workbench_verify bun packages/core/src/create-service-account.ts --name verify --valid-days 1 > /tmp/workbench-verify.json
+sed -E 's/.*"token":"([^"]+)".*/\1/' /tmp/workbench-verify.json > /tmp/workbench-verify.token
+docker compose -f compose.dev.yaml exec -T postgres psql -U workbench -d workbench_verify -c "INSERT INTO core.memberships (workspace_id, actor_kind, actor_id, role, created_at) VALUES ('00000000-0000-4000-8000-00000000aaaa', 'service_account', '$(sed -E 's/.*"serviceAccount":"([^"]+)".*/\1/' /tmp/workbench-verify.json)', 'owner', now())"
 ```
+
+Dass die Pipeline Rechte über die Mitgliedschaft prüft, zeigt dieselbe Mitgliedschaft mit der Rolle `viewer`: `UPDATE core.memberships SET role = 'viewer'`, danach beantwortet `reference.createNote` (siehe unten) den Aufruf mit 403 und `code` `missing_right`, `reference.listNotes` weiterhin mit 200, und `core.listAuditEntries` mit 403, weil nur `owner` das Audit liest. `SELECT operation, result FROM core.audit_entries` nennt den verweigerten Aufruf mit `denied`. Ohne Zeile in `core.memberships` antwortet jede Operation auf dem Workspace mit 404 und `workspace_not_found`, wie für einen Workspace, den es nicht gibt. Zurück mit `UPDATE core.memberships SET role = 'owner'`.
 
 Eine Mutation aufrufen, die ein Event publiziert, und die Outbox ansehen:
 
@@ -144,7 +148,7 @@ for body in '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' '{"jsonrpc":"2.0","
 curl -si http://127.0.0.1:3123/api/mcp -H 'Accept: application/json, text/event-stream' -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":4,"method":"tools/list"}' | head -1
 ```
 
-`tools/list` nennt `core_listAuditEntries`, `reference_createNote` und `reference_listNotes`, jedes mit `workspace` und `input` im `inputSchema`. Der erste Aufruf antwortet mit einem Textblock, der die Notiz als JSON enthält, wie der Body von `POST …/operations/reference.createNote`; der zweite mit `isError: true` und Problem Details mit `code` `invalid_input`. Ohne Token antwortet der Endpunkt mit `401 Unauthorized`.
+`tools/list` nennt `core_listAuditEntries`, `reference_createNote`, `reference_listNotes` und `reference_renameNote`, jedes mit `workspace` und `input` im `inputSchema`. Der erste Aufruf antwortet mit einem Textblock, der die Notiz als JSON enthält, wie der Body von `POST …/operations/reference.createNote`; der zweite mit `isError: true` und Problem Details mit `code` `invalid_input`. Ohne Token antwortet der Endpunkt mit `401 Unauthorized`.
 
 ## Eine Operation per CLI aufrufen
 
@@ -159,7 +163,7 @@ bun run --silent workbench reference create-note --workspace 00000000-0000-4000-
 curl -s http://127.0.0.1:3123/api/operations -H "Authorization: Bearer $WORKBENCH_TOKEN"
 ```
 
-Die Liste nennt `core list-audit-entries`, `reference create-note` und `reference list-notes`, je mit dem Namen der Operation und ihrer Art, wie `GET /api/operations`; `exit 0`. Der erste Aufruf gibt die Notiz als JSON aus, wie der Body von `POST …/operations/reference.createNote`, mit `exit 0`; der zweite `invalid_input: …`, darunter `title: Too small: …` und die Korrelations-ID, mit `exit 1`; der dritte `--input is not JSON` und die Zeile `usage: workbench …`, mit `exit 2`, und das Log des Servers hat dafür keinen Eintrag `request completed`. Ohne `WORKBENCH_TOKEN` und ohne `~/.config/workbench/cli.json` endet jeder Aufruf mit `invalid configuration:` und `exit 2`; `grep -c "$WORKBENCH_TOKEN" /tmp/workbench-verify.log` zählt `0`.
+Die Liste nennt `core list-audit-entries`, `reference create-note`, `reference list-notes` und `reference rename-note`, je mit dem Namen der Operation und ihrer Art, wie `GET /api/operations`; `exit 0`. Der erste Aufruf gibt die Notiz als JSON aus, wie der Body von `POST …/operations/reference.createNote`, mit `exit 0`; der zweite `invalid_input: …`, darunter `title: Too small: …` und die Korrelations-ID, mit `exit 1`; der dritte `--input is not JSON` und die Zeile `usage: workbench …`, mit `exit 2`, und das Log des Servers hat dafür keinen Eintrag `request completed`. Ohne `WORKBENCH_TOKEN` und ohne `~/.config/workbench/cli.json` endet jeder Aufruf mit `invalid configuration:` und `exit 2`; `grep -c "$WORKBENCH_TOKEN" /tmp/workbench-verify.log` zählt `0`.
 
 ## Image und Compose prüfen
 

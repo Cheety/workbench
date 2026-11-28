@@ -1,12 +1,17 @@
 import {
 	type Actor,
+	type OperationAuth,
 	type OperationContext,
 	OperationError,
 	type OperationErrorKind,
 	type OperationKind,
 } from "@workbench/sdk";
 import type { SQL } from "bun";
-import { type NewAuditEntry, recordAuditEntry } from "./audit.ts";
+import {
+	type AuditResult,
+	type NewAuditEntry,
+	recordAuditEntry,
+} from "./audit.ts";
 import { recordEvent } from "./event-outbox.ts";
 import type { EventRegistry } from "./event-registry.ts";
 import { describeThrown } from "./failure-reason.ts";
@@ -21,6 +26,7 @@ import {
 import { enqueueJob } from "./job-queue.ts";
 import type { JobRegistry } from "./job-registry.ts";
 import type { Logger } from "./logger.ts";
+import { lookUpMembership } from "./memberships.ts";
 import type {
 	OperationRegistry,
 	RegisteredOperation,
@@ -29,7 +35,6 @@ import { type Owner, ownerName, schemaOf } from "./owner.ts";
 import { quote } from "./quote.ts";
 import type { ValidationIssue } from "./schema-validation.ts";
 import { statementsIn } from "./transaction-statements.ts";
-import { workspaceExists } from "./workspaces.ts";
 
 export type OperationCall = {
 	readonly operation: string;
@@ -41,7 +46,11 @@ export type OperationCall = {
 	readonly correlationId: string;
 };
 
-export type FailureKind = OperationErrorKind | "invalid_input" | "internal";
+export type FailureKind =
+	| OperationErrorKind
+	| "invalid_input"
+	| "forbidden"
+	| "internal";
 
 export type OperationFailure = {
 	readonly code: string;
@@ -103,6 +112,55 @@ const WORKSPACE_NOT_FOUND: OperationFailure = {
 	issues: [],
 };
 
+const MISSING_RIGHT: OperationFailure = {
+	code: "missing_right",
+	kind: "forbidden",
+	detail:
+		"the role of the actor in the workspace does not grant the right of the operation",
+	issues: [],
+};
+
+const OBJECT_NOT_FOUND: OperationFailure = {
+	code: "object_not_found",
+	kind: "not_found",
+	detail: "the object does not exist",
+	issues: [],
+};
+
+const NOT_OBJECT_OWNER: OperationFailure = {
+	code: "not_object_owner",
+	kind: "forbidden",
+	detail: "the object belongs to another actor",
+	issues: [],
+};
+
+class AccessDeniedError extends Error {
+	readonly failure: OperationFailure;
+
+	constructor(failure: OperationFailure) {
+		super(failure.detail);
+		this.name = "AccessDeniedError";
+		this.failure = failure;
+	}
+}
+
+class ObjectNotFoundError extends Error {
+	constructor() {
+		super(OBJECT_NOT_FOUND.detail);
+		this.name = "ObjectNotFoundError";
+	}
+}
+
+class InvalidInputError extends Error {
+	readonly issues: readonly ValidationIssue[];
+
+	constructor(issues: readonly ValidationIssue[]) {
+		super("the input does not match the input schema of the operation");
+		this.name = "InvalidInputError";
+		this.issues = issues;
+	}
+}
+
 class WorkspaceNotFoundError extends Error {
 	constructor() {
 		super(WORKSPACE_NOT_FOUND.detail);
@@ -163,28 +221,19 @@ async function invoke(
 			detail: `no operation is named ${quote(call.operation)}`,
 			issues: [],
 		});
-	const logger = options.logger.with({
-		correlationId: call.correlationId,
-		operation: operation.name,
-	});
+	const logger = loggerOf(call, operation, options.logger);
 	const key = idempotencyKeyOf(call, operation.kind);
 	if (!key.valid) return failed(INVALID_IDEMPOTENCY_KEY);
 	try {
-		const input = await operation.validateInput(call.input);
-		if (!input.valid)
-			return failed({
-				code: "invalid_input",
-				kind: "invalid_input",
-				detail: "the input does not match the input schema of the operation",
-				issues: input.issues,
-			});
 		const publisher = publisherOf(call, operation, options);
 		const enqueuer = enqueuerOf(call, operation, options);
 		const output = await inTransaction(
 			operation,
 			options.sql,
 			async (transaction) => {
-				await requireWorkspace(transaction, call.workspace);
+				await authorize(transaction, call, operation);
+				const input = await operation.validateInput(call.input);
+				if (!input.valid) throw new InvalidInputError(input.issues);
 				const run = async (): Promise<unknown> => {
 					const executed = await execute(
 						operation,
@@ -197,7 +246,7 @@ async function invoke(
 					if (IS_AUDITED[operation.kind])
 						await recordAuditEntry(
 							transaction,
-							newAuditEntryOf(call, operation, options),
+							newAuditEntryOf(call, operation, options, "succeeded"),
 						);
 					return executed;
 				};
@@ -220,8 +269,46 @@ async function invoke(
 		if (enqueuer.hasEnqueued()) options.jobsCommitted();
 		return { ok: true, output };
 	} catch (error) {
+		if (error instanceof AccessDeniedError)
+			return deny(call, operation, options, error.failure);
 		return failed(logAndMapFailure(error, logger, operation.owner));
 	}
+}
+
+async function deny(
+	call: OperationCall,
+	operation: RegisteredOperation,
+	options: OperationPipelineOptions,
+	failure: OperationFailure,
+): Promise<OperationResult> {
+	try {
+		await options.sql.begin((transaction) =>
+			recordAuditEntry(
+				transaction,
+				newAuditEntryOf(call, operation, options, "denied"),
+			),
+		);
+	} catch (error) {
+		return failed(
+			logAndMapFailure(
+				error,
+				loggerOf(call, operation, options.logger),
+				operation.owner,
+			),
+		);
+	}
+	return failed(failure);
+}
+
+function loggerOf(
+	call: OperationCall,
+	operation: RegisteredOperation,
+	logger: Logger,
+): Logger {
+	return logger.with({
+		correlationId: call.correlationId,
+		operation: operation.name,
+	});
 }
 
 type IdempotencyKeyOfCall =
@@ -273,12 +360,42 @@ function inTransaction(
 	return BEGIN_TRANSACTION[operation.kind](sql, body);
 }
 
-async function requireWorkspace(
+async function authorize(
 	transaction: SQL,
-	workspace: string,
+	call: OperationCall,
+	operation: RegisteredOperation,
 ): Promise<void> {
-	if (!(await workspaceExists(transaction, workspace)))
-		throw new WorkspaceNotFoundError();
+	const membership = await lookUpMembership(
+		transaction,
+		call.workspace,
+		call.actor,
+	);
+	switch (membership.kind) {
+		case "no_workspace":
+			throw new WorkspaceNotFoundError();
+		case "not_member":
+			throw new AccessDeniedError(WORKSPACE_NOT_FOUND);
+		case "member":
+			if (!operation.grantedTo.has(membership.role))
+				throw new AccessDeniedError(MISSING_RIGHT);
+	}
+}
+
+function authOf(call: OperationCall): OperationAuth {
+	return {
+		requireAccess: (object) => {
+			if (object === undefined) throw new ObjectNotFoundError();
+			if (object.workspace !== call.workspace)
+				throw new AccessDeniedError(OBJECT_NOT_FOUND);
+			if (object.owner !== null && !isSameActor(object.owner, call.actor))
+				throw new AccessDeniedError(NOT_OBJECT_OWNER);
+			return object;
+		},
+	};
+}
+
+function isSameActor(left: Actor, right: Actor): boolean {
+	return left.kind === right.kind && left.id === right.id;
 }
 
 function contextOf(
@@ -290,6 +407,7 @@ function contextOf(
 	return {
 		actor: call.actor,
 		workspace: call.workspace,
+		auth: authOf(call),
 		sql: statementsIn(transaction),
 		now: sources.now,
 		newId: sources.newId,
@@ -361,6 +479,7 @@ function newAuditEntryOf(
 	call: OperationCall,
 	operation: RegisteredOperation,
 	sources: Pick<OperationPipelineOptions, "now" | "newAuditEntryId">,
+	result: AuditResult,
 ): NewAuditEntry {
 	return {
 		id: sources.newAuditEntryId(),
@@ -369,6 +488,7 @@ function newAuditEntryOf(
 		apiTokenId: call.apiTokenId,
 		operation: operation.name,
 		workspace: call.workspace,
+		result,
 	};
 }
 
@@ -392,7 +512,12 @@ async function runExecute(
 	try {
 		return await operation.execute(input, ctx);
 	} catch (error) {
-		if (error instanceof OperationError) throw error;
+		if (
+			error instanceof OperationError ||
+			error instanceof AccessDeniedError ||
+			error instanceof ObjectNotFoundError
+		)
+			throw error;
 		throw new ExecuteThrewError(error);
 	}
 }
@@ -403,6 +528,14 @@ function logAndMapFailure(
 	owner: Owner,
 ): OperationFailure {
 	if (error instanceof WorkspaceNotFoundError) return WORKSPACE_NOT_FOUND;
+	if (error instanceof ObjectNotFoundError) return OBJECT_NOT_FOUND;
+	if (error instanceof InvalidInputError)
+		return {
+			code: "invalid_input",
+			kind: "invalid_input",
+			detail: error.message,
+			issues: error.issues,
+		};
 	if (error instanceof IdempotencyKeyReusedError) return IDEMPOTENCY_KEY_REUSED;
 	if (error instanceof OperationError)
 		return {

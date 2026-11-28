@@ -2,10 +2,15 @@ import {
 	type Actor,
 	type ActorKind,
 	defineOperation,
+	defineRight,
 	OperationError,
 } from "@workbench/sdk";
 import type { SQL } from "bun";
 import { z } from "zod";
+
+export const AUDIT_RESULTS = ["succeeded", "denied"] as const;
+
+export type AuditResult = (typeof AUDIT_RESULTS)[number];
 
 export type NewAuditEntry = {
 	readonly id: string;
@@ -14,18 +19,13 @@ export type NewAuditEntry = {
 	readonly apiTokenId: string | null;
 	readonly operation: string;
 	readonly workspace: string;
+	readonly result: AuditResult;
 };
 
 const ACTOR_KINDS = [
 	"user",
 	"service_account",
 ] as const satisfies readonly ActorKind[];
-
-const AUDIT_RESULTS = ["succeeded"] as const;
-
-type AuditResult = (typeof AUDIT_RESULTS)[number];
-
-const SUCCEEDED: AuditResult = "succeeded";
 
 const MAX_LISTED_AUDIT_ENTRIES = 100;
 
@@ -72,7 +72,7 @@ export async function recordAuditEntry(
 ): Promise<void> {
 	await transaction`
 		INSERT INTO core.audit_entries (id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result)
-		VALUES (${entry.id}, ${entry.occurredAt}, ${entry.actor.kind}, ${entry.actor.id}, ${entry.apiTokenId}, ${entry.operation}, ${entry.workspace}, ${SUCCEEDED})`;
+		VALUES (${entry.id}, ${entry.occurredAt}, ${entry.actor.kind}, ${entry.actor.id}, ${entry.apiTokenId}, ${entry.operation}, ${entry.workspace}, ${entry.result})`;
 }
 
 type AuditPosition = {
@@ -119,11 +119,16 @@ function decodedJson(cursor: string): unknown {
 	}
 }
 
+export const auditRead = defineRight({
+	name: "core.audit.read",
+	defaultRoles: ["owner"],
+});
+
 export const listAuditEntries = defineOperation({
 	name: "listAuditEntries",
 	kind: "query",
 	target: "workspace",
-	right: "core.audit.read",
+	right: auditRead.name,
 	input: z.object({
 		limit: z.number().int().min(1).max(MAX_LISTED_AUDIT_ENTRIES),
 		cursor: z.string().max(MAX_CURSOR_LENGTH).nullable(),

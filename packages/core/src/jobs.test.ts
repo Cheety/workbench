@@ -15,6 +15,7 @@ import { z } from "zod";
 import { Secret } from "./config.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import { startPlugins } from "./kernel.ts";
+import { grantMembership } from "./memberships.ts";
 import {
 	createOperationPipeline,
 	type OperationResult,
@@ -156,6 +157,10 @@ function billing(deliverInvoice: DeliverInvoice): PluginPackage {
 		loadDefinition: async () =>
 			definePlugin({
 				manifest: { name: "billing", capabilities: [DATABASE_CAPABILITY] },
+				rights: [
+					{ name: "billing.invoice.read", defaultRoles: ["owner"] },
+					{ name: "billing.invoice.send", defaultRoles: ["owner"] },
+				],
 				operations: [
 					sendInvoice,
 					draftInvoice,
@@ -316,6 +321,12 @@ async function startBillingPipeline(jobsCommitted: () => void) {
 		name: "Alpha",
 		createdAt: now,
 	});
+	await grantMembership(database.sql, {
+		workspace: WORKSPACE,
+		actor: ALICE,
+		role: "owner",
+		createdAt: new Date("2026-11-27T09:00:00.000Z"),
+	});
 	return createOperationPipeline({
 		sql: database.sql,
 		registry: plugins.operations,
@@ -337,7 +348,9 @@ describe("a job a mutation enqueues", () => {
 	test("runs once the mutation is committed, with id, attempt, time, workspace and payload", async () => {
 		const deliveries = recordingDeliveries();
 		const harness = await start([deliveries.plugin]);
-		const workspace = await harness.createWorkspace("Alpha");
+		const workspace = await harness.createWorkspace("Alpha", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const sent = await harness.call(sendingInvoice(workspace, 5));
 		const runBeforeTheQueueRan = [...deliveries.run];
@@ -367,7 +380,9 @@ describe("a job a mutation enqueues", () => {
 	test("never runs when the mutation is rolled back", async () => {
 		const deliveries = recordingDeliveries();
 		const harness = await start([deliveries.plugin]);
-		const workspace = await harness.createWorkspace("Alpha");
+		const workspace = await harness.createWorkspace("Alpha", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const sent = await harness.call(sendingInvoice(workspace, -5));
 		await harness.runJobs();
@@ -387,7 +402,9 @@ describe("a job a mutation enqueues", () => {
 				}),
 			),
 		]);
-		const workspace = await harness.createWorkspace("Alpha");
+		const workspace = await harness.createWorkspace("Alpha", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const sent = await harness.call(sendingInvoice(workspace, 5));
 		await harness.runJobs();
@@ -403,7 +420,9 @@ describe("a job a mutation enqueues", () => {
 	test("runs once, however often the due jobs are run", async () => {
 		const deliveries = recordingDeliveries();
 		const harness = await start([deliveries.plugin]);
-		const workspace = await harness.createWorkspace("Alpha");
+		const workspace = await harness.createWorkspace("Alpha", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		await harness.call(sendingInvoice(workspace, 5));
 		await harness.call(sendingInvoice(workspace, 6));
@@ -432,7 +451,9 @@ describe("a job that fails", () => {
 			],
 			{ now: clock.now },
 		);
-		const workspace = await harness.createWorkspace("Alpha");
+		const workspace = await harness.createWorkspace("Alpha", [
+			{ actor: ALICE, role: "owner" },
+		]);
 		await harness.call(sendingInvoice(workspace, 5));
 
 		await harness.runJobs();
@@ -485,7 +506,9 @@ describe("a job that fails", () => {
 			],
 			{ now: clock.now },
 		);
-		const workspace = await harness.createWorkspace("Alpha");
+		const workspace = await harness.createWorkspace("Alpha", [
+			{ actor: ALICE, role: "owner" },
+		]);
 		await harness.call(sendingInvoice(workspace, 5));
 
 		await harness.runJobs();
@@ -530,7 +553,9 @@ describe("a job that fails", () => {
 			],
 			{ now: clock.now },
 		);
-		const workspace = await harness.createWorkspace("Alpha");
+		const workspace = await harness.createWorkspace("Alpha", [
+			{ actor: ALICE, role: "owner" },
+		]);
 		failingOnce = invoiceIdOf(await harness.call(sendingInvoice(workspace, 5)));
 		const delivered = invoiceIdOf(
 			await harness.call(sendingInvoice(workspace, 6)),
@@ -669,7 +694,9 @@ describe("a mutation that enqueues what it may not", () => {
 		async (_case, operation, name, job) => {
 			const deliveries = recordingDeliveries();
 			const harness = await start([deliveries.plugin]);
-			const workspace = await harness.createWorkspace("Alpha");
+			const workspace = await harness.createWorkspace("Alpha", [
+				{ actor: ALICE, role: "owner" },
+			]);
 
 			const sent = await harness.call(
 				calling(workspace, operation, { amount: 5 }),
@@ -702,7 +729,9 @@ describe("a query", () => {
 	test("fails when it enqueues a job, and runs nothing", async () => {
 		const deliveries = recordingDeliveries();
 		const harness = await start([deliveries.plugin]);
-		const workspace = await harness.createWorkspace("Alpha");
+		const workspace = await harness.createWorkspace("Alpha", [
+			{ actor: ALICE, role: "owner" },
+		]);
 
 		const counted = await harness.call(
 			calling(workspace, "billing.countInvoicesAndRemind", {}),

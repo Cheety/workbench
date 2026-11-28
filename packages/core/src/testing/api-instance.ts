@@ -1,9 +1,11 @@
+import type { StartRole } from "@workbench/sdk";
 import { SQL } from "bun";
 import { authenticateToken } from "../api-tokens.ts";
 import { Secret } from "../config.ts";
 import { setSystemTimer } from "../hook-timeout.ts";
 import type { HttpApi } from "../http-api.ts";
 import { type PluginPackage, startPlugins } from "../kernel.ts";
+import { grantMembership } from "../memberships.ts";
 import { createOperationPipeline } from "../operation-pipeline.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
@@ -32,7 +34,7 @@ export type ApiInstance = {
 	readonly database: FreshDatabase;
 	readonly logEntries: readonly LogEntry[];
 	refuseAuthenticationDatabase(): void;
-	issueToken(): Promise<string>;
+	issueToken(role: StartRole): Promise<string>;
 	setClock(now: Date): void;
 	post(
 		path: string,
@@ -146,7 +148,7 @@ async function startedApiInstance(
 		database,
 		logEntries: entries,
 		refuseAuthenticationDatabase: () => authenticationGate.refuse(),
-		issueToken: async () => {
+		issueToken: async (role) => {
 			issuedTokens += 1;
 			const issued = await createServiceAccount(
 				database.sql,
@@ -157,6 +159,12 @@ async function startedApiInstance(
 					newToken: () => new Secret(`wbt_test-token-${issuedTokens}`),
 				},
 			);
+			await grantMembership(database.sql, {
+				workspace: API_INSTANCE_WORKSPACE,
+				actor: { kind: "service_account", id: issued.serviceAccountId },
+				role,
+				createdAt: clock,
+			});
 			return issued.token.reveal();
 		},
 		setClock: (now) => {

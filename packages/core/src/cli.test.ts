@@ -101,6 +101,12 @@ const ledger: PluginPackage = {
 		...definePlugin({
 			manifest: { name: "ledger", capabilities: [DATABASE_CAPABILITY] },
 		}),
+		rights: [
+			{ name: "ledger.book.close", defaultRoles: ["owner"] },
+			{ name: "ledger.book.stamp", defaultRoles: ["owner"] },
+			{ name: "ledger.book.annotate", defaultRoles: ["owner"] },
+			{ name: "ledger.book.read", defaultRoles: ["owner"] },
+		],
 		operations: [closeBook, stampBook, annotateBook, readBook],
 	}),
 	loadMigrations: async () => [],
@@ -206,7 +212,10 @@ type Access = {
 };
 
 async function accessTo(api: ApiInstance): Promise<Access> {
-	return { WORKBENCH_URL: api.url, WORKBENCH_TOKEN: await api.issueToken() };
+	return {
+		WORKBENCH_URL: api.url,
+		WORKBENCH_TOKEN: await api.issueToken("owner"),
+	};
 }
 
 function callArgs(
@@ -279,6 +288,7 @@ describe("the command line listing the operations", () => {
 				"core list-audit-entries\tcore.listAuditEntries\tquery",
 				"reference create-note\treference.createNote\tmutation",
 				"reference list-notes\treference.listNotes\tquery",
+				"reference rename-note\treference.renameNote\tmutation",
 				"",
 			].join("\n"),
 			stderr: "",
@@ -294,7 +304,7 @@ describe("an operation of the reference plugin on the command line and over HTTP
 
 		const answeredOverHttp = await overHttp(
 			overHttpApi,
-			await overHttpApi.issueToken(),
+			await overHttpApi.issueToken("owner"),
 			{
 				operation: "reference.createNote",
 				workspace: API_INSTANCE_WORKSPACE,
@@ -364,8 +374,8 @@ describe("an operation of the reference plugin on the command line and over HTTP
 			case: "an operation the plugin does not have",
 			input: { title: "Plan" },
 			code: "unknown_operation",
-			command: ["reference", "rename-note"] as const,
-			operation: "reference.renameNote",
+			command: ["reference", "archive-note"] as const,
+			operation: "reference.archiveNote",
 			workspace: API_INSTANCE_WORKSPACE,
 		},
 	])(
@@ -671,7 +681,7 @@ describe("the API token of the command line", () => {
 		const api = await startReferenceInstance();
 		const home = await homeWithConfigFile({
 			url: api.url,
-			token: await api.issueToken(),
+			token: await api.issueToken("owner"),
 		});
 
 		const run = await runCliIn(home, ["operations"], {});
@@ -684,7 +694,10 @@ describe("the API token of the command line", () => {
 		const api = await startReferenceInstance();
 		const elsewhere = await emptyHome();
 		const file = join(elsewhere, "workbench.json");
-		await writeFile(file, JSON.stringify({ token: await api.issueToken() }));
+		await writeFile(
+			file,
+			JSON.stringify({ token: await api.issueToken("owner") }),
+		);
 
 		const run = await runCli(["operations"], {
 			WORKBENCH_URL: api.url,
@@ -702,7 +715,7 @@ describe("the API token of the command line", () => {
 		});
 
 		const run = await runCliIn(home, ["operations"], {
-			WORKBENCH_TOKEN: await api.issueToken(),
+			WORKBENCH_TOKEN: await api.issueToken("owner"),
 		});
 
 		expect(run.exitCode).toBe(0);
@@ -745,7 +758,7 @@ describe("the API token of the command line", () => {
 		async ({ args }) => {
 			const api = await startReferenceInstance();
 			const access = await accessTo(api);
-			const token = await api.issueToken();
+			const token = await api.issueToken("owner");
 
 			const run = await runCli(args(token), access);
 

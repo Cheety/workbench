@@ -282,6 +282,7 @@ const renameLabel: RegisteredOperation = {
 	kind: "mutation",
 	target: "workspace",
 	right: "board.label.edit",
+	grantedTo: new Set(["owner"]),
 	validateInput: async (value) => ({ valid: true, value }),
 	validateOutput: async (value) => ({ valid: true, value }),
 	describeInput: () => ({}),

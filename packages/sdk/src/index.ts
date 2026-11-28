@@ -1,6 +1,6 @@
 import type { EventDefinition, EventSubscription } from "./event.ts";
 import type { CronJobDefinition, JobDefinition } from "./job.ts";
-import type { OperationDefinition } from "./operation.ts";
+import type { OperationDefinition, RightDefinition } from "./operation.ts";
 
 export * from "./event.ts";
 export * from "./job.ts";
@@ -24,6 +24,7 @@ export type PluginContext = {
 
 export type PluginDefinition = {
 	readonly manifest: PluginManifest;
+	readonly rights?: readonly RightDefinition[];
 	readonly operations?: readonly OperationDefinition<unknown, unknown>[];
 	readonly events?: readonly EventDefinition<unknown>[];
 	readonly subscriptions?: readonly EventSubscription<unknown>[];

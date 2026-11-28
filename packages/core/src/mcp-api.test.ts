@@ -62,6 +62,10 @@ const ledger: PluginPackage = {
 		...definePlugin({
 			manifest: { name: "ledger", capabilities: [DATABASE_CAPABILITY] },
 		}),
+		rights: [
+			{ name: "ledger.entry.add", defaultRoles: ["owner"] },
+			{ name: "ledger.entry.read", defaultRoles: ["owner"] },
+		],
 		operations: [addEntry, listEntries],
 	}),
 	loadMigrations: async () => [
@@ -121,7 +125,10 @@ describe("the MCP server of the instance", () => {
 			.object({ info: z.object({ version: z.string() }) })
 			.parse(await Bun.file(OPENAPI_DOCUMENT_PATH).json());
 
-		const client = await mcp.connectedClient(api.url, await api.issueToken());
+		const client = await mcp.connectedClient(
+			api.url,
+			await api.issueToken("owner"),
+		);
 
 		expect(client.getServerVersion()).toEqual({
 			name: "workbench",
@@ -133,7 +140,10 @@ describe("the MCP server of the instance", () => {
 describe("the operations listed as MCP tools", () => {
 	test("name each operation of the core and the active plugins with its input schema inside a workspace", async () => {
 		const api = await startLedgerInstance();
-		const client = await mcp.connectedClient(api.url, await api.issueToken());
+		const client = await mcp.connectedClient(
+			api.url,
+			await api.issueToken("owner"),
+		);
 
 		const { tools } = await client.listTools();
 
@@ -170,7 +180,10 @@ describe("the operations listed as MCP tools", () => {
 
 	test("mark a query as read-only", async () => {
 		const api = await startLedgerInstance();
-		const client = await mcp.connectedClient(api.url, await api.issueToken());
+		const client = await mcp.connectedClient(
+			api.url,
+			await api.issueToken("owner"),
+		);
 
 		const { tools } = await client.listTools();
 
@@ -183,7 +196,10 @@ describe("the operations listed as MCP tools", () => {
 describe("the idempotency key of an MCP tool", () => {
 	test("is offered by a mutation and not by a query", async () => {
 		const api = await startLedgerInstance();
-		const client = await mcp.connectedClient(api.url, await api.issueToken());
+		const client = await mcp.connectedClient(
+			api.url,
+			await api.issueToken("owner"),
+		);
 
 		const { tools } = await client.listTools();
 
@@ -202,7 +218,10 @@ describe("the idempotency key of an MCP tool", () => {
 
 	test("answers a repeated mutation with the output of the first call without running it again", async () => {
 		const api = await startLedgerInstance();
-		const client = await mcp.connectedClient(api.url, await api.issueToken());
+		const client = await mcp.connectedClient(
+			api.url,
+			await api.issueToken("owner"),
+		);
 		const call = {
 			name: "ledger_addEntry",
 			arguments: {
@@ -225,7 +244,10 @@ describe("the idempotency key of an MCP tool", () => {
 
 	test("rejects the same key with another input with idempotency_key_reused", async () => {
 		const api = await startLedgerInstance();
-		const client = await mcp.connectedClient(api.url, await api.issueToken());
+		const client = await mcp.connectedClient(
+			api.url,
+			await api.issueToken("owner"),
+		);
 		await client.callTool({
 			name: "ledger_addEntry",
 			arguments: {
@@ -257,7 +279,10 @@ describe("the idempotency key of an MCP tool", () => {
 		"rejects a key that %s with invalid_idempotency_key",
 		async (_case, key) => {
 			const api = await startLedgerInstance();
-			const client = await mcp.connectedClient(api.url, await api.issueToken());
+			const client = await mcp.connectedClient(
+				api.url,
+				await api.issueToken("owner"),
+			);
 
 			const result = await client.callTool({
 				name: "ledger_addEntry",
@@ -282,7 +307,10 @@ describe("the idempotency key of an MCP tool calling a query", () => {
 		["not a string", 42],
 	])("is ignored when it is %s", async (_case, key) => {
 		const api = await startLedgerInstance();
-		const client = await mcp.connectedClient(api.url, await api.issueToken());
+		const client = await mcp.connectedClient(
+			api.url,
+			await api.issueToken("owner"),
+		);
 
 		const result = await client.callTool({
 			name: "ledger_listEntries",
@@ -296,7 +324,10 @@ describe("the idempotency key of an MCP tool calling a query", () => {
 describe("an operation called as an MCP tool", () => {
 	test("answers a mutation with its output as JSON text", async () => {
 		const api = await startLedgerInstance();
-		const client = await mcp.connectedClient(api.url, await api.issueToken());
+		const client = await mcp.connectedClient(
+			api.url,
+			await api.issueToken("owner"),
+		);
 
 		const result = await client.callTool({
 			name: "ledger_addEntry",
@@ -311,7 +342,10 @@ describe("an operation called as an MCP tool", () => {
 
 	test("answers a query with what a mutation wrote before", async () => {
 		const api = await startLedgerInstance();
-		const client = await mcp.connectedClient(api.url, await api.issueToken());
+		const client = await mcp.connectedClient(
+			api.url,
+			await api.issueToken("owner"),
+		);
 		const added = await client.callTool({
 			name: "ledger_addEntry",
 			arguments: { workspace: WORKSPACE, input: { amount: 42 } },
@@ -328,7 +362,10 @@ describe("an operation called as an MCP tool", () => {
 
 	test("writes an audit entry naming the service account and the API token of the call", async () => {
 		const api = await startLedgerInstance();
-		const client = await mcp.connectedClient(api.url, await api.issueToken());
+		const client = await mcp.connectedClient(
+			api.url,
+			await api.issueToken("owner"),
+		);
 		await client.callTool({
 			name: "ledger_addEntry",
 			arguments: { workspace: WORKSPACE, input: { amount: 42 } },
@@ -344,7 +381,10 @@ describe("an operation called as an MCP tool", () => {
 describe("a failing MCP tool call", () => {
 	test("answers a domain error as a tool error with the problem details and stable code of the operation", async () => {
 		const api = await startLedgerInstance();
-		const client = await mcp.connectedClient(api.url, await api.issueToken());
+		const client = await mcp.connectedClient(
+			api.url,
+			await api.issueToken("owner"),
+		);
 
 		const result = await client.callTool({
 			name: "ledger_addEntry",
@@ -367,7 +407,10 @@ describe("a failing MCP tool call", () => {
 
 	test("answers an input that does not match the schema as a tool error with its issues", async () => {
 		const api = await startLedgerInstance();
-		const client = await mcp.connectedClient(api.url, await api.issueToken());
+		const client = await mcp.connectedClient(
+			api.url,
+			await api.issueToken("owner"),
+		);
 
 		const result = await client.callTool({
 			name: "ledger_addEntry",
@@ -387,7 +430,10 @@ describe("a failing MCP tool call", () => {
 		"answers invalid_workspace_id when the workspace $case",
 		async ({ args }) => {
 			const api = await startLedgerInstance();
-			const client = await mcp.connectedClient(api.url, await api.issueToken());
+			const client = await mcp.connectedClient(
+				api.url,
+				await api.issueToken("owner"),
+			);
 
 			const result = await client.callTool({
 				name: "ledger_listEntries",
@@ -409,7 +455,10 @@ describe("a failing MCP tool call", () => {
 		},
 	])("answers unknown_operation for $case", async ({ name }) => {
 		const api = await startLedgerInstance();
-		const client = await mcp.connectedClient(api.url, await api.issueToken());
+		const client = await mcp.connectedClient(
+			api.url,
+			await api.issueToken("owner"),
+		);
 
 		const result = await client.callTool({
 			name,
@@ -426,7 +475,7 @@ describe("a failing MCP tool call", () => {
 describe("an MCP request with a body over 1 MiB", () => {
 	test("is answered with 413 and calls no tool", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken();
+		const token = await api.issueToken("owner");
 
 		const response = await api.post(
 			MCP_PATH,
@@ -455,7 +504,7 @@ const WITHOUT_VALID_TOKEN = [
 		case: "an expired token",
 		reason: "expired_token",
 		headers: async (api: ApiInstance) => {
-			const token = await api.issueToken();
+			const token = await api.issueToken("owner");
 			api.setClock(IN_A_MONTH);
 			return { Authorization: `Bearer ${token}` };
 		},

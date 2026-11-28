@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Glob, type Subprocess, type TCPSocketListener } from "bun";
 import { z } from "zod";
+import { grantMembership } from "./memberships.ts";
 import { CORE_MIGRATIONS_DIRECTORY } from "./schema-migrations.ts";
 import { mcpTestbed } from "./testing/mcp-testbed.ts";
 import {
@@ -111,7 +112,7 @@ const WORKSPACE = {
 	createdAt: new Date("2026-11-26T08:00:00.000Z"),
 };
 
-async function operatorToken(database: FreshDatabase): Promise<string> {
+async function operatorTokenOfOwner(database: FreshDatabase): Promise<string> {
 	const command = Bun.spawn(
 		[
 			process.execPath,
@@ -127,9 +128,16 @@ async function operatorToken(database: FreshDatabase): Promise<string> {
 			stderr: "pipe",
 		},
 	);
-	const { token } = z
-		.object({ token: z.string() })
+	const { serviceAccount, token } = z
+		.object({ serviceAccount: z.string(), token: z.string() })
 		.parse(JSON.parse(await new Response(command.stdout).text()));
+	await createWorkspace(database.sql, WORKSPACE);
+	await grantMembership(database.sql, {
+		workspace: WORKSPACE.id,
+		actor: { kind: "service_account", id: serviceAccount },
+		role: "owner",
+		createdAt: WORKSPACE.createdAt,
+	});
 	return token;
 }
 
@@ -468,8 +476,7 @@ describe("migrations at start", () => {
 describe("HTTP API of an instance", () => {
 	test("runs the mutation and the query of the reference plugin for a token the operator created", async () => {
 		const database = await freshDatabase();
-		const token = await operatorToken(database);
-		await createWorkspace(database.sql, WORKSPACE);
+		const token = await operatorTokenOfOwner(database);
 		const instance = spawnInstance({
 			DATABASE_URL: database.url,
 			PORT: "0",
@@ -501,8 +508,7 @@ describe("HTTP API of an instance", () => {
 describe("MCP endpoint of an instance", () => {
 	test("lists the tools of the reference plugin and runs one for a token the operator created", async () => {
 		const database = await freshDatabase();
-		const token = await operatorToken(database);
-		await createWorkspace(database.sql, WORKSPACE);
+		const token = await operatorTokenOfOwner(database);
 		const instance = spawnInstance({
 			DATABASE_URL: database.url,
 			PORT: "0",

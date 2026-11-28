@@ -128,6 +128,7 @@ const STATUS_OF: Record<
 > = {
 	invalid_input: { status: 400, title: "Bad Request" },
 	unauthenticated: { status: 401, title: "Unauthorized" },
+	forbidden: { status: 403, title: "Forbidden" },
 	not_found: { status: 404, title: "Not Found" },
 	method_not_allowed: { status: 405, title: "Method Not Allowed" },
 	conflict: { status: 409, title: "Conflict" },

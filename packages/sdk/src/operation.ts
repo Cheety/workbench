@@ -35,6 +35,29 @@ export type Actor = {
 	readonly id: string;
 };
 
+export const START_ROLES = ["owner", "editor", "viewer"] as const;
+export type StartRole = (typeof START_ROLES)[number];
+
+export type RightDefinition = {
+	readonly name: string;
+	readonly defaultRoles: readonly StartRole[];
+};
+
+export function defineRight(definition: RightDefinition): RightDefinition {
+	return definition;
+}
+
+export type AccessedObject = {
+	readonly workspace: string;
+	readonly owner: Actor | null;
+};
+
+export type OperationAuth = {
+	requireAccess<Accessed extends AccessedObject>(
+		object: Accessed | undefined,
+	): Accessed;
+};
+
 export type Sql = (
 	strings: TemplateStringsArray,
 	...values: readonly unknown[]
@@ -43,6 +66,7 @@ export type Sql = (
 export type OperationContext = {
 	readonly actor: Actor;
 	readonly workspace: string;
+	readonly auth: OperationAuth;
 	readonly sql: Sql;
 	now(): Date;
 	newId(): string;

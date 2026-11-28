@@ -14,6 +14,7 @@ import { setSystemTimer } from "./hook-timeout.ts";
 import { createJobQueue, type JobQueue } from "./job-queue.ts";
 import { registerJobs } from "./job-registry.ts";
 import { type PluginPackage, startPlugins } from "./kernel.ts";
+import { grantMembership } from "./memberships.ts";
 import {
 	createOperationPipeline,
 	type OperationPipeline,
@@ -42,6 +43,12 @@ const ALICE_AS_SERVICE_ACCOUNT: Actor = {
 	kind: "service_account",
 	id: "alice",
 };
+
+const MEMBERS = [
+	{ actor: ALICE, role: "owner" },
+	{ actor: BOB, role: "owner" },
+	{ actor: ALICE_AS_SERVICE_ACCOUNT, role: "owner" },
+] as const;
 
 const entry = z.object({ id: z.string(), amount: z.number().int() });
 
@@ -97,6 +104,10 @@ const ledger: PluginPackage = {
 	loadDefinition: async () =>
 		definePlugin({
 			manifest: { name: "ledger", capabilities: [DATABASE_CAPABILITY] },
+			rights: [
+				{ name: "ledger.entry.add", defaultRoles: ["owner"] },
+				{ name: "ledger.entry.read", defaultRoles: ["owner"] },
+			],
 			operations: [addEntry, addEntryBehindALock, listEntries],
 		}),
 	loadMigrations: async () => [
@@ -151,7 +162,7 @@ function listingEntries(workspace: string): HarnessCall {
 describe("a mutation called again with the same idempotency key", () => {
 	test("runs once and answers the second call as it answered the first", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 
 		const first = await harness.call(addingEntry(workspace, 42, "retry-1"));
 		const second = await harness.call(addingEntry(workspace, 42, "retry-1"));
@@ -194,8 +205,8 @@ describe("a mutation called with an idempotency key already used", () => {
 		"is rejected with idempotency_key_reused for $variant and runs not",
 		async ({ operation, amount, workspaceOf }) => {
 			const harness = await startLedger();
-			const accounts = await harness.createWorkspace("Accounts");
-			const payroll = await harness.createWorkspace("Payroll");
+			const accounts = await harness.createWorkspace("Accounts", MEMBERS);
+			const payroll = await harness.createWorkspace("Payroll", MEMBERS);
 			await harness.call(addingEntry(accounts, 42, "retry-1"));
 
 			const again = await harness.call({
@@ -236,7 +247,7 @@ describe("idempotency keys of different actors", () => {
 		"are kept apart, so $variant runs with the same key",
 		async ({ other }) => {
 			const harness = await startLedger();
-			const workspace = await harness.createWorkspace("Accounts");
+			const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 			await harness.call(addingEntry(workspace, 42, "retry-1", ALICE));
 
 			const others = await harness.call(
@@ -263,7 +274,7 @@ describe("idempotency keys of different actors", () => {
 describe("a mutation that failed with an idempotency key", () => {
 	test("leaves the key free, so a retry with it runs", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 		await harness.call(addingEntry(workspace, 0, "retry-1"));
 
 		const retried = await harness.call(addingEntry(workspace, 5, "retry-1"));
@@ -290,7 +301,7 @@ describe("a malformed idempotency key", () => {
 		"is rejected with invalid_idempotency_key when $variant, and nothing runs",
 		async ({ key }) => {
 			const harness = await startLedger();
-			const workspace = await harness.createWorkspace("Accounts");
+			const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 
 			const added = await harness.call(addingEntry(workspace, 42, key));
 
@@ -313,7 +324,7 @@ describe("a malformed idempotency key", () => {
 
 	test("of 255 visible ASCII characters and spaces other than a comma is accepted", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 
 		const added = await harness.call(addingEntry(workspace, 42, LONGEST_KEY));
 
@@ -327,7 +338,7 @@ describe("a malformed idempotency key", () => {
 describe("a query called with an idempotency key", () => {
 	test("runs each time, since it changes nothing a retry could double", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 		await harness.call({
 			...listingEntries(workspace),
 			idempotencyKey: "read-1",
@@ -347,7 +358,7 @@ describe("a query called with an idempotency key", () => {
 
 	test("runs with a key a mutation would reject as malformed, since a query takes no key", async () => {
 		const harness = await startLedger();
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 
 		const listed = await harness.call({
 			...listingEntries(workspace),
@@ -376,7 +387,7 @@ describe("an idempotency key", () => {
 	test("holds for 24 hours, however often the due jobs run", async () => {
 		const clock = adjustableClock("2026-11-27T09:00:30.000Z");
 		const harness = await startLedger({ now: clock.now });
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 		await harness.call(addingEntry(workspace, 42, "retry-1"));
 		await harness.runJobs();
 		clock.advanceBy(ONE_DAY_MS - ONE_MINUTE_MS);
@@ -394,7 +405,7 @@ describe("an idempotency key", () => {
 	test("is removed by a cron job of the core once 24 hours have passed, so a call with it runs again", async () => {
 		const clock = adjustableClock("2026-11-27T09:00:30.000Z");
 		const harness = await startLedger({ now: clock.now });
-		const workspace = await harness.createWorkspace("Accounts");
+		const workspace = await harness.createWorkspace("Accounts", MEMBERS);
 		await harness.call(addingEntry(workspace, 42, "retry-1"));
 		await harness.runJobs();
 		clock.advanceBy(ONE_DAY_MS + 10 * ONE_MINUTE_MS);
@@ -450,6 +461,24 @@ async function startLedgerPipeline(
 		id: WORKSPACE,
 		name: "Accounts",
 		createdAt: now(),
+	});
+	await grantMembership(database.sql, {
+		workspace: WORKSPACE,
+		actor: ALICE,
+		role: "owner",
+		createdAt: new Date("2026-11-27T09:00:00.000Z"),
+	});
+	await grantMembership(database.sql, {
+		workspace: WORKSPACE,
+		actor: BOB,
+		role: "owner",
+		createdAt: new Date("2026-11-27T09:00:00.000Z"),
+	});
+	await grantMembership(database.sql, {
+		workspace: WORKSPACE,
+		actor: ALICE_AS_SERVICE_ACCOUNT,
+		role: "owner",
+		createdAt: new Date("2026-11-27T09:00:00.000Z"),
 	});
 	const pool = new SQL(database.url, { max: CONCURRENT_CALLS });
 	cleanups.push(() => pool.close());
