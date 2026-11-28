@@ -30,6 +30,8 @@ const KEBAB_CASE_OPERATION = /^[a-z]+(?:-[a-z][a-z0-9]*)+$/;
 
 const REQUEST_TIMEOUT_MS = 120_000;
 
+const PARSE_ARGS_ERROR_CODE_PREFIX = "ERR_PARSE_ARGS_";
+
 const EXIT_CODES = { succeeded: 0, failed: 1, misused: 2 } as const;
 
 type ExitCode = (typeof EXIT_CODES)[keyof typeof EXIT_CODES];
@@ -44,14 +46,18 @@ type Invocation =
 			readonly idempotencyKey: string | undefined;
 	  };
 
-type InvocationRead =
-	| { readonly valid: true; readonly invocation: Invocation }
-	| { readonly valid: false; readonly problem: string };
+type ParsedInvocation =
+	| { readonly ok: true; readonly invocation: Invocation }
+	| { readonly ok: false; readonly problem: string };
+
+type Sent =
+	| { readonly reached: true; readonly response: Response }
+	| { readonly reached: false };
 
 type Exchange = {
 	readonly path: string;
 	readonly init: RequestInit;
-	answerOf(body: unknown): string | undefined;
+	findAnswer(body: unknown): string | undefined;
 };
 
 const operationList = z.object({
@@ -83,21 +89,21 @@ const problemDetails = z.object({
 	),
 });
 
-function readInvocation(args: readonly string[]): InvocationRead {
+function readInvocation(args: readonly string[]): ParsedInvocation {
 	let parsed: ReturnType<typeof parseOptions>;
 	try {
 		parsed = parseOptions(args);
 	} catch (error) {
-		if (error instanceof TypeError)
-			return { valid: false, problem: "the options are not valid" };
+		if (isParseArgsError(error))
+			return { ok: false, problem: "the options are not valid" };
 		throw error;
 	}
 	const { values, positionals } = parsed;
 	const [plugin, operation, ...rest] = positionals;
 	if (plugin === LISTING_CLI_COMMAND && operation === undefined) {
 		if (Object.keys(values).length > 0)
-			return { valid: false, problem: "operations takes no options" };
-		return { valid: true, invocation: { action: "list" } };
+			return { ok: false, problem: "operations takes no options" };
+		return { ok: true, invocation: { action: "list" } };
 	}
 	if (
 		plugin === undefined ||
@@ -106,16 +112,15 @@ function readInvocation(args: readonly string[]): InvocationRead {
 		!isPluginName(plugin) ||
 		!KEBAB_CASE_OPERATION.test(operation)
 	)
-		return { valid: false, problem: "the command is not valid" };
+		return { ok: false, problem: "the command is not valid" };
 	const { workspace, input } = values;
 	if (workspace === undefined)
-		return { valid: false, problem: "--workspace is required" };
-	if (input === undefined)
-		return { valid: false, problem: "--input is required" };
+		return { ok: false, problem: "--workspace is required" };
+	if (input === undefined) return { ok: false, problem: "--input is required" };
 	if (!parseJsonText(input).parsed)
-		return { valid: false, problem: "--input is not JSON" };
+		return { ok: false, problem: "--input is not JSON" };
 	return {
-		valid: true,
+		ok: true,
 		invocation: {
 			action: "call",
 			operation: qualifiedOperationName({
@@ -142,6 +147,15 @@ function parseOptions(args: readonly string[]) {
 	});
 }
 
+function isParseArgsError(error: unknown): boolean {
+	return (
+		error instanceof TypeError &&
+		"code" in error &&
+		typeof error.code === "string" &&
+		error.code.startsWith(PARSE_ARGS_ERROR_CODE_PREFIX)
+	);
+}
+
 function camelCaseOf(kebabCase: string): string {
 	return kebabCase.replace(/-([a-z])/g, (_, letter: string) =>
 		letter.toUpperCase(),
@@ -163,7 +177,7 @@ function exchangeFor(invocation: Invocation, config: CliConfig): Exchange {
 			return {
 				path: OPERATION_LIST_PATH,
 				init: { headers: authorization },
-				answerOf: listingOf,
+				findAnswer: findListing,
 			};
 		case "call":
 			return {
@@ -178,7 +192,7 @@ function exchangeFor(invocation: Invocation, config: CliConfig): Exchange {
 					},
 					body: invocation.input,
 				},
-				answerOf: (output) => `${JSON.stringify(output)}\n`,
+				findAnswer: (output) => `${JSON.stringify(output)}\n`,
 			};
 	}
 }
@@ -195,7 +209,7 @@ function operationPathOf({
 	).replace("{operation}", () => encodeURIComponent(operation));
 }
 
-function listingOf(body: unknown): string | undefined {
+function findListing(body: unknown): string | undefined {
 	const listed = operationList.safeParse(body);
 	if (!listed.success) return undefined;
 	return listed.data.operations
@@ -211,16 +225,17 @@ async function invoke(
 	config: CliConfig,
 ): Promise<ExitCode> {
 	const exchange = exchangeFor(invocation, config);
-	const response = await send(exchange, config.instanceUrl);
-	if (response === undefined) {
+	const sent = await send(exchange, config.instanceUrl);
+	if (!sent.reached) {
 		writeError(
 			`the instance at ${config.instanceUrl.origin} cannot be reached`,
 		);
 		return EXIT_CODES.failed;
 	}
+	const { response } = sent;
 	const body = parseJsonText(await response.text());
 	const answer =
-		response.ok && body.parsed ? exchange.answerOf(body.value) : undefined;
+		response.ok && body.parsed ? exchange.findAnswer(body.value) : undefined;
 	if (answer !== undefined) {
 		process.stdout.write(answer);
 		return EXIT_CODES.succeeded;
@@ -236,17 +251,16 @@ async function invoke(
 	return EXIT_CODES.failed;
 }
 
-async function send(
-	{ path, init }: Exchange,
-	instanceUrl: URL,
-): Promise<Response | undefined> {
+async function send({ path, init }: Exchange, instanceUrl: URL): Promise<Sent> {
 	try {
-		return await fetch(new URL(path, instanceUrl), {
+		const response = await fetch(new URL(path, instanceUrl), {
 			...init,
 			signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 		});
+		return { reached: true, response };
 	} catch (error) {
-		if (error instanceof TypeError || isTimeout(error)) return undefined;
+		if (error instanceof TypeError || isTimeout(error))
+			return { reached: false };
 		throw error;
 	}
 }
@@ -271,7 +285,7 @@ function writeError(text: string): void {
 }
 
 const read = readInvocation(Bun.argv.slice(2));
-if (!read.valid) {
+if (!read.ok) {
 	writeError(`${read.problem}\n${USAGE}`);
 	process.exit(EXIT_CODES.misused);
 }
