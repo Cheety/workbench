@@ -26,7 +26,7 @@ import {
 import { enqueueJob } from "./job-queue.ts";
 import type { JobRegistry } from "./job-registry.ts";
 import type { Logger } from "./logger.ts";
-import { lookUpMembership } from "./memberships.ts";
+import { findMembership } from "./memberships.ts";
 import type {
 	OperationRegistry,
 	RegisteredOperation,
@@ -373,7 +373,7 @@ async function authorize(
 	call: OperationCall,
 	operation: RegisteredOperation,
 ): Promise<void> {
-	const membership = await lookUpMembership(
+	const membership = await findMembership(
 		transaction,
 		call.workspace,
 		call.actor,

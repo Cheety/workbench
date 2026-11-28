@@ -21,9 +21,8 @@ function readCoreOperations(): readonly RegisteredOperation[] {
 		rights.value,
 	);
 	const problems = [...rights.problems, ...operations.problems];
-	const { value } = operations;
 	if (problems.length > 0) throw new InvalidCoreOperationsError(problems);
-	return value;
+	return operations.value;
 }
 
 export const CORE_OPERATIONS: readonly RegisteredOperation[] =

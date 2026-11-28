@@ -10,7 +10,7 @@ export type NewMembership = {
 	readonly createdAt: Date;
 };
 
-export type MembershipLookup =
+export type FoundMembership =
 	| { readonly kind: "no_workspace" }
 	| { readonly kind: "not_member" }
 	| { readonly kind: "member"; readonly role: StartRole };
@@ -26,11 +26,11 @@ export async function grantMembership(
 		VALUES (${membership.workspace}, ${membership.actor.kind}, ${membership.actor.id}, ${membership.role}, ${membership.createdAt})`;
 }
 
-export async function lookUpMembership(
+export async function findMembership(
 	sql: SQL,
 	workspace: string,
 	actor: Actor,
-): Promise<MembershipLookup> {
+): Promise<FoundMembership> {
 	if (!isWorkspaceId(workspace)) return { kind: "no_workspace" };
 	const rows: unknown[] = await sql`
 		SELECT m.role
