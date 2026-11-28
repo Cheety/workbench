@@ -405,7 +405,7 @@ async function executeScoped(
 	switch (scoped.scope) {
 		case "workspace": {
 			const access = accessOf(scoped.workspace, actor);
-			return execute(
+			return executeOnWorkspace(
 				scoped.operation,
 				input,
 				contextOf(actor, scoped.workspace, transaction, options, {
@@ -726,17 +726,22 @@ function newAuditEntryOf(
 	};
 }
 
-async function execute(
+async function executeOnWorkspace(
 	operation: WorkspaceOperation,
 	input: unknown,
 	ctx: OperationContext,
 	access: CallAccess,
 ): Promise<unknown> {
-	const output = await operation.validateOutput(
-		await runExecute(operation, input, ctx, access),
-	);
-	if (!output.valid) throw new InvalidOutputError(output.issues);
-	return output.value;
+	const executed = await executedBy(async () => {
+		try {
+			return await operation.execute(input, ctx);
+		} finally {
+			access.throwRecordedDenial();
+		}
+	});
+	if (REQUIRES_ACCESS_CHECK[operation.target] && !access.hasBeenChecked())
+		throw new ObjectAccessUncheckedError(operation.name);
+	return validOutputOf(operation, executed);
 }
 
 async function executeOnInstance(
@@ -744,37 +749,29 @@ async function executeOnInstance(
 	input: unknown,
 	ctx: InstanceContext,
 ): Promise<unknown> {
-	let executed: unknown;
-	try {
-		executed = await operation.execute(input, ctx);
-	} catch (error) {
-		if (error instanceof OperationError) throw error;
-		throw new ExecuteThrewError(error);
-	}
-	const output = await operation.validateOutput(executed);
-	if (!output.valid) throw new InvalidOutputError(output.issues);
-	return output.value;
+	return validOutputOf(
+		operation,
+		await executedBy(() => operation.execute(input, ctx)),
+	);
 }
 
-async function runExecute(
-	operation: WorkspaceOperation,
-	input: unknown,
-	ctx: OperationContext,
-	access: CallAccess,
-): Promise<unknown> {
-	let output: unknown;
+async function executedBy(run: () => Promise<unknown>): Promise<unknown> {
 	try {
-		output = await operation.execute(input, ctx);
+		return await run();
 	} catch (error) {
-		access.throwRecordedDenial();
 		if (error instanceof OperationError || error instanceof CallFailedError)
 			throw error;
 		throw new ExecuteThrewError(error);
 	}
-	access.throwRecordedDenial();
-	if (REQUIRES_ACCESS_CHECK[operation.target] && !access.hasBeenChecked())
-		throw new ObjectAccessUncheckedError(operation.name);
-	return output;
+}
+
+async function validOutputOf(
+	operation: RegisteredOperation,
+	executed: unknown,
+): Promise<unknown> {
+	const output = await operation.validateOutput(executed);
+	if (!output.valid) throw new InvalidOutputError(output.issues);
+	return output.value;
 }
 
 function logAndMapFailure(
