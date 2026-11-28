@@ -6,7 +6,9 @@ import {
 } from "@workbench/sdk";
 import { z } from "zod";
 import { apiTokenHash } from "./api-tokens.ts";
+import { setSystemTimer } from "./hook-timeout.ts";
 import type { PluginPackage } from "./kernel.ts";
+import { describeHttpApi } from "./openapi.ts";
 import {
 	API_INSTANCE_WORKSPACE,
 	type ApiInstance,
@@ -632,6 +634,39 @@ describe("a failing call over HTTP", () => {
 	});
 });
 
+const documentedOperationList = z.object({
+	paths: z.object({
+		"/api/operations": z.object({
+			get: z.object({
+				responses: z.object({
+					"200": z.object({
+						content: z.object({
+							"application/json": z.object({
+								schema: z.object({
+									properties: z.object({
+										operations: z.object({
+											items: z.object({
+												required: z.array(z.string()),
+												properties: z.object({
+													kind: z.object({ enum: z.array(z.unknown()) }),
+												}),
+											}),
+										}),
+									}),
+								}),
+							}),
+						}),
+					}),
+				}),
+			}),
+		}),
+	}),
+});
+
+const listedOperations = z.object({
+	operations: z.array(z.record(z.string(), z.unknown())),
+});
+
 describe("the operations listed over HTTP", () => {
 	test("name every operation of the core and the active plugins with its kind, sorted by name", async () => {
 		const api = await startLedgerInstance();
@@ -649,6 +684,31 @@ describe("the operations listed over HTTP", () => {
 				{ name: "ledger.listEntries", kind: "query" },
 			],
 		});
+	});
+
+	test("match the schema of the list in the OpenAPI document", async () => {
+		const api = await startLedgerInstance();
+		const token = await api.issueToken();
+		const document = documentedOperationList.parse(
+			await describeHttpApi([ledger], setSystemTimer),
+		);
+		const listedOperation =
+			document.paths["/api/operations"].get.responses["200"].content[
+				"application/json"
+			].schema.properties.operations.items;
+
+		const response = await fetch(`${api.url}/api/operations`, {
+			headers: bearer(token),
+		});
+
+		const { operations } = listedOperations.parse(await response.json());
+		expect(operations).not.toHaveLength(0);
+		for (const operation of operations) {
+			expect(Object.keys(operation)).toEqual(
+				expect.arrayContaining(listedOperation.required),
+			);
+			expect(listedOperation.properties.kind.enum).toContain(operation.kind);
+		}
 	});
 
 	test("are not listed without a valid token", async () => {
