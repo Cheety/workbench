@@ -667,7 +667,7 @@ describe("an event whose handler fails", () => {
 		expect(attempts).toEqual([event, event, event]);
 		expect(deliveryFailures(harness)).toEqual([
 			{
-				time: "2026-11-26T08:00:00.000Z",
+				time: "2026-11-27T09:00:00.000Z",
 				level: "error",
 				message: "event not delivered",
 				eventId: event,

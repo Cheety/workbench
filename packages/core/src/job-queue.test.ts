@@ -1358,8 +1358,8 @@ async function insertRemindersCompletedAt(
 	count: number,
 ): Promise<void> {
 	await sql`
-		INSERT INTO core.jobs (id, name, payload, workspace_id, enqueued_at, next_attempt_at, state, settled_at)
-		SELECT gen_random_uuid(), 'mailer.sendReminder', '{"cardId": "card-1"}'::jsonb, ${WORKSPACE}, ${completedAt}, ${completedAt}, 'completed', ${completedAt}
+		INSERT INTO core.jobs (id, name, payload, workspace_id, enqueued_at, next_attempt_at, attempts, state, settled_at)
+		SELECT gen_random_uuid(), 'mailer.sendReminder', '{"cardId": "card-1"}'::jsonb, ${WORKSPACE}, ${completedAt}, ${completedAt}, 1, 'completed', ${completedAt}
 		FROM generate_series(1, ${count})`;
 }
 

@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { SQL } from "bun";
+import { z } from "zod";
 import {
 	assertSupportedPostgresVersion,
 	PostgresGate,
+	TEST_DATABASE_URL,
 	UnsupportedPostgresVersionError,
 } from "./postgres.ts";
 
-const CLIENT_STATEMENT_TIMEOUT_MS = 200;
+const backendOf = z.tuple([z.object({ pid: z.number().int() })]);
 
 describe("supported Postgres version", () => {
 	test.each([170000, 170002, 179999])(
@@ -47,21 +49,31 @@ describe("a PostgresGate going silent", () => {
 		const gate = PostgresGate.create();
 		gate.forward();
 		const sql = new SQL(gate.url, { max: 1 });
+		const observer = new SQL(TEST_DATABASE_URL, { max: 1 });
 		cleanups.push(async () => {
 			gate.close();
 			await sql.close({ timeout: 0 }).catch(() => {});
+			await observer.close();
 		});
-		await sql`SELECT 1`;
+		const [{ pid }] = backendOf.parse(
+			await sql`SELECT pg_backend_pid() AS pid`,
+		);
 		gate.goSilent();
 
-		const outcome = await Promise.race([
-			sql`SELECT 1`.then(
-				() => "answered",
-				(error: unknown) => error,
-			),
-			Bun.sleep(CLIENT_STATEMENT_TIMEOUT_MS).then(() => "timed_out"),
-		]);
+		const outcome = sql`SELECT 'through the silent gate'`.then(
+			() => "answered",
+			(error: unknown) => error,
+		);
+		const backend = [
+			...(await observer`SELECT state, query FROM pg_stat_activity WHERE pid = ${pid}`),
+		];
+		await sql.close({ timeout: 0 });
 
-		expect(outcome).toBe("timed_out");
+		expect(backend).toEqual([
+			{ state: "idle", query: "SELECT pg_backend_pid() AS pid" },
+		]);
+		expect(await outcome).toMatchObject({
+			code: "ERR_POSTGRES_CONNECTION_CLOSED",
+		});
 	});
 });
