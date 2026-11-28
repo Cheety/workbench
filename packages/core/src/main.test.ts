@@ -375,22 +375,23 @@ describe("migrations at start", () => {
 			.map(({ schema, migration }) => ({ schema, migration }));
 		const recorded = await database.sql<
 			{ schema: string; migration: string }[]
-		>`SELECT schema_name AS schema, migration FROM core.migrations`;
-		const onDisk = [
-			...(await Array.fromAsync(
-				new Glob("*.sql").scan(CORE_MIGRATIONS_DIRECTORY),
-			)),
-			...(await Array.fromAsync(
-				new Glob("*.sql").scan(REFERENCE_MIGRATIONS_DIRECTORY),
-			)),
-		];
+		>`SELECT schema_name AS schema, migration FROM core.migrations ORDER BY schema_name COLLATE "C", migration COLLATE "C"`;
+		const coreOnDisk = await Array.fromAsync(
+			new Glob("*.sql").scan(CORE_MIGRATIONS_DIRECTORY),
+		);
+		const referenceOnDisk = await referenceMigrationsOnDisk();
 		expect(applied).not.toBeEmpty();
 		expect(applied).toHaveLength(recorded.length);
 		expect(applied).toEqual(expect.arrayContaining([...recorded]));
-		expect(recorded.map(({ migration }) => migration)).toEqual(
-			expect.arrayContaining(onDisk),
-		);
-		expect(recorded).toHaveLength(onDisk.length);
+		expect([...recorded]).toEqual([
+			...coreOnDisk
+				.toSorted()
+				.map((migration) => ({ schema: "core", migration })),
+			...referenceOnDisk.map((migration) => ({
+				schema: REFERENCE_SCHEMA,
+				migration,
+			})),
+		]);
 	});
 
 	test("migrate nothing when the instance starts again", async () => {
