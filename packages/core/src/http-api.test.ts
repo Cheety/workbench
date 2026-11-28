@@ -367,13 +367,8 @@ describe("a call without a valid token", () => {
 describe("the audit read over HTTP", () => {
 	test("names the service account and the API token of a mutation by their ids, never the token or its hash", async () => {
 		const api = await startLedgerInstance();
-		const token = await api.issueToken("owner");
-		const [issued] = z
-			.array(z.object({ id: z.string(), service_account_id: z.string() }))
-			.parse(
-				await api.database
-					.sql`SELECT id, service_account_id FROM core.api_tokens WHERE token_hash = ${apiTokenHash(token)}`,
-			);
+		const { token, serviceAccountId, apiTokenId } =
+			await api.issueIdentifiedToken("owner");
 		await api.post(
 			operationPath("ledger.addEntry"),
 			JSON.stringify({ amount: 42 }),
@@ -399,8 +394,8 @@ describe("the audit read over HTTP", () => {
 				{
 					id: expect.any(String),
 					occurredAt: "2026-11-26T08:00:00.000Z",
-					actor: { kind: "service_account", id: issued?.service_account_id },
-					apiTokenId: issued?.id,
+					actor: { kind: "service_account", id: serviceAccountId },
+					apiTokenId,
 					operation: "ledger.addEntry",
 					workspace: WORKSPACE,
 					result: "succeeded",

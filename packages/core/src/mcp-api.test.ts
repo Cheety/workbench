@@ -362,19 +362,36 @@ describe("an operation called as an MCP tool", () => {
 
 	test("writes an audit entry naming the service account and the API token of the call", async () => {
 		const api = await startLedgerInstance();
-		const client = await mcp.connectedClient(
-			api.url,
-			await api.issueToken("owner"),
-		);
+		const { token, serviceAccountId, apiTokenId } =
+			await api.issueIdentifiedToken("owner");
+		const client = await mcp.connectedClient(api.url, token);
 		await client.callTool({
 			name: "ledger_addEntry",
 			arguments: { workspace: WORKSPACE, input: { amount: 42 } },
 		});
 
-		const audited = await api.database
-			.sql`SELECT a.operation FROM core.audit_entries a JOIN core.api_tokens t ON t.id = a.api_token_id AND t.service_account_id::text = a.actor_id`;
+		const audited = await client.callTool({
+			name: "core_listAuditEntries",
+			arguments: { workspace: WORKSPACE, input: { limit: 10, cursor: null } },
+		});
 
-		expect(audited).toEqual([{ operation: "ledger.addEntry" }]);
+		expect(textOf(audited)).toEqual({
+			isError: false,
+			json: {
+				entries: [
+					{
+						id: expect.any(String),
+						occurredAt: "2026-11-26T08:00:00.000Z",
+						actor: { kind: "service_account", id: serviceAccountId },
+						apiTokenId,
+						operation: "ledger.addEntry",
+						workspace: WORKSPACE,
+						result: "succeeded",
+					},
+				],
+				nextCursor: null,
+			},
+		});
 	});
 });
 
