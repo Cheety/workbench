@@ -261,7 +261,10 @@
 								"schema": {
 									"type": "object",
 									"properties": {
-										"name": { "type": "string" },
+										"name": {
+											"type": "string",
+											"pattern": "^[a-z][a-z0-9-]{0,62}$"
+										},
 										"rights": { "type": "array", "items": { "type": "string" } }
 									},
 									"required": ["name", "rights"],
@@ -401,7 +404,10 @@
 											"required": ["kind", "id"],
 											"additionalProperties": false
 										},
-										"role": { "type": "string" }
+										"role": {
+											"type": "string",
+											"pattern": "^[a-z][a-z0-9-]{0,62}$"
+										}
 									},
 									"required": ["workspace", "actor", "role"],
 									"additionalProperties": false
@@ -575,7 +581,15 @@
 																	{ "type": "null" }
 																]
 															},
-															"role": { "type": ["string", "null"] }
+															"role": {
+																"anyOf": [
+																	{
+																		"type": "string",
+																		"pattern": "^[a-z][a-z0-9-]{0,62}$"
+																	},
+																	{ "type": "null" }
+																]
+															}
 														},
 														"required": [
 															"id",
@@ -804,7 +818,15 @@
 																	{ "type": "null" }
 																]
 															},
-															"role": { "type": ["string", "null"] }
+															"role": {
+																"anyOf": [
+																	{
+																		"type": "string",
+																		"pattern": "^[a-z][a-z0-9-]{0,62}$"
+																	},
+																	{ "type": "null" }
+																]
+															}
 														},
 														"required": [
 															"id",
@@ -973,7 +995,10 @@
 												"properties": {
 													"id": { "type": "string" },
 													"name": { "type": "string" },
-													"role": { "type": "string" }
+													"role": {
+														"type": "string",
+														"pattern": "^[a-z][a-z0-9-]{0,62}$"
+													}
 												},
 												"required": ["id", "name", "role"],
 												"additionalProperties": false
@@ -1076,7 +1101,15 @@
 									"type": "object",
 									"properties": {
 										"revoked": { "type": "boolean" },
-										"role": { "type": ["string", "null"] }
+										"role": {
+											"anyOf": [
+												{
+													"type": "string",
+													"pattern": "^[a-z][a-z0-9-]{0,62}$"
+												},
+												{ "type": "null" }
+											]
+										}
 									},
 									"required": ["revoked", "role"],
 									"additionalProperties": false

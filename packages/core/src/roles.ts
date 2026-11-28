@@ -50,7 +50,7 @@ export const defineRoleOperation = defineInstanceOperation({
 				message: "names a right more than once",
 			}),
 	}),
-	output: z.object({ name: z.string(), rights: z.array(z.string()) }),
+	output: z.object({ name: roleNameSchema, rights: z.array(z.string()) }),
 	execute: async ({ name, rights }, ctx) => {
 		if (isStartRole(name))
 			throw new OperationError(

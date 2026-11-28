@@ -9,7 +9,7 @@ import { z } from "zod";
 import type { AuditSubject } from "./audit-subject.ts";
 import { type Keyset, pageOf } from "./keyset-pages.ts";
 import { defineInstanceOperation } from "./operation-registry.ts";
-import { roleNameSchema } from "./role-name.ts";
+import { type RoleName, roleNameSchema } from "./role-name.ts";
 
 export const DENIAL_REASONS = [
 	"workspace_not_found",
@@ -57,7 +57,7 @@ function auditEntryOn<Workspace extends z.ZodType<string | null>>(
 			...fields,
 			result: z.literal("succeeded"),
 			member: auditedActor.nullable(),
-			role: z.string().nullable(),
+			role: roleNameSchema.nullable(),
 		}),
 		z.object({
 			...fields,
@@ -106,7 +106,7 @@ type ListedOutcome =
 	| {
 			readonly result: "succeeded";
 			readonly member: Actor | null;
-			readonly role: string | null;
+			readonly role: RoleName | null;
 	  }
 	| { readonly result: "denied"; readonly reason: DenialReason };
 

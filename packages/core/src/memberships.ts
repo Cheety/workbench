@@ -8,7 +8,7 @@ import type { SQL } from "bun";
 import { z } from "zod";
 import { defineInstanceAdminWorkspaceOperation } from "./operation-registry.ts";
 import { quote } from "./quote.ts";
-import { type RoleName, roleName, roleNameSchema } from "./role-name.ts";
+import { type RoleName, roleNameSchema } from "./role-name.ts";
 import { isWorkspaceId } from "./workspaces.ts";
 
 export type NewMembership = {
@@ -101,7 +101,7 @@ export const grantMembershipOperation = defineInstanceAdminWorkspaceOperation({
 	output: z.object({
 		workspace: z.string(),
 		actor: memberActor,
-		role: z.string(),
+		role: roleNameSchema,
 	}),
 	execute: async ({ actor, role }, ctx) => {
 		const roles = await ctx.sql`
@@ -127,7 +127,7 @@ export const revokeMembershipOperation = defineInstanceAdminWorkspaceOperation({
 	target: "workspace",
 	right: membershipManage.name,
 	input: z.object({ actor: memberActor }),
-	output: z.object({ revoked: z.boolean(), role: z.string().nullable() }),
+	output: z.object({ revoked: z.boolean(), role: roleNameSchema.nullable() }),
 	execute: async ({ actor }, ctx) => {
 		const [revoked] = z
 			.array(membershipRow)
@@ -142,8 +142,5 @@ export const revokeMembershipOperation = defineInstanceAdminWorkspaceOperation({
 			? { revoked: false, role: null }
 			: { revoked: true, role: revoked.role };
 	},
-	auditSubject: ({ actor }, { role }) => ({
-		member: actor,
-		role: role === null ? null : roleName(role),
-	}),
+	auditSubject: ({ actor }, { role }) => ({ member: actor, role }),
 });

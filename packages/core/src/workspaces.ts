@@ -3,6 +3,7 @@ import { z } from "zod";
 import { NO_AUDIT_SUBJECT } from "./audit-subject.ts";
 import { type Keyset, pageOf } from "./keyset-pages.ts";
 import { defineInstanceOperation } from "./operation-registry.ts";
+import { roleNameSchema } from "./role-name.ts";
 
 export type NewWorkspace = {
 	readonly id: string;
@@ -60,7 +61,7 @@ export const createWorkspaceOperation = defineInstanceOperation({
 const listedWorkspaceRow = z.object({
 	id: z.string(),
 	name: z.string(),
-	role: z.string(),
+	role: roleNameSchema,
 });
 
 type WorkspacePosition = {
@@ -90,7 +91,7 @@ export const listWorkspacesOperation = defineInstanceOperation({
 		cursor: z.string().max(MAX_CURSOR_LENGTH).nullable(),
 	}),
 	output: z.object({
-		workspaces: z.array(workspace.extend({ role: z.string() })),
+		workspaces: z.array(workspace.extend({ role: roleNameSchema })),
 		nextCursor: z.string().nullable(),
 	}),
 	execute: async (request, ctx) => {
