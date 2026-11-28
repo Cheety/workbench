@@ -603,6 +603,12 @@ describe("an answer that does not come from an instance", () => {
 	test.each([
 		{ status: 200, body: "<html>proxy</html>" },
 		{ status: 502, body: "<html>bad gateway</html>" },
+		{
+			status: 200,
+			body: JSON.stringify({
+				operations: [{ name: "createNote", kind: "mutation" }],
+			}),
+		},
 	])(
 		"is reported by its status $status with exit code 1",
 		async ({ status, body }) => {

@@ -55,7 +55,7 @@ type Exchange = {
 const operationList = z.object({
 	operations: z.array(
 		z.object({
-			name: z.string(),
+			name: z.string().refine(isQualifiedOperationName),
 			kind: z.enum(OPERATION_KINDS),
 		}),
 	),
@@ -156,6 +156,10 @@ function findQualifiedOperationName(
 	if (separator < 0 || !isPluginName(plugin) || !OPERATION_NAME.test(name))
 		return undefined;
 	return { plugin, name };
+}
+
+function isQualifiedOperationName(operation: string): boolean {
+	return findQualifiedOperationName(operation) !== undefined;
 }
 
 function cliCommandOf(operation: string): string {
