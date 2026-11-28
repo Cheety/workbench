@@ -2,6 +2,7 @@ import { SQL } from "bun";
 import { authenticateToken } from "../api-tokens.ts";
 import { Secret } from "../config.ts";
 import { setSystemTimer } from "../hook-timeout.ts";
+import type { HttpApi } from "../http-api.ts";
 import { type PluginPackage, startPlugins } from "../kernel.ts";
 import { createOperationPipeline } from "../operation-pipeline.ts";
 import {
@@ -108,6 +109,24 @@ async function startedApiInstance(
 	let clock = NOW;
 	let issuedTokens = 0;
 	let issuedCorrelationIds = 0;
+	const api: HttpApi = {
+		authenticate: (token) => authenticateToken(authenticationSql, token, clock),
+		pipeline: createOperationPipeline({
+			sql: database.sql,
+			registry: running.operations,
+			events: running.events,
+			now: () => clock,
+			newId,
+			newAuditEntryId: newId,
+			newEventId: newId,
+			eventsCommitted: () => {},
+			jobs: running.jobs,
+			newJobId: newId,
+			jobsCommitted: () => {},
+			random: () => 0.5,
+			logger,
+		}),
+	};
 	const server = startServer({
 		port: 0,
 		logger,
@@ -117,26 +136,8 @@ async function startedApiInstance(
 			return `request-${issuedCorrelationIds}`;
 		},
 		startupStatus: () => "started",
-		operations: running.operations,
-		api: {
-			authenticate: (token) =>
-				authenticateToken(authenticationSql, token, clock),
-			pipeline: createOperationPipeline({
-				sql: database.sql,
-				registry: running.operations,
-				events: running.events,
-				now: () => clock,
-				newId,
-				newAuditEntryId: newId,
-				newEventId: newId,
-				eventsCommitted: () => {},
-				jobs: running.jobs,
-				newJobId: newId,
-				jobsCommitted: () => {},
-				random: () => 0.5,
-				logger,
-			}),
-		},
+		api,
+		mcp: { ...api, operations: running.operations },
 	});
 	cleanups.push(() => server.stop());
 	const url = `http://127.0.0.1:${server.port}`;

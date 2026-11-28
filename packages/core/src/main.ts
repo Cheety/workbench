@@ -9,6 +9,7 @@ import {
 import { fullJitterBackoff, untilDatabaseReachable } from "./database-wait.ts";
 import { createEventDelivery } from "./event-outbox.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
+import type { HttpApi } from "./http-api.ts";
 import { createInstanceStart } from "./instance-start.ts";
 import { createJobQueue } from "./job-queue.ts";
 import { startPlugins } from "./kernel.ts";
@@ -193,31 +194,32 @@ const jobQueue = startPollLoop({
 	setTimer: setSystemTimer,
 	logger,
 });
+const api: HttpApi = {
+	authenticate: (token) => authenticateToken(sql, token, now()),
+	pipeline: createOperationPipeline({
+		sql,
+		registry: instance.operations,
+		events: instance.events,
+		now,
+		newId: () => crypto.randomUUID(),
+		newAuditEntryId: () => crypto.randomUUID(),
+		newEventId: () => crypto.randomUUID(),
+		eventsCommitted: eventDelivery.wake,
+		jobs: instance.jobs,
+		newJobId: () => crypto.randomUUID(),
+		jobsCommitted: jobQueue.wake,
+		random: Math.random,
+		logger,
+	}),
+};
 const server = startServerOrExit({
 	port: config.port,
 	logger,
 	checkDatabase,
 	newCorrelationId: () => crypto.randomUUID(),
 	startupStatus: instance.status,
-	operations: instance.operations,
-	api: {
-		authenticate: (token) => authenticateToken(sql, token, now()),
-		pipeline: createOperationPipeline({
-			sql,
-			registry: instance.operations,
-			events: instance.events,
-			now,
-			newId: () => crypto.randomUUID(),
-			newAuditEntryId: () => crypto.randomUUID(),
-			newEventId: () => crypto.randomUUID(),
-			eventsCommitted: eventDelivery.wake,
-			jobs: instance.jobs,
-			newJobId: () => crypto.randomUUID(),
-			jobsCommitted: jobQueue.wake,
-			random: Math.random,
-			logger,
-		}),
-	},
+	api,
+	mcp: { ...api, operations: instance.operations },
 });
 logger.info("server started", { port: server.port });
 
