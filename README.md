@@ -574,6 +574,7 @@ bun run workbench reference create-note --workspace "$WORKSPACE" --input '{"titl
   correlation id: 4f0c…
   ```
 
+- Ein Steuerzeichen (C0, DEL, C1) in einem Text der Instanz, etwa eine Escape-Sequenz oder ein Zeilenumbruch in `detail`, in einer Meldung oder einem Pfad eines Befunds, schreibt das Kommando auf die Standardfehlerausgabe sichtbar als `\x<hex>`, aus ESC wird `\x1b`, sodass eine Antwort weder das Terminal steuern noch eine Zeile vortäuschen kann. In der JSON-Ausgabe stehen sie als `\u<hex>`, aus U+009B wird `\u009b`; das JSON hat dieselben Werte wie der Body der HTTP-API.
 - Ist die Instanz nicht erreichbar oder antwortet sie nicht binnen 120 s, meldet das Kommando `the instance at <origin> cannot be reached`; antwortet dort etwas anderes als die Instanz, etwa ein Proxy, `the instance answered with HTTP <status> and an unexpected body`, jeweils mit Exit-Code 1.
 - Ein ungültiger Aufruf endet mit Exit-Code 2, bevor etwas die Instanz erreicht: ein unbekanntes Kommando oder eine unbekannte Option, ein fehlendes `--workspace` oder `--input`, eine Eingabe, die kein JSON ist (`--input is not JSON`), ein Idempotency-Key, den die Instanz nicht annähme (`--idempotency-key must be 1 to 255 visible ASCII characters or spaces, without a comma`). Die Standardfehlerausgabe nennt den Grund und darunter `usage: workbench …`, aber keinen übergebenen Wert.
 

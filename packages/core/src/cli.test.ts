@@ -50,6 +50,49 @@ const closeBook = defineOperation({
 	},
 });
 
+const stampBook = defineOperation({
+	name: "stampBook",
+	kind: "mutation",
+	target: "workspace",
+	right: "ledger.book.stamp",
+	input: z.object({ year: z.number().int() }),
+	output: z.object({ year: z.number().int() }),
+	execute: async ({ year }) => {
+		throw new OperationError(
+			"conflict",
+			"book_already_stamped",
+			`the book of ${year} is \u001b[31malready stamped\u001b[0m\u009b2J`,
+		);
+	},
+});
+
+const annotateBook = defineOperation({
+	name: "annotateBook",
+	kind: "mutation",
+	target: "workspace",
+	right: "ledger.book.annotate",
+	input: z.object({
+		remarks: z.record(
+			z.string(),
+			z.string().max(0, {
+				message: "\u001b[8mis hidden\ncorrelation id: forged",
+			}),
+		),
+	}),
+	output: z.object({ annotated: z.boolean() }),
+	execute: async () => ({ annotated: true }),
+});
+
+const readBook = defineOperation({
+	name: "readBook",
+	kind: "query",
+	target: "workspace",
+	right: "ledger.book.read",
+	input: z.object({}),
+	output: z.object({ title: z.string() }),
+	execute: async () => ({ title: "\u009b31mred\u007f\u001b[0m" }),
+});
+
 const ledger: PluginPackage = {
 	packageName: "@workbench/plugin-ledger",
 	pluginName: "ledger",
@@ -58,7 +101,7 @@ const ledger: PluginPackage = {
 		...definePlugin({
 			manifest: { name: "ledger", capabilities: [DATABASE_CAPABILITY] },
 		}),
-		operations: [closeBook],
+		operations: [closeBook, stampBook, annotateBook, readBook],
 	}),
 	loadMigrations: async () => [],
 };
@@ -379,6 +422,69 @@ describe("a domain error of a plugin on the command line and over HTTP", () => {
 				`correlation id: ${lastCorrelationIdIn(api)}`,
 				"",
 			].join("\n"),
+		});
+	});
+});
+
+describe("control characters in what the instance answers", () => {
+	test("are written visibly escaped in the detail of a problem, so they cannot steer the terminal", async () => {
+		const api = await startInstance([ledger]);
+
+		const run = await runCli(
+			callArgs(["ledger", "stamp-book"], API_INSTANCE_WORKSPACE, {
+				year: 2025,
+			}),
+			await accessTo(api),
+		);
+
+		expect(run).toEqual({
+			exitCode: 1,
+			stdout: "",
+			stderr: [
+				"ledger.book_already_stamped: the book of 2025 is \\x1b[31malready stamped\\x1b[0m\\x9b2J",
+				`correlation id: ${lastCorrelationIdIn(api)}`,
+				"",
+			].join("\n"),
+		});
+	});
+
+	test("are written visibly escaped in the path and message of an issue, so they cannot forge a line", async () => {
+		const api = await startInstance([ledger]);
+
+		const run = await runCli(
+			callArgs(["ledger", "annotate-book"], API_INSTANCE_WORKSPACE, {
+				remarks: { "\u001b[8m": "secret" },
+			}),
+			await accessTo(api),
+		);
+
+		expect(run).toEqual({
+			exitCode: 1,
+			stdout: "",
+			stderr: [
+				"invalid_input: the input does not match the input schema of the operation",
+				"  remarks.\\x1b[8m: \\x1b[8mis hidden\\x0acorrelation id: forged",
+				`correlation id: ${lastCorrelationIdIn(api)}`,
+				"",
+			].join("\n"),
+		});
+	});
+
+	test("are escaped in the JSON of an output, which still holds the value the instance answered", async () => {
+		const api = await startInstance([ledger]);
+
+		const run = await runCli(
+			callArgs(["ledger", "read-book"], API_INSTANCE_WORKSPACE, {}),
+			await accessTo(api),
+		);
+
+		expect(run).toEqual({
+			exitCode: 0,
+			stdout: '{"title":"\\u009b31mred\\u007f\\u001b[0m"}\n',
+			stderr: "",
+		});
+		expect(JSON.parse(run.stdout)).toEqual({
+			title: "\u009b31mred\u007f\u001b[0m",
 		});
 	});
 });

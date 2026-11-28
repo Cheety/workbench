@@ -40,6 +40,12 @@ const REQUEST_TIMEOUT_MS = 120_000;
 
 const PARSE_ARGS_ERROR_CODE_PREFIX = "ERR_PARSE_ARGS_";
 
+const LAST_C0_CONTROL = 0x1f;
+
+const FIRST_DEL_OR_C1_CONTROL = 0x7f;
+
+const LAST_C1_CONTROL = 0x9f;
+
 const EXIT_CODES = { succeeded: 0, failed: 1, misused: 2 } as const;
 
 type Invocation =
@@ -213,7 +219,7 @@ function exchangeFor(invocation: Invocation, config: CliConfig): Exchange {
 					},
 					body: invocation.input,
 				},
-				findAnswer: (output) => `${JSON.stringify(output)}\n`,
+				findAnswer: (output) => `${jsonWithEscapedControls(output)}\n`,
 			};
 	}
 }
@@ -349,13 +355,44 @@ function isNetworkFailure(error: unknown): boolean {
 
 function describeProblem(problem: z.infer<typeof problemDetails>): string {
 	return [
-		`${problem.code}: ${problem.detail}`,
+		`${visible(problem.code)}: ${visible(problem.detail)}`,
 		...problem.issues.map(
 			(issue) =>
-				`  ${issue.path.length === 0 ? "(input)" : issue.path.join(".")}: ${issue.message}`,
+				`  ${issue.path.length === 0 ? "(input)" : visible(issue.path.join("."))}: ${visible(issue.message)}`,
 		),
-		`correlation id: ${problem.correlationId}`,
+		`correlation id: ${visible(problem.correlationId)}`,
 	].join("\n");
+}
+
+function visible(text: string): string {
+	return replaceControls(
+		text,
+		(code) => `\\x${code.toString(16).padStart(2, "0")}`,
+	);
+}
+
+function jsonWithEscapedControls(value: unknown): string {
+	return replaceControls(
+		JSON.stringify(value),
+		(code) => `\\u${code.toString(16).padStart(4, "0")}`,
+	);
+}
+
+function replaceControls(
+	text: string,
+	escaped: (code: number) => string,
+): string {
+	return Array.from(text, (character) => {
+		const code = character.charCodeAt(0);
+		return isControl(code) ? escaped(code) : character;
+	}).join("");
+}
+
+function isControl(code: number): boolean {
+	return (
+		code <= LAST_C0_CONTROL ||
+		(code >= FIRST_DEL_OR_C1_CONTROL && code <= LAST_C1_CONTROL)
+	);
 }
 
 if (import.meta.main) {
