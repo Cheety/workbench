@@ -4,6 +4,7 @@ import {
 	defineOperation,
 	definePlugin,
 } from "@workbench/sdk";
+import { SQL } from "bun";
 import { z } from "zod";
 import { apiTokenHash, authenticateToken } from "./api-tokens.ts";
 import { Secret } from "./config.ts";
@@ -18,7 +19,11 @@ import {
 } from "./schema-migrations.ts";
 import { type RunningServer, startServer } from "./server.ts";
 import { createServiceAccount } from "./service-accounts.ts";
-import { createFreshDatabase, type FreshDatabase } from "./testing/postgres.ts";
+import {
+	createFreshDatabase,
+	type FreshDatabase,
+	PostgresGate,
+} from "./testing/postgres.ts";
 import { type LogEntry, recordingLogger } from "./testing/recording-logger.ts";
 import { createWorkspace } from "./workspaces.ts";
 
@@ -82,6 +87,7 @@ const ledger: PluginPackage = {
 type ApiInstance = {
 	readonly database: FreshDatabase;
 	readonly logEntries: readonly LogEntry[];
+	refuseAuthenticationDatabase(): void;
 	issueToken(): Promise<string>;
 	setClock(now: Date): void;
 	post(
@@ -102,6 +108,16 @@ async function startApiInstance(): Promise<ApiInstance> {
 	const { logger, entries } = recordingLogger();
 	const database = await createFreshDatabase();
 	cleanups.push(() => database.drop());
+	const authenticationGate = PostgresGate.create(database.url);
+	authenticationGate.forward();
+	const authenticationSql = new SQL(authenticationGate.url, {
+		max: 1,
+		connectionTimeout: 10,
+	});
+	cleanups.push(async () => {
+		await authenticationSql.close();
+		authenticationGate.close();
+	});
 	const runner: MigrationRunner = {
 		databaseUrl: new Secret(database.url),
 		connectionTimeoutMs: 10_000,
@@ -145,7 +161,8 @@ async function startApiInstance(): Promise<ApiInstance> {
 		},
 		startupStatus: () => "started",
 		api: {
-			authenticate: (token) => authenticateToken(database.sql, token, clock),
+			authenticate: (token) =>
+				authenticateToken(authenticationSql, token, clock),
 			pipeline: createOperationPipeline({
 				sql: database.sql,
 				registry: plugins.operations,
@@ -167,6 +184,7 @@ async function startApiInstance(): Promise<ApiInstance> {
 	return {
 		database,
 		logEntries: entries,
+		refuseAuthenticationDatabase: () => authenticationGate.refuse(),
 		issueToken: async () => {
 			issuedTokens += 1;
 			const issued = await createServiceAccount(
@@ -667,14 +685,15 @@ describe("a failing call over HTTP", () => {
 		);
 	});
 
-	test("answers an internal error neutrally when authentication itself fails", async () => {
+	test("answers an internal error neutrally when the database is unreachable during authentication", async () => {
 		const api = await startApiInstance();
-		await api.database.sql`DROP TABLE core.api_tokens CASCADE`;
+		const token = await api.issueToken();
+		api.refuseAuthenticationDatabase();
 
 		const response = await api.post(
 			operationPath("ledger.addEntry"),
 			JSON.stringify({ amount: 42 }),
-			bearer("wbt_any"),
+			bearer(token),
 		);
 
 		expect(response.status).toBe(500);
@@ -688,15 +707,11 @@ describe("a failing call over HTTP", () => {
 			correlationId: "request-1",
 			issues: [],
 		});
-		expect(body).not.toContain("api_tokens");
 		expect(api.logEntries).toContainEqual(
 			expect.objectContaining({
 				level: "error",
 				message: "request failed",
 				correlationId: "request-1",
-				error: expect.objectContaining({
-					message: expect.stringContaining("api_tokens"),
-				}),
 			}),
 		);
 	});
