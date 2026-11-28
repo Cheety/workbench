@@ -553,6 +553,46 @@ claude mcp add --transport http workbench "http://127.0.0.1:3000/api/mcp" --head
 - Den [Idempotency-Key](#idempotency-keys) einer Mutation nennt das Argument `idempotencyKey`, ein String; das Eingabe-Schema eines Tools nennt es nur an einer Mutation. Es ist derselbe Key wie im Header `Idempotency-Key` der HTTP-API: Ein Aufruf über MCP mit dem Key eines Aufrufs über HTTP desselben Akteurs erhält dessen Antwort. Ist das Argument bei einer Mutation kein gültiger Key, auch kein String, scheitert der Aufruf als Tool-Fehler mit `invalid_idempotency_key`; eine Query beachtet es nicht.
 - Der Body einer Anfrage ist höchstens 1 MiB groß; einen größeren lehnt der Endpunkt mit 413 als Fehler von JSON-RPC ab.
 
+### CLI
+
+Jede Operation des Cores und der aktiven Plugins ist auch auf der Kommandozeile erreichbar, als dünner Client der [HTTP-API](#http-api) einer laufenden Instanz (ADR-0019). Das Kommando braucht nur Bun und das Repository, keinen Zugang zur Datenbank:
+
+```sh
+export WORKBENCH_URL=http://127.0.0.1:3000
+bun run workbench operations
+bun run workbench reference create-note --workspace "$WORKSPACE" --input '{"title":"Plan"}'
+```
+
+- `workbench operations` listet die Operationen der Instanz aus `GET /api/operations`, je Zeile das CLI-Kommando, den Namen der Operation und ihre Art, durch Tabulatoren getrennt, etwa `reference create-note`, `reference.createNote`, `mutation`.
+- `workbench <plugin> <operation> --workspace <uuid> --input <json>` ruft eine Operation auf. `<operation>` ist ihr Name in kebab-case, aus `createNote` wird `create-note`; der Name selbst (`createNote`, `reference.createNote`) ist kein Kommando. `--input` ist die Eingabe als JSON, wie der Body der HTTP-API. Den [Idempotency-Key](#idempotency-keys) einer Mutation nennt `--idempotency-key <key>`; er ist derselbe Key wie im Header `Idempotency-Key`.
+- Gelingt der Aufruf, schreibt das Kommando die Ausgabe als eine Zeile JSON auf die Standardausgabe, mit denselben Feldern und Werten wie der Body der HTTP-API, und endet mit Exit-Code 0.
+- Scheitert er, schreibt es auf die Standardfehlerausgabe in der ersten Zeile `<code>: <detail>` aus den Problem Details der HTTP-API, mit demselben `code` (siehe die Tabelle unter [HTTP-API](#http-api)), darunter je Befund des Eingabe-Schemas eine eingerückte Zeile `<pfad>: <meldung>` und zuletzt `correlation id: <id>`, und endet mit Exit-Code 1:
+
+  ```text
+  invalid_input: the input does not match the input schema of the operation
+    title: Too small: expected string to have >=1 characters
+  correlation id: 4f0c…
+  ```
+
+- Ist die Instanz nicht erreichbar oder antwortet sie nicht binnen 120 s, meldet das Kommando `the instance at <origin> cannot be reached`; antwortet dort etwas anderes als die Instanz, etwa ein Proxy, `the instance answered with HTTP <status> and an unexpected body`, jeweils mit Exit-Code 1.
+- Ein ungültiger Aufruf endet mit Exit-Code 2, bevor etwas die Instanz erreicht: ein unbekanntes Kommando oder eine unbekannte Option, ein fehlendes `--workspace` oder `--input`, eine Eingabe, die kein JSON ist (`--input is not JSON`). Die Standardfehlerausgabe nennt den Grund und darunter `usage: workbench …`, aber keinen übergebenen Wert.
+
+Das API-Token kommt nie als Argument, damit es in keiner Prozessliste, Shell-History und keinem Log steht; eine Option `--token` gibt es nicht. Token und Adresse der Instanz kommen aus der Umgebung oder aus einer Konfigurationsdatei, die Umgebung geht je Wert vor:
+
+| Variable           | Feld der Datei | Bedeutung                                                                                                                                                        |
+| ------------------ | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WORKBENCH_URL`    | `url`          | Adresse der Instanz, `http://` oder `https://` mit Host; das Kommando nutzt nur ihren Origin. Pflicht.                                                           |
+| `WORKBENCH_TOKEN`  | `token`        | Das API-Token. Pflicht. Secret.                                                                                                                                  |
+| `WORKBENCH_CONFIG` | –              | Pfad der Konfigurationsdatei. Ohne Angabe `$XDG_CONFIG_HOME/workbench/cli.json`, sonst `$HOME/.config/workbench/cli.json`; fehlt diese Datei, gilt sie als leer. |
+
+Die Konfigurationsdatei ist ein JSON-Objekt mit höchstens den Feldern `url` und `token`, beide Strings:
+
+```json
+{ "url": "https://workbench.example", "token": "wbt_…" }
+```
+
+Fehlt ein Pflichtwert, ist die Adresse ungültig, fehlt die Datei aus `WORKBENCH_CONFIG` oder ist eine Datei kein solches Objekt, endet das Kommando mit Exit-Code 2 und `invalid configuration:`, darunter je Befund eine Zeile, die Variable, Feld oder Datei nennt, nie einen Wert, etwa `WORKBENCH_TOKEN, or token in /home/ada/.config/workbench/cli.json is required`.
+
 ### Contract
 
 Ein Plugin importiert aus einem anderen Plugin nur dessen Contract (ADR-0004). Ein Plugin-Paket veröffentlicht ihn als Subpath-Export `./contract`, der genau eine Datei nennt:

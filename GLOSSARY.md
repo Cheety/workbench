@@ -138,6 +138,10 @@ _Avoid_: Action, Endpoint, Use Case (in der Plugin-Sprache)
 Die Form, in der eine Operation einem MCP-Client erscheint: ein Tool je Operation, benannt nach ihr, mit dem Workspace, ihrer Eingabe und, bei einer Mutation, einem Idempotency-Key als Argumenten.
 _Avoid_: Function, Werkzeug, Skill
 
+**CLI-Kommando**:
+Die Form, in der eine Operation auf der Kommandozeile erscheint: der Name des Plugins und der Name der Operation in kebab-case als zwei Wörter, etwa `reference create-note`, mit dem Workspace, ihrer Eingabe und, bei einer Mutation, einem Idempotency-Key als Optionen.
+_Avoid_: Command (das ist der Eintrag im Client), Befehl, Subcommand
+
 **Idempotency-Key**:
 Ein vom Akteur gewählter Schlüssel, unter dem der Core die Antwort einer gelungenen Mutation mindestens 24 Stunden lang festhält, damit ein wiederholter Aufruf mit demselben Schlüssel und derselben Eingabe sie nicht noch einmal ausführt, sondern dieselbe Antwort erhält.
 _Avoid_: Request-ID, Dedup-Key, Korrelations-ID (die ordnet nur Log-Einträge einer Anfrage zu)
