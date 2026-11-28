@@ -134,21 +134,37 @@ const NOT_OBJECT_HOLDER: OperationFailure = {
 	issues: [],
 };
 
+type DenialReason =
+	| "workspace_not_found"
+	| "missing_right"
+	| "object_not_found"
+	| "not_object_holder";
+
+const DENIALS: Record<DenialReason, OperationFailure> = {
+	workspace_not_found: WORKSPACE_NOT_FOUND,
+	missing_right: MISSING_RIGHT,
+	object_not_found: OBJECT_NOT_FOUND,
+	not_object_holder: NOT_OBJECT_HOLDER,
+};
+
 class CallFailedError extends Error {
 	readonly failure: OperationFailure;
+	readonly denial: DenialReason | null;
 
-	constructor(failure: OperationFailure) {
+	constructor(failure: OperationFailure, denial: DenialReason | null) {
 		super(failure.detail);
 		this.name = "CallFailedError";
 		this.failure = failure;
+		this.denial = denial;
 	}
 }
 
-class AccessDeniedError extends CallFailedError {
-	constructor(failure: OperationFailure) {
-		super(failure);
-		this.name = "AccessDeniedError";
-	}
+function failedCall(failure: OperationFailure): CallFailedError {
+	return new CallFailedError(failure, null);
+}
+
+function deniedCall(reason: DenialReason): CallFailedError {
+	return new CallFailedError(DENIALS[reason], reason);
 }
 
 function invalidInput(issues: readonly ValidationIssue[]): OperationFailure {
@@ -225,7 +241,7 @@ async function invoke(
 			async (transaction) => {
 				await authorize(transaction, call, operation);
 				const input = await operation.validateInput(call.input);
-				if (!input.valid) throw new CallFailedError(invalidInput(input.issues));
+				if (!input.valid) throw failedCall(invalidInput(input.issues));
 				const run = async (): Promise<unknown> => {
 					const executed = await execute(
 						operation,
@@ -261,7 +277,7 @@ async function invoke(
 		if (enqueuer.hasEnqueued()) options.jobsCommitted();
 		return { ok: true, output };
 	} catch (error) {
-		if (error instanceof AccessDeniedError)
+		if (error instanceof CallFailedError && error.denial !== null)
 			return deny(call, operation, options, error.failure);
 		return failed(logAndMapFailure(error, logger, operation.owner));
 	}
@@ -364,23 +380,23 @@ async function authorize(
 	);
 	switch (membership.kind) {
 		case "no_workspace":
-			throw new CallFailedError(WORKSPACE_NOT_FOUND);
+			throw failedCall(WORKSPACE_NOT_FOUND);
 		case "not_member":
-			throw new AccessDeniedError(WORKSPACE_NOT_FOUND);
+			throw deniedCall("workspace_not_found");
 		case "member":
 			if (!operation.grantedTo.has(membership.role))
-				throw new AccessDeniedError(MISSING_RIGHT);
+				throw deniedCall("missing_right");
 	}
 }
 
 function authOf(call: OperationCall): OperationAuth {
 	return {
 		requireAccess: (object) => {
-			if (object === undefined) throw new CallFailedError(OBJECT_NOT_FOUND);
+			if (object === undefined) throw failedCall(OBJECT_NOT_FOUND);
 			if (object.workspace !== call.workspace)
-				throw new AccessDeniedError(OBJECT_NOT_FOUND);
+				throw deniedCall("object_not_found");
 			if (object.holder !== null && !isSameActor(object.holder, call.actor))
-				throw new AccessDeniedError(NOT_OBJECT_HOLDER);
+				throw deniedCall("not_object_holder");
 			return object;
 		},
 	};
