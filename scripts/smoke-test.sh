@@ -8,7 +8,8 @@ ports=("${SMOKE_TEST_PORT_A:-38081}" "${SMOKE_TEST_PORT_B:-38082}")
 workspace=00000000-0000-4000-8000-00000000aaaa
 work=""
 container=""
-curl_limits=(--connect-timeout 5 --max-time 30)
+image_built=""
+curl_limits=(--show-error --connect-timeout 5 --max-time 30)
 
 fail() {
 	echo "smoke test failed: $*" >&2
@@ -32,7 +33,7 @@ cleanup() {
 		rm -rf "$work"
 	fi
 	if [ -n "$container" ]; then docker rm --force "$container" >/dev/null 2>&1 || true; fi
-	docker image rm --force "$image" >/dev/null 2>&1 || true
+	if [ -n "$image_built" ]; then docker image rm --force "$image" >/dev/null 2>&1 || true; fi
 	exit "$status"
 }
 trap cleanup EXIT
@@ -54,7 +55,7 @@ for manifest in "$root"/packages/*/package.json; do
 		if [ -f "$file" ]; then expected_migrations+=$'\n'"plugin_${plugin//-/_}/$(basename "$file")"; fi
 	done
 done
-expected_migrations="$(sort <<<"$expected_migrations")"
+expected_migrations="$(LC_ALL=C sort <<<"$expected_migrations")"
 [[ " ${plugins[*]} " == *" reference "* ]] || fail "no plugin package provides the plugin reference"
 enabled_plugins="$(IFS=,; echo "${plugins[*]}")"
 
@@ -93,6 +94,10 @@ create_note() {
 		--header "Authorization: Bearer $3" --data '{"title":"Smoke"}'
 }
 
+bun_version="$(tr -d '[:space:]' < "$root/.bun-version")"
+grep -q "oven/bun:$bun_version-slim@" "$root/Dockerfile" || fail "Dockerfile does not build on Bun $bun_version from .bun-version"
+if docker image inspect "$image" >/dev/null 2>&1; then fail "image $image exists already; set SMOKE_TEST_IMAGE to an unused name"; fi
+image_built=yes
 docker build --tag "$image" "$root"
 
 user="$(docker image inspect --format '{{.Config.User}}' "$image")"
@@ -123,7 +128,7 @@ for index in "${!projects[@]}"; do
 	uid="$(compose "$project" exec -T workbench id -u)"
 	[ "$uid" != 0 ] || fail "$project runs its container as root"
 
-	applied="$(psql_in "$project" "SELECT schema_name || '/' || migration FROM core.migrations ORDER BY 1")"
+	applied="$(psql_in "$project" "SELECT entry FROM (SELECT schema_name || '/' || migration AS entry FROM core.migrations) AS applied ORDER BY entry COLLATE \"C\"")"
 	[ "$applied" = "$expected_migrations" ] || fail "$project applied migrations $applied, expected $expected_migrations"
 
 	psql_in "$project" "INSERT INTO core.workspaces (id, name, created_at) VALUES ('$workspace', 'Smoke', now())" >/dev/null
@@ -137,11 +142,16 @@ done
 foreign="$(create_note "${projects[1]}" "${ports[1]}" "${tokens[${projects[0]}]}")"
 [ "$foreign" = 401 ] || fail "${projects[1]} accepts a token of ${projects[0]} with $foreign"
 
-for kind in volume network; do
-	first="$(docker "$kind" ls --quiet --filter "label=com.docker.compose.project=${projects[0]}" | sort)"
-	second="$(docker "$kind" ls --quiet --filter "label=com.docker.compose.project=${projects[1]}" | sort)"
-	[ -n "$first" ] && [ -n "$second" ] || fail "a project has no $kind of its own"
-	[ -z "$(comm -12 <(echo "$first") <(echo "$second"))" ] || fail "both projects share a $kind"
+resources_in_use() {
+	local containers
+	mapfile -t containers < <(compose "$1" ps --quiet)
+	docker inspect --format '{{range .Mounts}}{{if eq .Type "volume"}}volume {{.Name}}{{println}}{{end}}{{end}}{{range $network, $_ := .NetworkSettings.Networks}}network {{$network}}{{println}}{{end}}' "${containers[@]}" | sed '/^$/d' | LC_ALL=C sort -u
+}
+
+for project in "${projects[@]}"; do
+	used="$(resources_in_use "$project")"
+	expected="$(printf '%s\n' "network ${project}_database" "network ${project}_default" "volume ${project}_postgres-data" | LC_ALL=C sort)"
+	[ "$used" = "$expected" ] || fail "$project uses $used, expected only its own $expected"
 done
 
 echo "smoke test passed"

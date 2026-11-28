@@ -34,7 +34,7 @@ services:
         - CMD
         - bun
         - --eval
-        - "process.exit((await fetch('http://127.0.0.1:3000/health/ready')).ok ? 0 : 1)"
+        - "process.exit((await fetch('http://127.0.0.1:3000/health/ready', { signal: AbortSignal.timeout(4000) })).ok ? 0 : 1)"
       interval: 10s
       timeout: 5s
       retries: 3

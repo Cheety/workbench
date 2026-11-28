@@ -52,7 +52,7 @@ Logs sind JSON-Zeilen auf der Standardausgabe. Jede Anfrage trägt eine Korrelat
 
 Unterstützt ist ein Weg (ADR-0006): das Image aus dem `Dockerfile` und `compose.yaml` mit Workbench und Postgres 17, je Mandant ein eigenes Compose-Projekt. Geprüft ist sie mit Docker Compose (`scripts/smoke-test.sh`); mit Podman ist sie nicht geprüft. Image und Compose-Datei begründet ADR-0020.
 
-Das Image enthält Core, SDK und alle Plugin-Pakete unter `packages/` mit ihren Abhängigkeiten ohne Entwicklungsabhängigkeiten, Tests und Architekturtests. Es läuft als Nutzer `1000:1000`, enthält keine Secrets und liest seine Konfiguration nur aus der Umgebung. Bis der Workflow `release` Images veröffentlicht, baut der Betreiber es selbst. Fehlt das Image `WORKBENCH_IMAGE`, baut `docker compose up` es aus dem `Dockerfile` des Repositorys; ausdrücklich geht das mit:
+Das Image enthält Core, SDK und alle Plugin-Pakete unter `packages/` mit ihren Abhängigkeiten ohne Entwicklungsabhängigkeiten, Tests und Architekturtests. Es läuft als Nutzer `1000:1000`, enthält keine Secrets und liest seine Konfiguration nur aus der Umgebung. Bis der Workflow `release` Images veröffentlicht, baut der Betreiber es selbst. Fehlt das Image `WORKBENCH_IMAGE`, baut `docker compose up` es aus dem `Dockerfile` des Repositorys; ein vorhandenes Image nimmt es unverändert, auch wenn die Quellen neuer sind. Nach einem Update baut `docker compose up --build` es neu, ausdrücklich geht das mit:
 
 ```sh
 docker build --tag workbench:local .
@@ -83,7 +83,7 @@ Den ersten Service-Account legt der Betreiber im Container an (siehe [Service-Ac
 docker compose exec workbench bun run --silent create-service-account --name "deploy agent" --valid-days 90
 ```
 
-`scripts/smoke-test.sh` baut das Image, prüft Nutzer, Umgebung und Dateien des Images, startet zwei Compose-Projekte nebeneinander auf frischen Volumes mit allen Plugins, die die Plugin-Pakete unter `packages/` nennen, wartet auf ihre Readiness, prüft, dass jede Migration des Cores und dieser Plugin-Pakete genau einmal angewandt ist, ruft in beiden `reference.createNote` per HTTP auf, prüft, dass das Token des einen Projekts im anderen mit 401 abgelehnt wird und dass beide eigene Volumes und Netze haben, und räumt beide Projekte samt Volumes, den Container der Dateiprüfung und das Image ab. Scheitert eine Prüfung, endet es mit `smoke test failed: …` und den Logs beider Projekte.
+`scripts/smoke-test.sh` baut das Image, prüft Nutzer, Umgebung und Dateien des Images, startet zwei Compose-Projekte nebeneinander auf frischen Volumes mit allen Plugins, die die Plugin-Pakete unter `packages/` nennen, wartet auf ihre Readiness, prüft, dass jede Migration des Cores und dieser Plugin-Pakete genau einmal angewandt ist, ruft in beiden `reference.createNote` per HTTP auf, prüft, dass das Token des einen Projekts im anderen mit 401 abgelehnt wird und dass die Container jedes Projekts nur dessen eigenes Volume `postgres-data` und eigene Netze `default` und `database` nutzen, und räumt beide Projekte samt Volumes, den Container der Dateiprüfung und das Image ab. Es prüft vorher, dass das `Dockerfile` auf der Bun-Version aus `.bun-version` baut, und bricht ab, wenn das Image schon existiert, statt ein fremdes Image zu überschreiben und zu löschen. Scheitert eine Prüfung, endet es mit `smoke test failed: …` und den Logs beider Projekte.
 
 ## Plugins
 
