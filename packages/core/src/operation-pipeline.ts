@@ -10,6 +10,11 @@ import { type NewAuditEntry, recordAuditEntry } from "./audit.ts";
 import { recordEvent } from "./event-outbox.ts";
 import type { EventRegistry } from "./event-registry.ts";
 import { describeThrown } from "./failure-reason.ts";
+import {
+	IdempotencyKeyReusedError,
+	isIdempotencyKey,
+	runIdempotently,
+} from "./idempotency-keys.ts";
 import { enqueueJob } from "./job-queue.ts";
 import type { JobRegistry } from "./job-registry.ts";
 import type { Logger } from "./logger.ts";
@@ -27,6 +32,7 @@ export type OperationCall = {
 	readonly operation: string;
 	readonly actor: Actor;
 	readonly apiTokenId: string | null;
+	readonly idempotencyKey: string | null;
 	readonly workspace: string;
 	readonly input: unknown;
 	readonly correlationId: string;
@@ -69,6 +75,14 @@ const INTERNAL_ERROR: OperationFailure = {
 	code: "internal_error",
 	kind: "internal",
 	detail: "the operation failed for an internal reason",
+	issues: [],
+};
+
+const INVALID_IDEMPOTENCY_KEY: OperationFailure = {
+	code: "invalid_idempotency_key",
+	kind: "invalid_input",
+	detail:
+		"the idempotency key must consist of 1 to 255 visible ASCII characters or spaces",
 	issues: [],
 };
 
@@ -139,6 +153,8 @@ async function invoke(
 			detail: `no operation is named ${quote(call.operation)}`,
 			issues: [],
 		});
+	if (call.idempotencyKey !== null && !isIdempotencyKey(call.idempotencyKey))
+		return failed(INVALID_IDEMPOTENCY_KEY);
 	const logger = options.logger.with({
 		correlationId: call.correlationId,
 		operation: operation.name,
@@ -159,20 +175,36 @@ async function invoke(
 			options.sql,
 			async (transaction) => {
 				await requireWorkspace(transaction, call.workspace);
-				const executed = await execute(
-					operation,
-					input.value,
-					contextOf(call, transaction, options, {
-						publish: publisher.publishIn(transaction),
-						enqueue: enqueuer.enqueueIn(transaction),
-					}),
-				);
-				if (IS_AUDITED[operation.kind])
-					await recordAuditEntry(
-						transaction,
-						newAuditEntryOf(call, operation, options),
+				const run = async (): Promise<unknown> => {
+					const executed = await execute(
+						operation,
+						input.value,
+						contextOf(call, transaction, options, {
+							publish: publisher.publishIn(transaction),
+							enqueue: enqueuer.enqueueIn(transaction),
+						}),
 					);
-				return executed;
+					if (IS_AUDITED[operation.kind])
+						await recordAuditEntry(
+							transaction,
+							newAuditEntryOf(call, operation, options),
+						);
+					return executed;
+				};
+				if (call.idempotencyKey === null || !IS_REPLAYED[operation.kind])
+					return run();
+				return runIdempotently(
+					transaction,
+					{
+						actor: call.actor,
+						key: call.idempotencyKey,
+						operation: operation.name,
+						workspace: call.workspace,
+						input: call.input,
+						calledAt: options.now(),
+					},
+					run,
+				);
 			},
 		);
 		if (publisher.hasPublished()) options.eventsCommitted();
@@ -192,6 +224,11 @@ const BEGIN_TRANSACTION: Record<
 };
 
 const IS_AUDITED: Record<OperationKind, boolean> = {
+	query: false,
+	mutation: true,
+};
+
+const IS_REPLAYED: Record<OperationKind, boolean> = {
 	query: false,
 	mutation: true,
 };
@@ -349,6 +386,13 @@ function logAndMapFailure(
 	owner: Owner,
 ): OperationFailure {
 	if (error instanceof WorkspaceNotFoundError) return WORKSPACE_NOT_FOUND;
+	if (error instanceof IdempotencyKeyReusedError)
+		return {
+			code: "idempotency_key_reused",
+			kind: "rejected",
+			detail: error.message,
+			issues: [],
+		};
 	if (error instanceof OperationError)
 		return {
 			code: `${ownerName(owner)}.${error.code}`,

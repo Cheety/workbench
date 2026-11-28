@@ -86,6 +86,7 @@ export async function answerApiRequest(
 		operation,
 		actor: authentication.actor,
 		apiTokenId: authentication.apiTokenId,
+		idempotencyKey: null,
 		workspace,
 		input: input.value,
 		correlationId,
