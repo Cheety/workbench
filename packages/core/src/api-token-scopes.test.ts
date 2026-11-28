@@ -210,7 +210,34 @@ describe("an API token scoped to operations", () => {
 		});
 	});
 
-	test("cannot create a token for an operation outside its own scope", async () => {
+	test.each([
+		{ case: "another operation", operations: ["ledger.addEntry"] },
+		{ case: "every operation", operations: null },
+	])(
+		"cannot create a token for $case outside its own scope",
+		async ({ operations }) => {
+			const api = await startLedgerInstance();
+			const owner = await api.issueToken("owner");
+			const scoped = await createToken(api, owner, {
+				operations: ["core.createApiToken", "ledger.readEntries"],
+				workspaces: null,
+				validDays: 7,
+			});
+
+			const response = await api.post(
+				onInstance("core.createApiToken"),
+				JSON.stringify({ operations, workspaces: null, validDays: 1 }),
+				bearer(scoped.token),
+			);
+
+			expect(response.status).toBe(422);
+			expect(await response.json()).toMatchObject({
+				code: "core.token_scope_exceeded",
+			});
+		},
+	);
+
+	test("creates a token for operations inside its own scope", async () => {
 		const api = await startLedgerInstance();
 		const owner = await api.issueToken("owner");
 		const scoped = await createToken(api, owner, {
@@ -219,31 +246,48 @@ describe("an API token scoped to operations", () => {
 			validDays: 7,
 		});
 
-		const widened = await api.post(
+		const response = await api.post(
 			onInstance("core.createApiToken"),
 			JSON.stringify({
-				operations: ["ledger.addEntry"],
-				workspaces: null,
+				operations: ["ledger.readEntries"],
+				workspaces: [WORKSPACE],
 				validDays: 1,
 			}),
 			bearer(scoped.token),
 		);
-		const unlimited = await api.post(
-			onInstance("core.createApiToken"),
-			JSON.stringify({ operations: null, workspaces: null, validDays: 1 }),
-			bearer(scoped.token),
-		);
 
-		expect(widened.status).toBe(422);
-		expect(await widened.json()).toMatchObject({
-			code: "core.token_scope_exceeded",
-		});
-		expect(await unlimited.json()).toMatchObject({
-			code: "core.token_scope_exceeded",
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			operations: ["ledger.readEntries"],
+			workspaces: [WORKSPACE],
 		});
 	});
 
-	test("rejects a scope naming an operation neither the core nor a plugin has with core.unknown_operation", async () => {
+	test.each(["core.listWorkspaces", "core.revokeApiToken"])(
+		"is refused %s on the instance outside its scope with 403 operation_outside_token_scope",
+		async (operation) => {
+			const api = await startLedgerInstance();
+			const owner = await api.issueToken("owner");
+			const scoped = await createToken(api, owner, {
+				operations: ["ledger.readEntries"],
+				workspaces: null,
+				validDays: 7,
+			});
+
+			const response = await api.post(
+				onInstance(operation),
+				JSON.stringify({ limit: 10, cursor: null, id: scoped.id }),
+				bearer(scoped.token),
+			);
+
+			expect(response.status).toBe(403);
+			expect(await response.json()).toMatchObject({
+				code: "operation_outside_token_scope",
+			});
+		},
+	);
+
+	test("rejects a scope naming an operation neither the core nor a plugin has with core.unknown_scope_operation", async () => {
 		const api = await startLedgerInstance();
 		const owner = await api.issueToken("owner");
 
@@ -259,7 +303,7 @@ describe("an API token scoped to operations", () => {
 
 		expect(response.status).toBe(422);
 		expect(await response.json()).toMatchObject({
-			code: "core.unknown_operation",
+			code: "core.unknown_scope_operation",
 		});
 	});
 });
@@ -348,6 +392,114 @@ describe("an API token that is revoked or expired", () => {
 				reason: "revoked_token",
 			}),
 		);
+	});
+
+	test("takes every token created with it, and their tokens, down with it when revoked", async () => {
+		const api = await startLedgerInstance();
+		const owner = await api.issueToken("owner");
+		const parent = await createToken(api, owner, {
+			operations: null,
+			workspaces: null,
+			validDays: 7,
+		});
+		const child = await createToken(api, parent.token, {
+			operations: null,
+			workspaces: null,
+			validDays: 7,
+		});
+		const grandchild = await createToken(api, child.token, {
+			operations: null,
+			workspaces: null,
+			validDays: 7,
+		});
+		await api.post(
+			onInstance("core.revokeApiToken"),
+			JSON.stringify({ id: parent.id }),
+			bearer(owner),
+		);
+
+		const statuses = [];
+		for (const token of [child.token, grandchild.token])
+			statuses.push(
+				(
+					await api.post(
+						onWorkspace(WORKSPACE, "ledger.readEntries"),
+						"{}",
+						bearer(token),
+					)
+				).status,
+			);
+
+		expect(statuses).toEqual([401, 401]);
+	});
+
+	test("lists the tokens created with a revoked token as revoked", async () => {
+		const api = await startLedgerInstance();
+		const owner = await api.issueToken("owner");
+		const parent = await createToken(api, owner, {
+			operations: null,
+			workspaces: null,
+			validDays: 7,
+		});
+		const child = await createToken(api, parent.token, {
+			operations: null,
+			workspaces: null,
+			validDays: 7,
+		});
+		await api.post(
+			onInstance("core.revokeApiToken"),
+			JSON.stringify({ id: parent.id }),
+			bearer(owner),
+		);
+
+		const listed = await api.post(
+			onInstance("core.listApiTokens"),
+			JSON.stringify({ limit: 10, cursor: null }),
+			bearer(owner),
+		);
+
+		expect(await listed.json()).toMatchObject({
+			apiTokens: expect.arrayContaining([
+				expect.objectContaining({
+					id: child.id,
+					revokedAt: NOW.toISOString(),
+				}),
+			]),
+		});
+	});
+
+	test("creates no token once the token of the call was revoked after it was authenticated", async () => {
+		const api = await startLedgerInstance();
+		const owner = await api.issueIdentifiedToken("owner");
+		const calling = await createToken(api, owner.token, {
+			operations: null,
+			workspaces: null,
+			validDays: 7,
+		});
+		await api.post(
+			onInstance("core.revokeApiToken"),
+			JSON.stringify({ id: calling.id }),
+			bearer(owner.token),
+		);
+
+		const created = await api.invoke({
+			operation: "core.createApiToken",
+			actor: { kind: "service_account", id: owner.serviceAccountId },
+			apiToken: {
+				id: calling.id,
+				expiresAt: IN_A_WEEK,
+				scope: { operations: null, workspaces: null },
+			},
+			idempotencyKey: null,
+			workspace: null,
+			input: { operations: null, workspaces: null, validDays: 1 },
+			correlationId: "revoked-meanwhile",
+		});
+
+		expect(created).toMatchObject({
+			ok: false,
+			failure: { code: "core.calling_token_invalid" },
+		});
 	});
 
 	test("is rejected with 401 once its validity has run out", async () => {

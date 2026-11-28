@@ -177,7 +177,7 @@ Die Operationen und Workspaces, auf die ein API-Token die Rechte seines Akteurs 
 _Avoid_: Berechtigung, Recht (das gewährt eine Rolle), Permission
 
 **Widerruf**:
-Das endgültige Ungültigmachen eines API-Tokens durch seinen Akteur vor dem Ablaufdatum; der nächste Aufruf mit ihm wird abgelehnt.
+Das endgültige Ungültigmachen eines API-Tokens durch seinen Akteur vor dem Ablaufdatum, samt aller Tokens, die mit ihm angelegt wurden; der nächste Aufruf mit einem von ihnen wird abgelehnt.
 _Avoid_: Löschen, Sperren, Deaktivieren
 
 **Mitgliedschaft**:

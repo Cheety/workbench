@@ -1,23 +1,44 @@
 ALTER TABLE api_tokens
 	ADD COLUMN operations jsonb,
 	ADD COLUMN workspaces jsonb,
-	ADD COLUMN revoked_at timestamptz;
+	ADD COLUMN revoked_at timestamptz,
+	ADD COLUMN created_by_api_token_id uuid REFERENCES api_tokens (id);
 
 ALTER TABLE api_tokens
 	ADD CONSTRAINT api_tokens_operations_check CHECK (
-		operations IS NULL OR (jsonb_typeof(operations) = 'array' AND jsonb_array_length(operations) BETWEEN 1 AND 100)
-	);
+		operations IS NULL
+		OR (
+			jsonb_typeof(operations) = 'array'
+			AND jsonb_array_length(operations) BETWEEN 1 AND 100
+			AND NOT jsonb_path_exists(operations, '$[*] ? (@.type() != "string")')
+		)
+	) NOT VALID;
 
 ALTER TABLE api_tokens
 	ADD CONSTRAINT api_tokens_workspaces_check CHECK (
-		workspaces IS NULL OR (jsonb_typeof(workspaces) = 'array' AND jsonb_array_length(workspaces) BETWEEN 1 AND 100)
-	);
+		workspaces IS NULL
+		OR (
+			jsonb_typeof(workspaces) = 'array'
+			AND jsonb_array_length(workspaces) BETWEEN 1 AND 100
+			AND NOT jsonb_path_exists(workspaces, '$[*] ? (@.type() != "string")')
+		)
+	) NOT VALID;
 
 ALTER TABLE api_tokens
-	ADD CONSTRAINT api_tokens_revoked_at_check CHECK (revoked_at IS NULL OR revoked_at >= created_at);
+	ADD CONSTRAINT api_tokens_revoked_at_check CHECK (revoked_at IS NULL OR revoked_at >= created_at) NOT VALID;
+
+ALTER TABLE api_tokens VALIDATE CONSTRAINT api_tokens_operations_check;
+
+ALTER TABLE api_tokens VALIDATE CONSTRAINT api_tokens_workspaces_check;
+
+ALTER TABLE api_tokens VALIDATE CONSTRAINT api_tokens_revoked_at_check;
 
 CREATE INDEX api_tokens_service_account_id_created_at_id_idx
 	ON api_tokens (service_account_id, created_at DESC, id DESC);
+
+CREATE INDEX api_tokens_created_by_api_token_id_idx
+	ON api_tokens (created_by_api_token_id)
+	WHERE created_by_api_token_id IS NOT NULL;
 
 ALTER TABLE audit_entries DROP CONSTRAINT audit_entries_reason_check;
 
@@ -33,4 +54,6 @@ ALTER TABLE audit_entries
 			'workspace_outside_token_scope',
 			'instance_outside_token_scope'
 		)
-	);
+	) NOT VALID;
+
+ALTER TABLE audit_entries VALIDATE CONSTRAINT audit_entries_reason_check;

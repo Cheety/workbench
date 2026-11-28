@@ -4,7 +4,7 @@ ADR-0012 ließ Scope und Widerruf eines API-Tokens offen (#17). Ein Akteur legt 
 
 ## Speicherung
 
-`core.api_tokens` bekommt die Spalten `operations` und `workspaces` (`jsonb`, eine Liste von 1 bis 100 Namen oder `NULL` für „keine Einschränkung“) und `revoked_at`. Erwogen wurden eigene Tabellen je Token und Operation oder Workspace. Sie erlaubten einen Fremdschlüssel auf `core.workspaces`, bräuchten aber eine eigene Spalte, die „keine Einschränkung“ von „nichts“ unterscheidet, und zwei weitere Abfragen bei jeder Anfrage. Ein Fremdschlüssel verriete außerdem beim Anlegen, ob ein Workspace existiert. Der Scope wird nur als Ganzes gelesen und nie geändert; Spalten am Token reichen und die Prüfung beim Aufruf liest eine Zeile. `jsonb` folgt `core.audit_entries.rights`.
+`core.api_tokens` bekommt die Spalten `operations` und `workspaces` (`jsonb`, eine Liste von 1 bis 100 Strings oder `NULL` für „keine Einschränkung“; eine `CHECK`-Bedingung verlangt die Form, damit eine fehlerhafte Zeile die Prüfung des Tokens nicht scheitern lässt), `revoked_at` und `created_by_api_token_id`. Erwogen wurden eigene Tabellen je Token und Operation oder Workspace. Sie erlaubten einen Fremdschlüssel auf `core.workspaces`, bräuchten aber eine eigene Spalte, die „keine Einschränkung“ von „nichts“ unterscheidet, und zwei weitere Abfragen bei jeder Anfrage. Ein Fremdschlüssel verriete außerdem beim Anlegen, ob ein Workspace existiert. Der Scope wird nur als Ganzes gelesen und nie geändert; Spalten am Token reichen und die Prüfung beim Aufruf liest eine Zeile. `jsonb` folgt `core.audit_entries.rights`.
 
 ## Prüfung
 
@@ -15,7 +15,15 @@ Die HTTP-API liest den Scope beim Prüfen des Tokens und reicht ihn als Teil des
 - Ein Token mit `workspaces` ruft keine Operation auf der Instanz auf (`instance_outside_token_scope`). Erwogen wurde, den Workspace-Scope für Operationen auf der Instanz nicht zu beachten; dann nennte `core.listWorkspaces` einem auf einen Workspace beschränkten Token alle Workspaces seines Akteurs, und ein solches Token könnte ein unbeschränktes anlegen.
 - Ein Token mit `operations`, das `core.createApiToken` aufrufen darf, legt nur Tokens an, deren Operationen in seinen liegen und die nicht später ablaufen als es selbst (`core.token_scope_exceeded`); sonst könnte es sich selbst erweitern oder seinen Widerruf überdauern.
 
-Widerrufen ist ein Token, sobald `revoked_at` gesetzt ist; die Prüfung des Tokens lehnt es bei jedem folgenden Aufruf ab (`revoked_token`). Erwogen wurde, das Token zusätzlich in der Transaktion des Aufrufs mit `FOR SHARE` zu lesen wie die Mitgliedschaft (ADR-0021); dann wartete ein Widerruf auf laufende Aufrufe. Die Spec verlangt nur, dass der nächste Aufruf scheitert, und die zusätzliche Sperre läge auf jedem Aufruf. Ein Aufruf, der vor dem Widerruf angenommen war, läuft deshalb zu Ende.
+## Widerruf
+
+Widerrufen ist ein Token, sobald `revoked_at` gesetzt ist; die Prüfung des Tokens lehnt es bei jedem folgenden Aufruf ab (`revoked_token`). Erwogen wurde, das Token in der Transaktion jedes Aufrufs mit `FOR SHARE` zu lesen wie die Mitgliedschaft (ADR-0021); dann wartete ein Widerruf auf laufende Aufrufe. Die Spec verlangt nur, dass der nächste Aufruf scheitert, und die zusätzliche Sperre läge auf jedem Aufruf. Ein Aufruf, der vor dem Widerruf angenommen war, läuft deshalb zu Ende.
+
+Die Ausnahme ist `core.createApiToken`, weil es ein neues Zugangsmittel erzeugt: Es liest das Token des Aufrufs in seiner Transaktion mit `FOR SHARE` und prüft, dass es weder abgelaufen noch es oder eines seiner Vorgänger widerrufen ist (`core.calling_token_invalid`). Ein Widerruf, der danach kommt, wartet auf das Ende des Anlegens.
+
+`created_by_api_token_id` nennt das Token, mit dem ein Token angelegt wurde. Ein Widerruf setzt `revoked_at` in derselben Anweisung für das Token und alle Tokens, die von ihm abstammen, damit `core.listApiTokens` sie als widerrufen zeigt. Zusätzlich lehnt die Prüfung eines Tokens es ab, wenn einer seiner Vorgänger widerrufen ist: Ein Token, das ein nebenläufiges Anlegen erst nach Beginn der Anweisung des Widerrufs festschrieb, sieht diese Anweisung nicht, ist über seinen Vorgänger aber trotzdem wirkungslos. Erwogen wurde, nur den Vorgänger beim Prüfen zu fragen; dann nennte die Liste ein wirkungsloses Token als gültig. Die Prüfung der Vorgänger kostet nur für ein Token, das mit einem Token angelegt wurde, eine zweite Abfrage.
+
+Ein Akteur widerruft und sieht mit jedem seiner Tokens, das die Operationen dieses Abschnitts aufrufen darf, alle seine Tokens, auch eines mit weiterem Scope als das aufrufende. Das ist gewollt: Ein Token handelt für seinen Akteur, und widerrufen schränkt nur ein; ein Token, das das nicht darf, schließt die Operationen über `operations` aus.
 
 ## Idempotency-Key
 

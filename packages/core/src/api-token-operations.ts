@@ -1,6 +1,13 @@
 import { defineRight, OperationError } from "@workbench/sdk";
 import { z } from "zod";
-import { apiTokenHash, scopeList } from "./api-tokens.ts";
+import {
+	apiTokenHash,
+	type CallingToken,
+	isLineageRevoked,
+	scopeList,
+	type TokenScope,
+	tokenScopeOf,
+} from "./api-tokens.ts";
 import { NO_AUDIT_SUBJECT } from "./audit-subject.ts";
 import { type Keyset, pageOf, pageRequestSchema } from "./keyset-pages.ts";
 import {
@@ -21,7 +28,7 @@ export const apiTokenManage = defineRight({
 	defaultRoles: [],
 });
 
-function uniqueList<Item extends z.ZodType<string>>(item: Item) {
+function nullableUniqueList<Item extends z.ZodType<string>>(item: Item) {
 	return z
 		.array(item)
 		.min(1)
@@ -32,10 +39,7 @@ function uniqueList<Item extends z.ZodType<string>>(item: Item) {
 		.nullable();
 }
 
-const listedScope = {
-	operations: z.array(z.string()).nullable(),
-	workspaces: z.array(z.string()).nullable(),
-};
+const listedScope = { operations: scopeList, workspaces: scopeList };
 
 function holderOf(ctx: InstanceContext): string {
 	if (ctx.actor.kind !== "service_account")
@@ -47,21 +51,20 @@ function holderOf(ctx: InstanceContext): string {
 	return ctx.actor.id;
 }
 
+function exceedsOperations(allowed: TokenScope, wanted: TokenScope): boolean {
+	const allowedOperations = allowed.operations;
+	if (allowedOperations === null) return false;
+	if (wanted.operations === null) return true;
+	return [...wanted.operations].some(
+		(operation) => !allowedOperations.has(operation),
+	);
+}
+
 function checkWithinCallingToken(
-	ctx: InstanceContext,
-	wanted: {
-		readonly operations: readonly string[] | null;
-		readonly expiresAt: Date;
-	},
+	calling: CallingToken,
+	wanted: { readonly scope: TokenScope; readonly expiresAt: Date },
 ): void {
-	const calling = ctx.apiToken;
-	if (calling === null) return;
-	const allowed = calling.scope.operations;
-	if (
-		allowed !== null &&
-		(wanted.operations === null ||
-			wanted.operations.some((operation) => !allowed.has(operation)))
-	)
+	if (exceedsOperations(calling.scope, wanted.scope))
 		throw new OperationError(
 			"rejected",
 			"token_scope_exceeded",
@@ -72,6 +75,23 @@ function checkWithinCallingToken(
 			"rejected",
 			"token_scope_exceeded",
 			"a token cannot create a token that expires after itself",
+		);
+}
+
+async function holdCallingToken(
+	ctx: InstanceContext,
+	calling: CallingToken,
+	now: Date,
+): Promise<void> {
+	const held = await ctx.sql`
+		SELECT id FROM core.api_tokens
+		WHERE id = ${calling.id} AND revoked_at IS NULL AND expires_at > ${now}
+		FOR SHARE`;
+	if (held.length === 0 || (await isLineageRevoked(ctx.sql, calling.id)))
+		throw new OperationError(
+			"rejected",
+			"calling_token_invalid",
+			"the token of the call was revoked or expired while the call ran",
 		);
 }
 
@@ -89,8 +109,10 @@ export const createApiTokenOperation = defineInstanceOperation({
 	right: apiTokenManage.name,
 	input: z.object({
 		validDays: z.number().int().min(1).max(MAX_VALID_DAYS),
-		operations: uniqueList(z.string().min(1).max(MAX_OPERATION_NAME_LENGTH)),
-		workspaces: uniqueList(z.uuid()),
+		operations: nullableUniqueList(
+			z.string().min(1).max(MAX_OPERATION_NAME_LENGTH),
+		),
+		workspaces: nullableUniqueList(z.uuid()),
 	}),
 	output: z.object({
 		id: z.string(),
@@ -106,19 +128,26 @@ export const createApiTokenOperation = defineInstanceOperation({
 		if (unknown.length > 0)
 			throw new OperationError(
 				"rejected",
-				"unknown_operation",
+				"unknown_scope_operation",
 				`neither the core nor an active plugin has an operation named ${unknown.map(quote).join(", ")}`,
 			);
 		const createdAt = ctx.now();
 		const expiresAt = expiryAfter(createdAt, validDays);
-		checkWithinCallingToken(ctx, { operations, expiresAt });
+		const calling = ctx.apiToken;
+		if (calling !== null) {
+			checkWithinCallingToken(calling, {
+				scope: tokenScopeOf({ operations, workspaces }),
+				expiresAt,
+			});
+			await holdCallingToken(ctx, calling, createdAt);
+		}
 		const id = ctx.newId();
 		const token = ctx.newApiToken();
 		const sortedOperations = sortedOrNull(operations);
 		const sortedWorkspaces = sortedOrNull(workspaces);
 		await ctx.sql`
-			INSERT INTO core.api_tokens (id, service_account_id, token_hash, created_at, expires_at, operations, workspaces)
-			VALUES (${id}, ${holder}, ${apiTokenHash(token.reveal())}, ${createdAt}, ${expiresAt}, ${jsonOrNull(sortedOperations)}::text::jsonb, ${jsonOrNull(sortedWorkspaces)}::text::jsonb)`;
+			INSERT INTO core.api_tokens (id, service_account_id, token_hash, created_at, expires_at, operations, workspaces, created_by_api_token_id)
+			VALUES (${id}, ${holder}, ${apiTokenHash(token.reveal())}, ${createdAt}, ${expiresAt}, ${jsonOrNull(sortedOperations)}::text::jsonb, ${jsonOrNull(sortedWorkspaces)}::text::jsonb, ${calling?.id ?? null})`;
 		return {
 			id,
 			token: token.reveal(),
@@ -203,7 +232,7 @@ export const listApiTokensOperation = defineInstanceOperation({
 	},
 });
 
-const revokedRow = z.object({ revoked_at: z.date() });
+const revokedRow = z.object({ id: z.string(), revoked_at: z.date() });
 
 export const revokeApiTokenOperation = defineInstanceOperation({
 	name: "revokeApiToken",
@@ -214,18 +243,27 @@ export const revokeApiTokenOperation = defineInstanceOperation({
 	execute: async ({ id }, ctx) => {
 		const holder = holderOf(ctx);
 		const rows = await ctx.sql`
+			WITH RECURSIVE descendants AS (
+				SELECT id FROM core.api_tokens WHERE id = ${id} AND service_account_id = ${holder}
+				UNION ALL
+				SELECT created.id FROM core.api_tokens created
+				JOIN descendants ON created.created_by_api_token_id = descendants.id
+			)
 			UPDATE core.api_tokens
 			SET revoked_at = COALESCE(revoked_at, ${ctx.now()})
-			WHERE id = ${id} AND service_account_id = ${holder}
-			RETURNING revoked_at`;
-		const [row] = z.array(revokedRow).max(1).parse(rows);
-		if (row === undefined)
+			WHERE id IN (SELECT id FROM descendants)
+			RETURNING id, revoked_at`;
+		const revoked = z
+			.array(revokedRow)
+			.parse(rows)
+			.find((row) => row.id === id);
+		if (revoked === undefined)
 			throw new OperationError(
 				"not_found",
 				"api_token_not_found",
 				"the actor holds no API token with this id",
 			);
-		return { id, revokedAt: row.revoked_at.toISOString() };
+		return { id, revokedAt: revoked.revoked_at.toISOString() };
 	},
 	auditSubject: () => NO_AUDIT_SUBJECT,
 });

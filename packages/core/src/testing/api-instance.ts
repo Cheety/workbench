@@ -7,7 +7,10 @@ import type { HttpApi } from "../http-api.ts";
 import { isInstanceAdminOf } from "../instance-admins.ts";
 import { type PluginPackage, startPlugins } from "../kernel.ts";
 import { grantMembership } from "../memberships.ts";
-import { createOperationPipeline } from "../operation-pipeline.ts";
+import {
+	createOperationPipeline,
+	type OperationPipeline,
+} from "../operation-pipeline.ts";
 import { roleName } from "../role-name.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
@@ -56,6 +59,7 @@ export type ApiInstance = {
 	readonly registeredOperations: readonly OperationListed[];
 	readonly database: FreshDatabase;
 	readonly logEntries: readonly LogEntry[];
+	readonly invoke: OperationPipeline["invoke"];
 	refuseAuthenticationDatabase(): void;
 	issueToken(role: string): Promise<string>;
 	issueIdentifiedToken(role: string): Promise<IdentifiedToken>;
@@ -217,6 +221,7 @@ async function startedApiInstance(
 			.map(({ name, kind }) => ({ name, kind })),
 		database,
 		logEntries: entries,
+		invoke: (call) => api.pipeline.invoke(call),
 		refuseAuthenticationDatabase: () => authenticationGate.refuse(),
 		issueToken: async (role) => (await issueIdentifiedToken(role)).token,
 		issueIdentifiedToken,

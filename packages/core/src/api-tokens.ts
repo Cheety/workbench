@@ -1,4 +1,4 @@
-import type { Actor } from "@workbench/sdk";
+import type { Actor, Sql } from "@workbench/sdk";
 import type { SQL } from "bun";
 import { z } from "zod";
 import { Secret } from "./config.ts";
@@ -43,9 +43,12 @@ const tokenRow = z.object({
 	service_account_id: z.string(),
 	expires_at: z.date(),
 	revoked_at: z.date().nullable(),
+	created_by_api_token_id: z.string().nullable(),
 	operations: scopeList,
 	workspaces: scopeList,
 });
+
+const lineageRow = z.object({ revoked: z.boolean() });
 
 export function newApiToken(
 	randomBytes: (length: number) => Uint8Array,
@@ -65,14 +68,18 @@ export async function authenticateToken(
 	now: Date,
 ): Promise<Authentication> {
 	const rows: unknown[] = await sql`
-		SELECT id, service_account_id, expires_at, revoked_at, operations, workspaces
+		SELECT id, service_account_id, expires_at, revoked_at, created_by_api_token_id, operations, workspaces
 		FROM core.api_tokens
 		WHERE token_hash = ${apiTokenHash(token)}`;
 	const [row] = rows;
 	if (row === undefined)
 		return { authenticated: false, reason: "unknown_token" };
 	const found = tokenRow.parse(row);
-	if (found.revoked_at !== null)
+	if (
+		found.revoked_at !== null ||
+		(found.created_by_api_token_id !== null &&
+			(await isLineageRevoked(sql, found.created_by_api_token_id)))
+	)
 		return { authenticated: false, reason: "revoked_token" };
 	if (found.expires_at <= now)
 		return { authenticated: false, reason: "expired_token" };
@@ -82,11 +89,36 @@ export async function authenticateToken(
 		apiToken: {
 			id: found.id,
 			expiresAt: found.expires_at,
-			scope: {
-				operations: setOf(found.operations),
-				workspaces: setOf(found.workspaces),
-			},
+			scope: tokenScopeOf(found),
 		},
+	};
+}
+
+export async function isLineageRevoked(
+	sql: Sql,
+	apiTokenId: string,
+): Promise<boolean> {
+	const [row] = await sql`
+		WITH RECURSIVE lineage AS (
+			SELECT id, created_by_api_token_id, revoked_at FROM core.api_tokens WHERE id = ${apiTokenId}
+			UNION ALL
+			SELECT creator.id, creator.created_by_api_token_id, creator.revoked_at
+			FROM core.api_tokens creator
+			JOIN lineage ON creator.id = lineage.created_by_api_token_id
+		)
+		SELECT EXISTS (SELECT 1 FROM lineage WHERE revoked_at IS NOT NULL) AS revoked`;
+	return lineageRow.parse(row).revoked;
+}
+
+export type ListedScope = {
+	readonly operations: readonly string[] | null;
+	readonly workspaces: readonly string[] | null;
+};
+
+export function tokenScopeOf(listed: ListedScope): TokenScope {
+	return {
+		operations: setOf(listed.operations),
+		workspaces: setOf(listed.workspaces),
 	};
 }
 
