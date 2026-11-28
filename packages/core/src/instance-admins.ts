@@ -1,10 +1,8 @@
 import type { Actor } from "@workbench/sdk";
+import { isSameActor } from "./actor.ts";
 
-export function instanceAdminCheck(
+export function isInstanceAdminOf(
 	instanceAdmins: readonly Actor[],
 ): (actor: Actor) => boolean {
-	return (actor) =>
-		instanceAdmins.some(
-			(admin) => admin.kind === actor.kind && admin.id === actor.id,
-		);
+	return (actor) => instanceAdmins.some((admin) => isSameActor(admin, actor));
 }

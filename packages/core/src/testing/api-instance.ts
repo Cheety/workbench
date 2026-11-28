@@ -4,7 +4,7 @@ import { authenticateToken } from "../api-tokens.ts";
 import { Secret } from "../config.ts";
 import { setSystemTimer } from "../hook-timeout.ts";
 import type { HttpApi } from "../http-api.ts";
-import { instanceAdminCheck } from "../instance-admins.ts";
+import { isInstanceAdminOf } from "../instance-admins.ts";
 import { type PluginPackage, startPlugins } from "../kernel.ts";
 import { grantMembership } from "../memberships.ts";
 import { createOperationPipeline } from "../operation-pipeline.ts";
@@ -128,7 +128,7 @@ async function startedApiInstance(
 	};
 	let clock = NOW;
 	const instanceAdmins: Actor[] = [];
-	const isInstanceAdmin = instanceAdminCheck(instanceAdmins);
+	const isInstanceAdmin = isInstanceAdminOf(instanceAdmins);
 	let issuedTokens = 0;
 	let issuedCorrelationIds = 0;
 	const api: HttpApi = {

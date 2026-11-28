@@ -1,4 +1,9 @@
-import { defineRight, OperationError, START_ROLES } from "@workbench/sdk";
+import {
+	defineRight,
+	OperationError,
+	START_ROLES,
+	type StartRole,
+} from "@workbench/sdk";
 import type { SQL } from "bun";
 import { z } from "zod";
 import { defineInstanceOperation } from "./operation-registry.ts";
@@ -12,7 +17,7 @@ const MAX_RIGHT_NAME_LENGTH = 200;
 
 export const roleName = z.string().regex(ROLE_NAME);
 
-export function isStartRole(role: string): boolean {
+export function isStartRole(role: string): role is StartRole {
 	return START_ROLES.some((startRole) => startRole === role);
 }
 

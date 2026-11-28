@@ -2,7 +2,7 @@ import type { Actor } from "@workbench/sdk";
 import { Secret } from "../config.ts";
 import { createEventDelivery } from "../event-outbox.ts";
 import { setSystemTimer } from "../hook-timeout.ts";
-import { instanceAdminCheck } from "../instance-admins.ts";
+import { isInstanceAdminOf } from "../instance-admins.ts";
 import { createJobQueue } from "../job-queue.ts";
 import {
 	type PluginPackage,
@@ -176,7 +176,7 @@ function harnessOf(
 		newJobId,
 		jobsCommitted: () => {},
 		random,
-		isInstanceAdmin: instanceAdminCheck(options.instanceAdmins ?? []),
+		isInstanceAdmin: isInstanceAdminOf(options.instanceAdmins ?? []),
 		logger,
 	});
 	const delivery = createEventDelivery({

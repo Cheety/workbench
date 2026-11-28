@@ -6,9 +6,9 @@ import {
 	type OperationErrorKind,
 	type OperationKind,
 	type OperationTarget,
-	START_ROLES,
 } from "@workbench/sdk";
 import type { SQL } from "bun";
+import { isSameActor } from "./actor.ts";
 import {
 	type AuditOutcome,
 	type DenialReason,
@@ -39,7 +39,7 @@ import type {
 } from "./operation-registry.ts";
 import { type Owner, ownerName, schemaOf } from "./owner.ts";
 import { quote } from "./quote.ts";
-import { customRoleGrants } from "./roles.ts";
+import { customRoleGrants, isStartRole } from "./roles.ts";
 import type { ValidationIssue } from "./schema-validation.ts";
 import { statementsIn } from "./transaction-statements.ts";
 
@@ -604,8 +604,7 @@ async function roleGrants(
 		grantedTo,
 	}: { readonly right: string; readonly grantedTo: ReadonlySet<string> },
 ): Promise<boolean> {
-	const startRole = START_ROLES.find((candidate) => candidate === role);
-	if (startRole !== undefined) return grantedTo.has(startRole);
+	if (isStartRole(role)) return grantedTo.has(role);
 	return customRoleGrants(transaction, role, right);
 }
 
@@ -644,10 +643,6 @@ function accessOf(workspace: string, actor: Actor): CallAccess {
 		},
 		hasBeenChecked: () => hasBeenChecked,
 	};
-}
-
-function isSameActor(left: Actor, right: Actor): boolean {
-	return left.kind === right.kind && left.id === right.id;
 }
 
 function contextOf(

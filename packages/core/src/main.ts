@@ -10,7 +10,7 @@ import { fullJitterBackoff, untilDatabaseReachable } from "./database-wait.ts";
 import { createEventDelivery } from "./event-outbox.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import type { HttpApi } from "./http-api.ts";
-import { instanceAdminCheck } from "./instance-admins.ts";
+import { isInstanceAdminOf } from "./instance-admins.ts";
 import { createInstanceStart } from "./instance-start.ts";
 import { createJobQueue } from "./job-queue.ts";
 import { startPlugins } from "./kernel.ts";
@@ -210,7 +210,7 @@ const api: HttpApi = {
 		newJobId: () => crypto.randomUUID(),
 		jobsCommitted: jobQueue.wake,
 		random: Math.random,
-		isInstanceAdmin: instanceAdminCheck(config.instanceAdmins),
+		isInstanceAdmin: isInstanceAdminOf(config.instanceAdmins),
 		logger,
 	}),
 	operations: instance.operations,
