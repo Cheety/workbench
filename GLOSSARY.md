@@ -140,7 +140,7 @@ _Avoid_: Function, Werkzeug, Skill
 
 **CLI-Kommando**:
 Die Form, in der eine Operation auf der Kommandozeile erscheint: der Name des Plugins und der Name der Operation in kebab-case als zwei Wörter, etwa `reference create-note`, mit dem Workspace, ihrer Eingabe und, bei einer Mutation, einem Idempotency-Key als Optionen.
-_Avoid_: Command (das ist der Eintrag im Client), Befehl, Subcommand
+_Avoid_: Command ohne Zusatz (das ist der Eintrag im Client; im Code heißt das CLI-Kommando `cliCommand`), Befehl, Subcommand
 
 **Idempotency-Key**:
 Ein vom Akteur gewählter Schlüssel, unter dem der Core die Antwort einer gelungenen Mutation mindestens 24 Stunden lang festhält, damit ein wiederholter Aufruf mit demselben Schlüssel und derselben Eingabe sie nicht noch einmal ausführt, sondern dieselbe Antwort erhält.
