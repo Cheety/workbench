@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { quote } from "./quote.ts";
 
-declare const roleNameBrand: unique symbol;
-
-export type RoleName = string & { readonly [roleNameBrand]: true };
-
 const ROLE_NAME = /^[a-z][a-z0-9-]{0,62}$/;
+
+export const roleNameSchema = z.string().regex(ROLE_NAME).brand<"RoleName">();
+
+export type RoleName = z.infer<typeof roleNameSchema>;
 
 export class InvalidRoleNameError extends Error {
 	constructor(value: string) {
@@ -24,5 +24,3 @@ export function roleName(value: string): RoleName {
 	if (!isRoleName(value)) throw new InvalidRoleNameError(value);
 	return value;
 }
-
-export const roleNameSchema = z.string().regex(ROLE_NAME).transform(roleName);

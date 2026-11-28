@@ -8,7 +8,8 @@ import type { SQL } from "bun";
 import { z } from "zod";
 import { defineInstanceAdminWorkspaceOperation } from "./operation-registry.ts";
 import { quote } from "./quote.ts";
-import { type RoleName, roleName, roleNameSchema } from "./role-name.ts";
+import { type RoleName, roleNameSchema } from "./role-name.ts";
+import { shareRole } from "./roles.ts";
 import { isWorkspaceId } from "./workspaces.ts";
 
 export type NewMembership = {
@@ -47,10 +48,7 @@ export async function findMembership(
 	lock: MembershipLock,
 ): Promise<FoundMembership> {
 	if (!isWorkspaceId(workspace)) return { kind: "no_workspace" };
-	const [membership] = z
-		.array(membershipRow)
-		.max(1)
-		.parse(await membershipRowsOf(sql, workspace, actor, lock));
+	const membership = await membershipOf(sql, workspace, actor, lock);
 	if (membership !== undefined)
 		return { kind: "member", role: membership.role };
 	const [found] = z
@@ -62,23 +60,38 @@ export async function findMembership(
 		: { kind: "not_member" };
 }
 
-function membershipRowsOf(
+type MembershipRow = z.infer<typeof membershipRow>;
+
+function onlyMembershipOf(rows: readonly unknown[]): MembershipRow | undefined {
+	const [membership] = z.array(membershipRow).max(1).parse(rows);
+	return membership;
+}
+
+async function membershipOf(
 	sql: SQL,
 	workspace: string,
 	actor: Actor,
 	lock: MembershipLock,
-): Promise<unknown[]> {
+): Promise<MembershipRow | undefined> {
 	switch (lock) {
-		case "share":
-			return sql`
-				SELECT memberships.role FROM core.memberships
-				JOIN core.roles ON roles.name = memberships.role
-				WHERE memberships.workspace_id = ${workspace} AND memberships.actor_kind = ${actor.kind} AND memberships.actor_id = ${actor.id}
-				FOR SHARE OF memberships, roles`;
+		case "share": {
+			const membership = onlyMembershipOf(
+				await sql`
+					SELECT role FROM core.memberships
+					WHERE workspace_id = ${workspace} AND actor_kind = ${actor.kind} AND actor_id = ${actor.id}
+					FOR SHARE`,
+			);
+			if (membership === undefined) return undefined;
+			return (await shareRole(sql, membership.role)) === "shared"
+				? membership
+				: undefined;
+		}
 		case "none":
-			return sql`
-				SELECT role FROM core.memberships
-				WHERE workspace_id = ${workspace} AND actor_kind = ${actor.kind} AND actor_id = ${actor.id}`;
+			return onlyMembershipOf(
+				await sql`
+					SELECT role FROM core.memberships
+					WHERE workspace_id = ${workspace} AND actor_kind = ${actor.kind} AND actor_id = ${actor.id}`,
+			);
 	}
 }
 
@@ -101,12 +114,10 @@ export const grantMembershipOperation = defineInstanceAdminWorkspaceOperation({
 	output: z.object({
 		workspace: z.string(),
 		actor: memberActor,
-		role: z.string(),
+		role: roleNameSchema,
 	}),
 	execute: async ({ actor, role }, ctx) => {
-		const roles = await ctx.sql`
-			SELECT name FROM core.roles WHERE name = ${role} FOR SHARE`;
-		if (roles.length === 0)
+		if ((await shareRole(ctx.sql, role)) === "no_role")
 			throw new OperationError(
 				"not_found",
 				"unknown_role",
@@ -118,7 +129,12 @@ export const grantMembershipOperation = defineInstanceAdminWorkspaceOperation({
 			ON CONFLICT (workspace_id, actor_kind, actor_id) DO UPDATE SET role = EXCLUDED.role`;
 		return { workspace: ctx.workspace, actor, role };
 	},
-	auditSubject: ({ actor, role }) => ({ member: actor, role }),
+	auditSubject: ({ actor, role }) => ({
+		workspace: null,
+		member: actor,
+		role,
+		rights: null,
+	}),
 });
 
 export const revokeMembershipOperation = defineInstanceAdminWorkspaceOperation({
@@ -127,23 +143,22 @@ export const revokeMembershipOperation = defineInstanceAdminWorkspaceOperation({
 	target: "workspace",
 	right: membershipManage.name,
 	input: z.object({ actor: memberActor }),
-	output: z.object({ revoked: z.boolean(), role: z.string().nullable() }),
+	output: z.object({ revoked: z.boolean(), role: roleNameSchema.nullable() }),
 	execute: async ({ actor }, ctx) => {
-		const [revoked] = z
-			.array(membershipRow)
-			.max(1)
-			.parse(
-				await ctx.sql`
-					DELETE FROM core.memberships
-					WHERE workspace_id = ${ctx.workspace} AND actor_kind = ${actor.kind} AND actor_id = ${actor.id}
-					RETURNING role`,
-			);
+		const revoked = onlyMembershipOf(
+			await ctx.sql`
+				DELETE FROM core.memberships
+				WHERE workspace_id = ${ctx.workspace} AND actor_kind = ${actor.kind} AND actor_id = ${actor.id}
+				RETURNING role`,
+		);
 		return revoked === undefined
 			? { revoked: false, role: null }
 			: { revoked: true, role: revoked.role };
 	},
 	auditSubject: ({ actor }, { role }) => ({
+		workspace: null,
 		member: actor,
-		role: role === null ? null : roleName(role),
+		role,
+		rights: null,
 	}),
 });

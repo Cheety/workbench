@@ -412,11 +412,15 @@ async function executeScoped(
 			return executeOnWorkspace(
 				scoped.operation,
 				input,
-				contextOf(actor, scoped.workspace, transaction, options, {
-					auth: access.auth,
-					publish: publisher.publishIn(transaction, scoped.workspace),
-					enqueue: enqueuer.enqueueIn(transaction, scoped.workspace),
-				}),
+				contextOf(
+					{ actor, workspace: scoped.workspace, transaction },
+					options,
+					{
+						auth: access.auth,
+						publish: publisher.publishIn(transaction, scoped.workspace),
+						enqueue: enqueuer.enqueueIn(transaction, scoped.workspace),
+					},
+				),
 				access,
 			);
 		}
@@ -635,10 +639,14 @@ function accessOf(workspace: string, actor: Actor): CallAccess {
 	};
 }
 
+type WorkspaceTransaction = {
+	readonly actor: Actor;
+	readonly workspace: string;
+	readonly transaction: SQL;
+};
+
 function contextOf(
-	actor: Actor,
-	workspace: string,
-	transaction: SQL,
+	{ actor, workspace, transaction }: WorkspaceTransaction,
 	sources: Pick<OperationPipelineOptions, "now" | "newId" | "random">,
 	effects: Pick<OperationContext, "auth" | "publish" | "enqueue">,
 ): OperationContext {
@@ -723,9 +731,18 @@ function newAuditEntryOf(
 		actor: call.actor,
 		apiTokenId: call.apiTokenId,
 		operation: operation.name,
-		workspace: call.workspace,
+		workspace: call.workspace ?? auditedWorkspaceOf(outcome),
 		outcome,
 	};
+}
+
+function auditedWorkspaceOf(outcome: AuditOutcome): string | null {
+	switch (outcome.result) {
+		case "succeeded":
+			return outcome.subject.workspace;
+		case "denied":
+			return null;
+	}
 }
 
 async function executeOnWorkspace(

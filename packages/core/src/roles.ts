@@ -1,6 +1,7 @@
 import {
 	defineRight,
 	OperationError,
+	type Sql,
 	START_ROLES,
 	type StartRole,
 } from "@workbench/sdk";
@@ -19,6 +20,14 @@ export function isStartRole(role: RoleName): role is RoleName & StartRole {
 }
 
 const grantedRow = z.object({ granted: z.boolean() });
+
+export type RoleShare = "shared" | "no_role";
+
+export async function shareRole(sql: Sql, role: RoleName): Promise<RoleShare> {
+	const roles =
+		await sql`SELECT name FROM core.roles WHERE name = ${role} FOR SHARE`;
+	return roles.length === 0 ? "no_role" : "shared";
+}
 
 export async function customRoleGrants(
 	sql: SQL,
@@ -50,7 +59,7 @@ export const defineRoleOperation = defineInstanceOperation({
 				message: "names a right more than once",
 			}),
 	}),
-	output: z.object({ name: z.string(), rights: z.array(z.string()) }),
+	output: z.object({ name: roleNameSchema, rights: z.array(z.string()) }),
 	execute: async ({ name, rights }, ctx) => {
 		if (isStartRole(name))
 			throw new OperationError(
@@ -75,5 +84,10 @@ export const defineRoleOperation = defineInstanceOperation({
 			SELECT ${name}, value FROM jsonb_array_elements_text(${JSON.stringify(rights)}::text::jsonb)`;
 		return { name, rights: rights.toSorted() };
 	},
-	auditSubject: ({ name }) => ({ member: null, role: name }),
+	auditSubject: (_input, { name, rights }) => ({
+		workspace: null,
+		member: null,
+		role: name,
+		rights,
+	}),
 });

@@ -1,9 +1,9 @@
-import { defineRight } from "@workbench/sdk";
-import type { SQL } from "bun";
+import { defineRight, type Sql } from "@workbench/sdk";
 import { z } from "zod";
 import { NO_AUDIT_SUBJECT } from "./audit-subject.ts";
-import { type Keyset, pageOf } from "./keyset-pages.ts";
+import { type Keyset, pageOf, pageRequestSchema } from "./keyset-pages.ts";
 import { defineInstanceOperation } from "./operation-registry.ts";
+import { roleNameSchema } from "./role-name.ts";
 
 export type NewWorkspace = {
 	readonly id: string;
@@ -11,20 +11,18 @@ export type NewWorkspace = {
 	readonly createdAt: Date;
 };
 
+const MAX_CURSOR_LENGTH = 2000;
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const MAX_WORKSPACE_NAME_LENGTH = 200;
-
-const MAX_LISTED_WORKSPACES = 100;
-
-const MAX_CURSOR_LENGTH = 2000;
 
 export function isWorkspaceId(value: string): boolean {
 	return UUID.test(value);
 }
 
 export async function createWorkspace(
-	sql: SQL,
+	sql: Sql,
 	workspace: NewWorkspace,
 ): Promise<void> {
 	await sql`INSERT INTO core.workspaces (id, name, created_at) VALUES (${workspace.id}, ${workspace.name}, ${workspace.createdAt})`;
@@ -52,16 +50,19 @@ export const createWorkspaceOperation = defineInstanceOperation({
 	output: workspace,
 	execute: async ({ name }, ctx) => {
 		const id = ctx.newId();
-		await ctx.sql`INSERT INTO core.workspaces (id, name, created_at) VALUES (${id}, ${name}, ${ctx.now()})`;
+		await createWorkspace(ctx.sql, { id, name, createdAt: ctx.now() });
 		return { id, name };
 	},
-	auditSubject: () => NO_AUDIT_SUBJECT,
+	auditSubject: (_input, { id }) => ({
+		...NO_AUDIT_SUBJECT,
+		workspace: id,
+	}),
 });
 
 const listedWorkspaceRow = z.object({
 	id: z.string(),
 	name: z.string(),
-	role: z.string(),
+	role: roleNameSchema,
 });
 
 type WorkspacePosition = {
@@ -86,12 +87,9 @@ export const listWorkspacesOperation = defineInstanceOperation({
 	name: "listWorkspaces",
 	kind: "query",
 	right: workspaceList.name,
-	input: z.object({
-		limit: z.number().int().min(1).max(MAX_LISTED_WORKSPACES),
-		cursor: z.string().max(MAX_CURSOR_LENGTH).nullable(),
-	}),
+	input: pageRequestSchema(MAX_CURSOR_LENGTH),
 	output: z.object({
-		workspaces: z.array(workspace.extend({ role: z.string() })),
+		workspaces: z.array(workspace.extend({ role: roleNameSchema })),
 		nextCursor: z.string().nullable(),
 	}),
 	execute: async (request, ctx) => {
