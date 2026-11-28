@@ -126,6 +126,7 @@ async function startedApiInstance(
 			random: () => 0.5,
 			logger,
 		}),
+		operations: running.operations,
 	};
 	const server = startServer({
 		port: 0,
@@ -137,7 +138,6 @@ async function startedApiInstance(
 		},
 		startupStatus: () => "started",
 		api,
-		mcp: { ...api, operations: running.operations },
 	});
 	cleanups.push(() => server.stop());
 	const url = `http://127.0.0.1:${server.port}`;

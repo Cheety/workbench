@@ -63,9 +63,7 @@ const IDEMPOTENCY_KEY_ARGUMENT = {
 	pattern: IDEMPOTENCY_KEY_PATTERN,
 };
 
-export type McpApi = Pick<HttpApi, "authenticate" | "pipeline"> & {
-	readonly operations: Pick<OperationRegistry, "list">;
-};
+export type McpApi = Pick<HttpApi, "authenticate" | "pipeline" | "operations">;
 
 type McpRequest = {
 	readonly api: McpApi;

@@ -211,6 +211,7 @@ const api: HttpApi = {
 		random: Math.random,
 		logger,
 	}),
+	operations: instance.operations,
 };
 const server = startServerOrExit({
 	port: config.port,
@@ -219,7 +220,6 @@ const server = startServerOrExit({
 	newCorrelationId: () => crypto.randomUUID(),
 	startupStatus: instance.status,
 	api,
-	mcp: { ...api, operations: instance.operations },
 });
 logger.info("server started", { port: server.port });
 

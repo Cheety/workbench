@@ -49,6 +49,68 @@
 		}
 	},
 	"paths": {
+		"/api/operations": {
+			"get": {
+				"operationId": "listOperations",
+				"responses": {
+					"200": {
+						"description": "the operations of the core and the active plugins, sorted by name",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"properties": {
+										"operations": {
+											"type": "array",
+											"items": {
+												"type": "object",
+												"properties": {
+													"name": { "type": "string" },
+													"kind": { "enum": ["query", "mutation"] }
+												},
+												"required": ["name", "kind"]
+											}
+										}
+									},
+									"required": ["operations"]
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "the request carries no valid API token",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": { "$ref": "#/components/schemas/ProblemDetails" }
+							}
+						}
+					},
+					"default": {
+						"description": "the request failed",
+						"headers": {
+							"X-Correlation-ID": {
+								"$ref": "#/components/headers/CorrelationId"
+							}
+						},
+						"content": {
+							"application/problem+json": {
+								"schema": { "$ref": "#/components/schemas/ProblemDetails" }
+							}
+						}
+					}
+				}
+			}
+		},
 		"/api/workspaces/{workspace}/operations/core.listAuditEntries": {
 			"post": {
 				"operationId": "core.listAuditEntries",

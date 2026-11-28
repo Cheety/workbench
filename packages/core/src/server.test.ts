@@ -61,6 +61,7 @@ async function startTestServer(startupStatus: StartupStatus = "started") {
 			random: () => 0.5,
 			logger,
 		}),
+		operations,
 	};
 	const server = startServer({
 		port: 0,
@@ -72,7 +73,6 @@ async function startTestServer(startupStatus: StartupStatus = "started") {
 		newCorrelationId: () => `generated-${nextId++}`,
 		startupStatus: () => startupStatus,
 		api,
-		mcp: { ...api, operations },
 	});
 	running = server;
 	return {

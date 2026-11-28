@@ -1,11 +1,12 @@
 import { fileURLToPath } from "node:url";
-import { DATABASE_CAPABILITY } from "@workbench/sdk";
+import { DATABASE_CAPABILITY, OPERATION_KINDS } from "@workbench/sdk";
 import { CORE_OPERATIONS } from "./core-operations.ts";
 import type { SetTimer } from "./hook-timeout.ts";
 import {
 	API_VERSION,
 	IDEMPOTENCY_KEY_HEADER,
 	OPERATION_PATH_TEMPLATE,
+	OPERATIONS_PATH,
 } from "./http-api.ts";
 import {
 	IDEMPOTENCY_KEY_PATTERN,
@@ -36,17 +37,29 @@ type Content = {
 	readonly [contentType: string]: { readonly schema: JsonSchema };
 };
 
+type Responses = {
+	readonly [status: string]: {
+		readonly description: string;
+		readonly headers: { readonly [name: string]: JsonSchema };
+		readonly content: Content;
+	};
+};
+
 export type OpenApiOperation = {
 	readonly operationId: string;
 	readonly parameters: readonly JsonSchema[];
 	readonly requestBody: { readonly required: true; readonly content: Content };
-	readonly responses: {
-		readonly [status: string]: {
-			readonly description: string;
-			readonly headers: { readonly [name: string]: JsonSchema };
-			readonly content: Content;
-		};
-	};
+	readonly responses: Responses;
+};
+
+type OpenApiListing = {
+	readonly operationId: string;
+	readonly responses: Responses;
+};
+
+type OpenApiPathItem = {
+	readonly post?: OpenApiOperation;
+	readonly get?: OpenApiListing;
 };
 
 export type OpenApiDocument = {
@@ -55,7 +68,7 @@ export type OpenApiDocument = {
 	readonly security: readonly JsonSchema[];
 	readonly components: JsonSchema;
 	readonly paths: {
-		readonly [path: string]: { readonly post: OpenApiOperation } | undefined;
+		readonly [path: string]: OpenApiPathItem | undefined;
 	};
 };
 
@@ -131,6 +144,48 @@ const PROBLEM_CONTENT: Content = {
 	[PROBLEM_CONTENT_TYPE]: { schema: { $ref: PROBLEM_DETAILS_REF } },
 };
 
+const UNAUTHENTICATED_RESPONSE = {
+	description: "the request carries no valid API token",
+	headers: RESPONSE_HEADERS,
+	content: PROBLEM_CONTENT,
+};
+
+const OPERATION_LIST_SCHEMA: JsonSchema = {
+	type: "object",
+	properties: {
+		operations: {
+			type: "array",
+			items: {
+				type: "object",
+				properties: {
+					name: { type: "string" },
+					kind: { enum: OPERATION_KINDS },
+				},
+				required: ["name", "kind"],
+			},
+		},
+	},
+	required: ["operations"],
+};
+
+const OPERATION_LISTING: OpenApiListing = {
+	operationId: "listOperations",
+	responses: {
+		"200": {
+			description:
+				"the operations of the core and the active plugins, sorted by name",
+			headers: RESPONSE_HEADERS,
+			content: { [JSON_CONTENT_TYPE]: { schema: OPERATION_LIST_SCHEMA } },
+		},
+		"401": UNAUTHENTICATED_RESPONSE,
+		default: {
+			description: "the request failed",
+			headers: RESPONSE_HEADERS,
+			content: PROBLEM_CONTENT,
+		},
+	},
+};
+
 export async function describeHttpApi(
 	packages: readonly PluginPackage[],
 	setTimer: SetTimer,
@@ -145,14 +200,17 @@ export async function describeHttpApi(
 			schemas: { ProblemDetails: PROBLEM_DETAILS_SCHEMA },
 			headers: { CorrelationId: CORRELATION_ID_HEADER_SCHEMA },
 		},
-		paths: Object.fromEntries(
-			operations
-				.toSorted((left, right) => left.name.localeCompare(right.name))
-				.map((operation) => [
-					OPERATION_PATH_TEMPLATE.replace("{operation}", operation.name),
-					{ post: describeOperation(operation) },
-				]),
-		),
+		paths: {
+			[OPERATIONS_PATH]: { get: OPERATION_LISTING },
+			...Object.fromEntries(
+				operations
+					.toSorted((left, right) => left.name.localeCompare(right.name))
+					.map((operation) => [
+						OPERATION_PATH_TEMPLATE.replace("{operation}", operation.name),
+						{ post: describeOperation(operation) },
+					]),
+			),
+		},
 	};
 }
 
@@ -194,11 +252,7 @@ function describeOperation(operation: RegisteredOperation): OpenApiOperation {
 					[JSON_CONTENT_TYPE]: { schema: operation.describeOutput() },
 				},
 			},
-			"401": {
-				description: "the request carries no valid API token",
-				headers: RESPONSE_HEADERS,
-				content: PROBLEM_CONTENT,
-			},
+			"401": UNAUTHENTICATED_RESPONSE,
 			default: {
 				description: "the operation failed",
 				headers: RESPONSE_HEADERS,

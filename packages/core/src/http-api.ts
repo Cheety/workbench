@@ -1,8 +1,10 @@
 import type { AuthenticatedToken, Authentication } from "./api-tokens.ts";
 import type { Logger } from "./logger.ts";
 import type { OperationPipeline } from "./operation-pipeline.ts";
+import type { OperationRegistry } from "./operation-registry.ts";
 import {
 	MAX_BODY_BYTES,
+	type Problem,
 	problemResponse,
 	REQUEST_PROBLEMS,
 } from "./problem-details.ts";
@@ -19,6 +21,15 @@ const OPERATION_PATH = /^\/api\/workspaces\/([^/]+)\/operations\/([^/]+)$/;
 
 const OPERATION_METHOD = "POST";
 
+export const OPERATIONS_PATH = "/api/operations";
+
+const OPERATIONS_METHOD = "GET";
+
+const OPERATIONS_METHOD_NOT_ALLOWED: Problem = {
+	...REQUEST_PROBLEMS.method_not_allowed,
+	detail: "the list of operations only accepts GET",
+};
+
 const BEARER = /^Bearer ([^\s]+)$/i;
 
 export const IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
@@ -30,6 +41,7 @@ const STRUCTURED_FIELD_ESCAPE = /\\(["\\])/g;
 export type HttpApi = {
 	readonly authenticate: (token: string) => Promise<Authentication>;
 	readonly pipeline: OperationPipeline;
+	readonly operations: Pick<OperationRegistry, "list">;
 };
 
 export type ApiRequest = {
@@ -72,6 +84,8 @@ export async function answerApiRequest(
 	api: HttpApi,
 	{ request, path, correlationId, logger }: ApiRequest,
 ): Promise<Response> {
+	if (path === OPERATIONS_PATH)
+		return listOperations(api, { request, correlationId, logger });
 	const route = OPERATION_PATH.exec(path);
 	if (route !== null && request.method !== OPERATION_METHOD) {
 		const response = problemResponse(
@@ -117,6 +131,28 @@ export async function answerApiRequest(
 	return result.ok
 		? Response.json(result.output)
 		: problemResponse(result.failure, correlationId);
+}
+
+async function listOperations(
+	api: HttpApi,
+	incoming: Omit<ApiRequest, "path">,
+): Promise<Response> {
+	if (incoming.request.method !== OPERATIONS_METHOD) {
+		const response = problemResponse(
+			OPERATIONS_METHOD_NOT_ALLOWED,
+			incoming.correlationId,
+		);
+		response.headers.set("Allow", OPERATIONS_METHOD);
+		return response;
+	}
+	const authentication = await authenticateRequest(api, incoming);
+	if (!authentication.authenticated) return authentication.response;
+	return Response.json({
+		operations: api.operations
+			.list()
+			.map(({ name, kind }) => ({ name, kind }))
+			.toSorted((left, right) => left.name.localeCompare(right.name)),
+	});
 }
 
 function decodedSegment(segment: string): string | undefined {

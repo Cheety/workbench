@@ -122,7 +122,7 @@ describe("the OpenAPI document of the HTTP API", () => {
 
 		const parametersOf = (operation: string) =>
 			document.paths[`/api/workspaces/{workspace}/operations/${operation}`]
-				?.post.parameters;
+				?.post?.parameters;
 
 		expect(parametersOf("board.renameLabel")).toEqual([
 			{
@@ -155,7 +155,7 @@ describe("the OpenAPI document of the HTTP API", () => {
 
 		expect(
 			document.paths["/api/workspaces/{workspace}/operations/board.countLabels"]
-				?.post.requestBody.content["application/json"]?.schema,
+				?.post?.requestBody.content["application/json"]?.schema,
 		).toEqual({});
 	});
 
@@ -196,13 +196,69 @@ describe("the OpenAPI document of the HTTP API", () => {
 		expect(
 			document.paths[
 				"/api/workspaces/{workspace}/operations/core.listAuditEntries"
-			]?.post.responses["200"]?.content["application/json"]?.schema,
+			]?.post?.responses["200"]?.content["application/json"]?.schema,
 		).toMatchObject({
 			properties: {
 				entries: {
 					items: {
 						properties: {
 							occurredAt: { type: "string", format: "date-time" },
+						},
+					},
+				},
+			},
+		});
+	});
+
+	test("describes the list of operations as a GET naming each operation with its kind", async () => {
+		const document = await describeHttpApi([], setSystemTimer);
+
+		expect(document.paths["/api/operations"]).toEqual({
+			get: {
+				operationId: "listOperations",
+				responses: {
+					"200": {
+						description:
+							"the operations of the core and the active plugins, sorted by name",
+						headers: CORRELATION_ID_HEADERS,
+						content: {
+							"application/json": {
+								schema: {
+									type: "object",
+									properties: {
+										operations: {
+											type: "array",
+											items: {
+												type: "object",
+												properties: {
+													name: { type: "string" },
+													kind: { enum: ["query", "mutation"] },
+												},
+												required: ["name", "kind"],
+											},
+										},
+									},
+									required: ["operations"],
+								},
+							},
+						},
+					},
+					"401": {
+						description: "the request carries no valid API token",
+						headers: CORRELATION_ID_HEADERS,
+						content: {
+							"application/problem+json": {
+								schema: { $ref: "#/components/schemas/ProblemDetails" },
+							},
+						},
+					},
+					default: {
+						description: "the request failed",
+						headers: CORRELATION_ID_HEADERS,
+						content: {
+							"application/problem+json": {
+								schema: { $ref: "#/components/schemas/ProblemDetails" },
+							},
 						},
 					},
 				},

@@ -482,26 +482,27 @@ curl -X POST "http://127.0.0.1:3000/api/workspaces/$WORKSPACE/operations/referen
 ```
 
 - Der Pfad ist `POST /api/workspaces/{workspace}/operations/{operation}`, auch für eine Query. Der Body ist die Eingabe als JSON, höchstens 1 MiB (1048576 Bytes); die Antwort 200 enthält die Ausgabe der Operation. Eine andere Methode auf diesem Pfad beantwortet die API vor der Prüfung des Tokens mit 405 und `Allow: POST`, als Problem Details mit `code` `method_not_allowed`.
+- `GET /api/operations` listet die Operationen des Cores und der aktiven Plugins, nach Namen sortiert, je mit Namen und Art: `{"operations":[{"name":"reference.createNote","kind":"mutation"}, …]}`. Er braucht wie jeder Aufruf ein API-Token; eine andere Methode beantwortet die API vor der Prüfung des Tokens mit 405 und `Allow: GET` (`method_not_allowed`).
 - Jeder Aufruf braucht ein API-Token als `Authorization: Bearer <token>`; das Schema `Bearer` gilt in beliebiger Groß- und Kleinschreibung (RFC 9110). Fehlt es, steht es in einem anderen Schema, ist es unbekannt oder abgelaufen, antwortet die API mit 401 und `WWW-Authenticate: Bearer`, als Problem Details mit `code` `unauthenticated`. Die Antwort sagt nicht, welcher Fall vorlag; das Log nennt ihn im Eintrag `request not authenticated` mit `reason` (`missing_token`, `unknown_token`, `expired_token`). Der Akteur des Aufrufs ist der Service-Account des Tokens.
 - Den Idempotency-Key einer Mutation nennt der Header `Idempotency-Key` (siehe [Idempotency-Keys](#idempotency-keys)), als Text (`Idempotency-Key: retry-1`) oder als String der Structured Fields nach RFC 9651 in Anführungszeichen (`Idempotency-Key: "retry-1"`), wie im Entwurf der IETF; beide nennen denselben Key. Weil ein Key kein Komma enthält, scheitert eine Mutation mit einem doppelt geschickten Header mit `invalid_idempotency_key`: Der Server sieht zwei Header als einen Wert, durch `, ` getrennt. Eine Wiederholung antwortet mit 200 und demselben Body wie der erste Aufruf. Eine Query beachtet den Header nicht.
 - Jede Datenbankanweisung einer Anfrage darf höchstens 60 s dauern (`statement_timeout`); dauert sie länger, scheitert die Anfrage.
 - Jedes Scheitern kommt als Problem Details mit `Content-Type: application/problem+json` und der Korrelations-ID in `correlationId`, mit dem Status nach der Art (siehe [Aufruf einer Operation](#aufruf-einer-operation)). Ein interner Fehler nennt nur `internal_error` und eine neutrale Meldung, nie Stacktrace, Pfad oder Query; die Details stehen unter derselben Korrelations-ID im Log.
 
-| Code                      | Status | Bedeutung                                                                                                                   |
-| ------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `unauthenticated`         | 401    | Kein gültiges API-Token.                                                                                                    |
-| `invalid_input`           | 400    | Der Body ist kein JSON, oder die Eingabe passt nicht zum Eingabe-Schema.                                                    |
-| `route_not_found`         | 404    | Weder Methode noch Pfad passen zu einer Route.                                                                              |
-| `method_not_allowed`      | 405    | Der Pfad einer Operation oder der MCP-Endpunkt mit anderer Methode als `POST`.                                              |
-| `malformed_path`          | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                                                                          |
-| `invalid_workspace_id`    | 400    | Der Workspace im Pfad oder im Argument `workspace` eines MCP-Tools ist keine UUID.                                          |
-| `workspace_not_found`     | 404    | Kein Workspace hat diese UUID.                                                                                              |
-| `unknown_operation`       | 404    | Weder der Core noch ein aktives Plugin hat eine Operation dieses Namens.                                                    |
-| `body_too_large`          | 413    | Der Body ist größer als 1 MiB.                                                                                              |
-| `invalid_idempotency_key` | 400    | Der Header `Idempotency-Key` hat nicht 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen ohne Komma, oder er kam mehrfach. |
-| `idempotency_key_reused`  | 422    | Der Idempotency-Key kam schon mit einer anderen Operation, einem anderen Workspace oder einem anderen Body.                 |
-| `instance_not_ready`      | 503    | Die Instanz startet noch oder ihr Start ist gescheitert.                                                                    |
-| `internal_error`          | 500    | Die Anfrage scheiterte aus einem internen Grund.                                                                            |
+| Code                      | Status | Bedeutung                                                                                                                       |
+| ------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `unauthenticated`         | 401    | Kein gültiges API-Token.                                                                                                        |
+| `invalid_input`           | 400    | Der Body ist kein JSON, oder die Eingabe passt nicht zum Eingabe-Schema.                                                        |
+| `route_not_found`         | 404    | Weder Methode noch Pfad passen zu einer Route.                                                                                  |
+| `method_not_allowed`      | 405    | Der Pfad einer Operation oder der MCP-Endpunkt mit anderer Methode als `POST`, die Liste der Operationen mit anderer als `GET`. |
+| `malformed_path`          | 400    | Der Pfad enthält eine ungültige Prozent-Kodierung.                                                                              |
+| `invalid_workspace_id`    | 400    | Der Workspace im Pfad oder im Argument `workspace` eines MCP-Tools ist keine UUID.                                              |
+| `workspace_not_found`     | 404    | Kein Workspace hat diese UUID.                                                                                                  |
+| `unknown_operation`       | 404    | Weder der Core noch ein aktives Plugin hat eine Operation dieses Namens.                                                        |
+| `body_too_large`          | 413    | Der Body ist größer als 1 MiB.                                                                                                  |
+| `invalid_idempotency_key` | 400    | Der Header `Idempotency-Key` hat nicht 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen ohne Komma, oder er kam mehrfach.     |
+| `idempotency_key_reused`  | 422    | Der Idempotency-Key kam schon mit einer anderen Operation, einem anderen Workspace oder einem anderen Body.                     |
+| `instance_not_ready`      | 503    | Die Instanz startet noch oder ihr Start ist gescheitert.                                                                        |
+| `internal_error`          | 500    | Die Anfrage scheiterte aus einem internen Grund.                                                                                |
 
 #### Service-Account und API-Token anlegen
 
@@ -535,7 +536,7 @@ Scope (Operationen, Workspaces), Widerruf und Rechte folgen mit Identität und Z
 bun run openapi
 ```
 
-Jede Operation erscheint mit ihrem Namen als `operationId`, Ein- und Ausgabe-Schema als JSON Schema und Problem Details für jedes Scheitern. Die Schemas kommen aus [Standard JSON Schema](https://standardschema.dev) (`~standard.jsonSchema`, etwa von zod 4); ein Schema ohne diese Erweiterung erscheint als `{}`. `bun run check` scheitert, wenn die Datei nicht zu den Operationen passt; dann `bun run openapi` ausführen und das Ergebnis committen.
+Die Liste der Operationen erscheint als `listOperations`. Jede Operation erscheint mit ihrem Namen als `operationId`, Ein- und Ausgabe-Schema als JSON Schema und Problem Details für jedes Scheitern. Die Schemas kommen aus [Standard JSON Schema](https://standardschema.dev) (`~standard.jsonSchema`, etwa von zod 4); ein Schema ohne diese Erweiterung erscheint als `{}`. `bun run check` scheitert, wenn die Datei nicht zu den Operationen passt; dann `bun run openapi` ausführen und das Ergebnis committen.
 
 ### MCP
 
