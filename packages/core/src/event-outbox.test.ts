@@ -1580,30 +1580,39 @@ describe("settled events past their retention", () => {
 			new Date(NOW.getTime() - 8 * DAY_MS),
 			2,
 		);
-		const other = new SQL(database.url, { max: 1 });
-		cleanups.push(() => other.close());
+		const blocker = new SQL(database.url, { max: 1 });
+		const second = new SQL(database.url, { max: 1 });
+		cleanups.push(
+			() => blocker.close(),
+			() => second.close(),
+		);
 		const locked = deferred();
 		const release = deferred();
-		const otherProcess = other.begin(async (transaction) => {
-			await transaction`
-				SELECT FROM core.events
-				WHERE sequence = (SELECT min(sequence) FROM core.events)
-				FOR UPDATE`;
+		const holdingTheDeliveries = blocker.begin(async (transaction) => {
+			await transaction`SELECT FROM core.event_deliveries FOR UPDATE`;
 			locked.resolve();
 			await release.promise;
 		});
 		await locked.promise;
-
-		await deliveryOf({
+		const firstRemoval = deliveryOf({
 			sql: database.sql,
 			cancellation: database.cancellation,
 			events: searchSubscribing(),
 		}).delivery.deliverDue(NOT_STOPPED);
-		const leftWhileLocked = await countRows(database.sql);
-		release.resolve();
-		await otherProcess;
+		await untilAStatementWaitsForTheLock(second);
 
-		expect(leftWhileLocked).toEqual({ events: 1, deliveries: 1 });
+		await deliveryOf({
+			sql: second,
+			cancellation: database.cancellation,
+			events: searchSubscribing(),
+		}).delivery.deliverDue(NOT_STOPPED);
+		const leftWhileTheFirstRemoves = await countRows(second);
+		release.resolve();
+		await holdingTheDeliveries;
+		await firstRemoval;
+
+		expect(leftWhileTheFirstRemoves).toEqual({ events: 2, deliveries: 2 });
+		expect(await countRows(database.sql)).toEqual({ events: 0, deliveries: 0 });
 	});
 });
 

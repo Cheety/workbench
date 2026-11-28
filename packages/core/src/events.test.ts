@@ -17,6 +17,7 @@ import { createEventDelivery } from "./event-outbox.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import { type PluginPackage, startPlugins } from "./kernel.ts";
 import { createOperationPipeline } from "./operation-pipeline.ts";
+import { startPollLoop } from "./poll-loop.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
 	type MigrationRunner,
@@ -265,51 +266,81 @@ const NOT_STOPPED = new AbortController().signal;
 
 const WORKSPACE = "00000000-0000-4000-8000-00000000aaaa";
 
-async function startLedgerPipeline(eventsCommitted: () => void) {
+const ENTRY = "00000000-0000-4000-e000-00000000e001";
+
+async function startLedgerWokenByItsPipeline() {
+	const database = await migratedDatabase();
 	const { logger } = recordingLogger();
-	const database = await createFreshDatabase();
-	cleanups.push(() => database.drop());
-	const runner: MigrationRunner = {
-		databaseUrl: new Secret(database.url),
-		connectionTimeoutMs: 10_000,
-		statementTimeoutMs: 60_000,
-		lockRetryDelayMs: () => 0,
-		setTimer: setSystemTimer,
-		logger,
-	};
-	await migrateCoreSchema(runner, CORE_MIGRATIONS_DIRECTORY, NOT_STOPPED);
+	const received: EntryAdded[] = [];
+	const firstReceived = Promise.withResolvers<void>();
 	const plugins = await startPlugins({
-		discover: async () => ({ packages: [ledger], unreadable: [] }),
-		enabledPlugins: ["ledger"],
+		discover: async () => ({
+			packages: [
+				ledger,
+				subscriber("statistics", async (event) => {
+					received.push(event);
+					firstReceived.resolve();
+				}),
+			],
+			unreadable: [],
+		}),
+		enabledPlugins: ["ledger", "statistics"],
 		capabilityProviders: {},
-		migrateSchemas: (schemas) => migrateSchemas(runner, schemas, NOT_STOPPED),
+		migrateSchemas: (schemas) =>
+			migrateSchemas(migrationRunner(database), schemas, NOT_STOPPED),
 		hookTimeout: { ms: 10_000, setTimer: setSystemTimer },
 		logger,
 	});
 	cleanups.push(async () => {
 		await plugins.deactivate();
 	});
-	const now = new Date("2026-11-27T09:00:00.000Z");
-	await createWorkspace(database.sql, {
-		id: WORKSPACE,
-		name: "Alpha",
-		createdAt: now,
-	});
-	return createOperationPipeline({
+	const sources = {
 		sql: database.sql,
-		registry: plugins.operations,
 		events: plugins.events,
-		now: () => now,
-		newId: () => crypto.randomUUID(),
+		now: () => new Date("2026-11-27T09:00:00.000Z"),
+		newId: () => ENTRY,
+		random: () => 0.5,
+		logger,
+	};
+	const delivery = createEventDelivery({
+		...sources,
+		cancellation: database.cancellation,
+		hasCoreSchema: () => true,
+		handlerTimeout: { ms: 10_000, setTimer: setSystemTimer },
+	});
+	const loop = startPollLoop({
+		run: (stopSignal) => delivery.deliverDue(stopSignal),
+		failureMessage: "event delivery failed",
+		pollIntervalMs: 1_000,
+		setTimer: () => () => {},
+		logger,
+	});
+	cleanups.push(() => loop.stop());
+	const pipeline = createOperationPipeline({
+		...sources,
+		registry: plugins.operations,
 		newAuditEntryId: () => crypto.randomUUID(),
 		newEventId: () => crypto.randomUUID(),
-		eventsCommitted,
+		eventsCommitted: () => loop.wake(),
 		jobs: plugins.jobs,
 		newJobId: () => crypto.randomUUID(),
 		jobsCommitted: () => {},
-		random: () => 0.5,
-		logger,
 	});
+	return {
+		call: (operation: string, amount: number) =>
+			pipeline.invoke({
+				operation,
+				actor: ALICE,
+				apiTokenId: null,
+				idempotencyKey: null,
+				workspace: WORKSPACE,
+				input: { amount },
+				correlationId: "request-1",
+			}),
+		received,
+		firstReceived: firstReceived.promise,
+		stopDelivering: () => loop.stop(),
+	};
 }
 
 async function migratedDatabase(): Promise<FreshDatabase> {
@@ -865,29 +896,34 @@ describe("a query", () => {
 });
 
 describe("the pipeline", () => {
+	test("has the delivery hand a committed event to its subscriber without waiting for the poll interval", async () => {
+		const ledgerAndStatistics = await startLedgerWokenByItsPipeline();
+
+		const added = await ledgerAndStatistics.call("ledger.addEntry", 5);
+		await ledgerAndStatistics.firstReceived;
+
+		expect(added).toEqual({ ok: true, output: { id: ENTRY } });
+		expect(ledgerAndStatistics.received.map((event) => event.payload)).toEqual([
+			{ entryId: ENTRY },
+		]);
+	});
+
 	test.each([
-		["once after a mutation that published an event", "ledger.addEntry", 5, 1],
-		["not after a mutation that was rolled back", "ledger.addEntry", -5, 0],
-		["not after a query", "ledger.countEntries", 5, 0],
+		["a mutation that was rolled back", "ledger.addEntry", -5],
+		["a query that published an event", "ledger.announceCount", 5],
 	])(
-		"tells the delivery that events were committed %s",
-		async (_case, operation, amount, expected) => {
-			let told = 0;
-			const pipeline = await startLedgerPipeline(() => {
-				told += 1;
-			});
+		"has the delivery hand nothing to a subscriber after %s",
+		async (_case, operation, amount) => {
+			const ledgerAndStatistics = await startLedgerWokenByItsPipeline();
 
-			await pipeline.invoke({
-				operation,
-				actor: ALICE,
-				apiTokenId: null,
-				idempotencyKey: null,
-				workspace: WORKSPACE,
-				input: { amount },
-				correlationId: "request-1",
-			});
+			const called = await ledgerAndStatistics.call(operation, amount);
+			await ledgerAndStatistics.stopDelivering();
 
-			expect(told).toBe(expected);
+			expect(called).toEqual({
+				ok: false,
+				failure: expect.objectContaining({ code: "internal_error" }),
+			});
+			expect(ledgerAndStatistics.received).toEqual([]);
 		},
 	);
 });
