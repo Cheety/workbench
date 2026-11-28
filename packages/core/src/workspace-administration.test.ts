@@ -180,6 +180,27 @@ describe("administering workspaces", () => {
 		});
 	});
 
+	test("rejects a cursor that names no position in the list of workspaces", async () => {
+		const harness = await startLedger();
+
+		const listed = await harness.call({
+			actor: ALICE,
+			workspace: null,
+			operation: "core.listWorkspaces",
+			input: { limit: 10, cursor: "bm8tcG9zaXRpb24" },
+		});
+
+		expect(listed).toEqual({
+			ok: false,
+			failure: {
+				code: "core.invalid_cursor",
+				kind: "rejected",
+				detail: "the cursor does not name a position in the list of workspaces",
+				issues: [],
+			},
+		});
+	});
+
 	test("hides a workspace again once the membership is revoked", async () => {
 		const harness = await startLedger();
 		const workspace = await createWorkspaceAsAdmin(harness, "Accounts");
@@ -295,6 +316,28 @@ describe("a custom role", () => {
 		expect(added).toEqual({ ok: true, output: { added: true } });
 	});
 
+	test("lets its member read the audit of the workspace when it grants core.audit.read", async () => {
+		const harness = await startLedger();
+		const workspace = await createWorkspaceAsAdmin(harness, "Accounts");
+		await defineRoleAsAdmin(harness, "auditor", ["core.audit.read"]);
+		await grant(harness, workspace, ALICE, "auditor");
+
+		const audit = await harness.call({
+			actor: ALICE,
+			workspace,
+			operation: "core.listAuditEntries",
+			input: { limit: 10, cursor: null },
+		});
+
+		expect(auditPage.parse(audit).output.entries).toEqual([
+			expect.objectContaining({
+				operation: "core.grantMembership",
+				workspace,
+				result: "succeeded",
+			}),
+		]);
+	});
+
 	test.each([
 		{
 			case: "a right that no operation grants through a role",
@@ -383,6 +426,32 @@ describe("an actor who is no instance admin", () => {
 		expect(await listWorkspacesOf(harness, BOB)).toEqual({
 			ok: true,
 			output: { workspaces: [], nextCursor: null },
+		});
+	});
+
+	test("may not revoke a membership, even as owner of the workspace", async () => {
+		const harness = await startLedger();
+		const workspace = await createWorkspaceAsAdmin(harness, "Accounts");
+		await grant(harness, workspace, ALICE, "owner");
+		await grant(harness, workspace, BOB, "editor");
+
+		const revoked = await harness.call({
+			actor: ALICE,
+			workspace,
+			operation: "core.revokeMembership",
+			input: { actor: BOB },
+		});
+
+		expect(revoked).toMatchObject({
+			ok: false,
+			failure: { code: "not_instance_admin", kind: "forbidden" },
+		});
+		expect(await listWorkspacesOf(harness, BOB)).toEqual({
+			ok: true,
+			output: {
+				workspaces: [{ id: workspace, name: "Accounts", role: "editor" }],
+				nextCursor: null,
+			},
 		});
 	});
 

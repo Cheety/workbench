@@ -4,6 +4,7 @@ import { SQL } from "bun";
 import { z } from "zod";
 import { Secret } from "./config.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
+import { isInstanceAdminOf } from "./instance-admins.ts";
 import { type PluginPackage, startPlugins } from "./kernel.ts";
 import { grantMembership } from "./memberships.ts";
 import {
@@ -23,6 +24,8 @@ import { recordingLogger } from "./testing/recording-logger.ts";
 import { createWorkspace } from "./workspaces.ts";
 
 const ALICE: Actor = { kind: "user", id: "alice" };
+
+const ADMIN: Actor = { kind: "service_account", id: "admin" };
 
 const WORKSPACE = "00000000-0000-4000-8000-00000000aaaa";
 
@@ -131,7 +134,7 @@ async function startBellPipeline(
 		eventsCommitted: () => {},
 		jobsCommitted: () => {},
 		random: () => 0.5,
-		isInstanceAdmin: () => false,
+		isInstanceAdmin: isInstanceAdminOf([ADMIN]),
 		logger,
 	});
 }
@@ -202,4 +205,67 @@ describe("the membership checked for a mutation", () => {
 		expect(redefined).toStartWith("could not obtain lock on row");
 		expect(await ringing).toEqual({ ok: true, output: { rung: true } });
 	});
+
+	test("keeps its custom role from being redefined through core.defineRole while the mutation runs", async () => {
+		const database = await createFreshDatabase();
+		cleanups.push(() => database.drop());
+		const behind = gate();
+		const pipeline = await startBellPipeline(database, bellRungBehind(behind));
+		const invoke = (
+			actor: Actor,
+			operation: string,
+			workspace: string | null,
+			input: unknown,
+		): Promise<OperationResult> =>
+			pipeline.invoke({
+				operation,
+				actor,
+				apiTokenId: null,
+				idempotencyKey: null,
+				workspace,
+				input,
+				correlationId: operation,
+			});
+		await invoke(ADMIN, "core.defineRole", null, {
+			name: "ringer",
+			rights: ["bell.bell.ring"],
+		});
+		await invoke(ADMIN, "core.grantMembership", WORKSPACE, {
+			actor: ALICE,
+			role: "ringer",
+		});
+		const ringing = invoke(ALICE, "bell.ringBell", WORKSPACE, {});
+		await behind.entered;
+		const redefining = invoke(ADMIN, "core.defineRole", null, {
+			name: "ringer",
+			rights: [],
+		});
+
+		const first = await lockWaitOrEnd(database, redefining);
+		behind.open();
+
+		expect(first).toBe("waiting for a lock");
+		expect(await ringing).toEqual({ ok: true, output: { rung: true } });
+		expect(await redefining).toEqual({
+			ok: true,
+			output: { name: "ringer", rights: [] },
+		});
+	});
 });
+
+async function lockWaitOrEnd(
+	database: FreshDatabase,
+	call: Promise<OperationResult>,
+): Promise<"waiting for a lock" | "ended"> {
+	let hasEnded = false;
+	void call.then(() => {
+		hasEnded = true;
+	});
+	while (!hasEnded) {
+		const waiting = await database.sql`
+			SELECT pid FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'`;
+		if (waiting.length > 0) return "waiting for a lock";
+	}
+	return "ended";
+}
