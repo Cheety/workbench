@@ -238,9 +238,13 @@ function denialReasonsOf(
 export function denialsOf(
 	operation: RegisteredOperation,
 ): readonly OperationFailure[] {
-	return [
-		...new Set(denialReasonsOf(operation).map((reason) => DENIALS[reason])),
-	];
+	const byCode = new Map(
+		denialReasonsOf(operation).map((reason) => [
+			DENIALS[reason].code,
+			DENIALS[reason],
+		]),
+	);
+	return [...byCode.values()];
 }
 
 class CallFailedError extends Error {
