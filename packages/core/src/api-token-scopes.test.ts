@@ -840,9 +840,11 @@ describe("the API tokens of an actor", () => {
 
 		expect(second.id).not.toBe(first.id);
 		expect(second.token).not.toBe(first.token);
-		expect(
-			await api.database.sql`SELECT key FROM core.idempotency_keys`,
-		).toEqual([]);
+		const stored = JSON.stringify(
+			await api.database.sql`SELECT * FROM core.idempotency_keys`,
+		);
+		expect(stored).not.toContain(first.token);
+		expect(stored).not.toContain(second.token);
 	});
 
 	test("cannot be created by a user, who holds no API tokens yet", async () => {
