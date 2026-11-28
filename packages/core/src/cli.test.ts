@@ -102,7 +102,7 @@ async function runCliIn(
 	env: Readonly<Record<string, string>>,
 ): Promise<Run> {
 	const command = Bun.spawn([process.execPath, COMMAND, ...args], {
-		env: { PATH: process.env.PATH ?? "", HOME: home, ...env },
+		env: { HOME: home, ...env },
 		stdout: "pipe",
 		stderr: "pipe",
 	});

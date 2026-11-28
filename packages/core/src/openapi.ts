@@ -5,8 +5,8 @@ import type { SetTimer } from "./hook-timeout.ts";
 import {
 	API_VERSION,
 	IDEMPOTENCY_KEY_HEADER,
+	OPERATION_LIST_PATH,
 	OPERATION_PATH_TEMPLATE,
-	OPERATIONS_PATH,
 } from "./http-api.ts";
 import {
 	IDEMPOTENCY_KEY_PATTERN,
@@ -57,10 +57,9 @@ type OpenApiListing = {
 	readonly responses: Responses;
 };
 
-type OpenApiPathItem = {
-	readonly post?: OpenApiOperation;
-	readonly get?: OpenApiListing;
-};
+type OpenApiPathItem =
+	| { readonly post: OpenApiOperation; readonly get?: never }
+	| { readonly get: OpenApiListing; readonly post?: never };
 
 export type OpenApiDocument = {
 	readonly openapi: string;
@@ -201,7 +200,7 @@ export async function describeHttpApi(
 			headers: { CorrelationId: CORRELATION_ID_HEADER_SCHEMA },
 		},
 		paths: {
-			[OPERATIONS_PATH]: { get: OPERATION_LISTING },
+			[OPERATION_LIST_PATH]: { get: OPERATION_LISTING },
 			...Object.fromEntries(
 				operations
 					.toSorted((left, right) => left.name.localeCompare(right.name))

@@ -1,4 +1,5 @@
 import type { AuthenticatedToken, Authentication } from "./api-tokens.ts";
+import { parseJsonText } from "./json-text.ts";
 import type { Logger } from "./logger.ts";
 import type { OperationPipeline } from "./operation-pipeline.ts";
 import type { OperationRegistry } from "./operation-registry.ts";
@@ -17,15 +18,16 @@ export const API_VERSION = "1";
 export const OPERATION_PATH_TEMPLATE =
 	"/api/workspaces/{workspace}/operations/{operation}";
 
-const OPERATION_PATH = /^\/api\/workspaces\/([^/]+)\/operations\/([^/]+)$/;
+const OPERATION_PATH_PATTERN =
+	/^\/api\/workspaces\/([^/]+)\/operations\/([^/]+)$/;
 
 const OPERATION_METHOD = "POST";
 
-export const OPERATIONS_PATH = "/api/operations";
+export const OPERATION_LIST_PATH = "/api/operations";
 
-const OPERATIONS_METHOD = "GET";
+const OPERATION_LIST_METHOD = "GET";
 
-const OPERATIONS_METHOD_NOT_ALLOWED: Problem = {
+const OPERATION_LIST_METHOD_NOT_ALLOWED: Problem = {
 	...REQUEST_PROBLEMS.method_not_allowed,
 	detail: "the list of operations only accepts GET",
 };
@@ -84,9 +86,9 @@ export async function answerApiRequest(
 	api: HttpApi,
 	{ request, path, correlationId, logger }: ApiRequest,
 ): Promise<Response> {
-	if (path === OPERATIONS_PATH)
+	if (path === OPERATION_LIST_PATH)
 		return listOperations(api, { request, correlationId, logger });
-	const route = OPERATION_PATH.exec(path);
+	const route = OPERATION_PATH_PATTERN.exec(path);
 	if (route !== null && request.method !== OPERATION_METHOD) {
 		const response = problemResponse(
 			REQUEST_PROBLEMS.method_not_allowed,
@@ -116,7 +118,7 @@ export async function answerApiRequest(
 	const body = await limitedText(request);
 	if (body === undefined)
 		return problemResponse(REQUEST_PROBLEMS.body_too_large, correlationId);
-	const input = parsedJson(body);
+	const input = parseJsonText(body);
 	if (!input.parsed)
 		return problemResponse(REQUEST_PROBLEMS.invalid_input, correlationId);
 	const result = await api.pipeline.invoke({
@@ -137,12 +139,12 @@ async function listOperations(
 	api: HttpApi,
 	incoming: Omit<ApiRequest, "path">,
 ): Promise<Response> {
-	if (incoming.request.method !== OPERATIONS_METHOD) {
+	if (incoming.request.method !== OPERATION_LIST_METHOD) {
 		const response = problemResponse(
-			OPERATIONS_METHOD_NOT_ALLOWED,
+			OPERATION_LIST_METHOD_NOT_ALLOWED,
 			incoming.correlationId,
 		);
-		response.headers.set("Allow", OPERATIONS_METHOD);
+		response.headers.set("Allow", OPERATION_LIST_METHOD);
 		return response;
 	}
 	const authentication = await authenticateRequest(api, incoming);
@@ -179,10 +181,6 @@ function idempotencyKeyOf(request: Request): string | null {
 	return inside.replace(STRUCTURED_FIELD_ESCAPE, "$1");
 }
 
-type JsonBody =
-	| { readonly parsed: true; readonly value: unknown }
-	| { readonly parsed: false };
-
 async function limitedText(request: Request): Promise<string | undefined> {
 	if (request.body === null) return "";
 	const chunks: Uint8Array[] = [];
@@ -193,14 +191,4 @@ async function limitedText(request: Request): Promise<string | undefined> {
 		chunks.push(chunk);
 	}
 	return new TextDecoder().decode(Buffer.concat(chunks));
-}
-
-function parsedJson(text: string): JsonBody {
-	try {
-		const value: unknown = JSON.parse(text);
-		return { parsed: true, value };
-	} catch (error) {
-		if (error instanceof SyntaxError) return { parsed: false };
-		throw error;
-	}
 }

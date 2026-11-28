@@ -34,7 +34,7 @@ export type OperationsRead = {
 	readonly problems: readonly string[];
 };
 
-const OPERATION_NAME = /^[a-z]+(?:[A-Z][a-z0-9]*)+$/;
+export const OPERATION_NAME = /^[a-z]+(?:[A-Z][a-z0-9]*)+$/;
 
 const RIGHT_NAME = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*$/;
 

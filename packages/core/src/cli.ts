@@ -6,7 +6,13 @@ import {
 	InvalidCliConfigError,
 	loadCliConfigFromEnvironment,
 } from "./config.ts";
-import { IDEMPOTENCY_KEY_HEADER, OPERATIONS_PATH } from "./http-api.ts";
+import {
+	IDEMPOTENCY_KEY_HEADER,
+	OPERATION_LIST_PATH,
+	OPERATION_PATH_TEMPLATE,
+} from "./http-api.ts";
+import { parseJsonText } from "./json-text.ts";
+import { OPERATION_NAME } from "./operation-registry.ts";
 import { isPluginName } from "./plugin-name.ts";
 
 const USAGE = [
@@ -14,9 +20,11 @@ const USAGE = [
 	"       workbench <plugin> <operation> --workspace <uuid> --input <json> [--idempotency-key <key>]",
 ].join("\n");
 
-const LIST_COMMAND = "operations";
+const LISTING_CLI_COMMAND = "operations";
 
-const OPERATION_COMMAND = /^[a-z]+(?:-[a-z][a-z0-9]*)+$/;
+const KEBAB_CASE_OPERATION = /^[a-z]+(?:-[a-z][a-z0-9]*)+$/;
+
+const OPERATION_NAME_SEPARATOR = ".";
 
 const REQUEST_TIMEOUT_MS = 120_000;
 
@@ -25,9 +33,9 @@ const EXIT_CODES = { succeeded: 0, failed: 1, misused: 2 } as const;
 type ExitCode = (typeof EXIT_CODES)[keyof typeof EXIT_CODES];
 
 type Invocation =
-	| { readonly command: "list" }
+	| { readonly action: "list" }
 	| {
-			readonly command: "call";
+			readonly action: "call";
 			readonly operation: string;
 			readonly workspace: string;
 			readonly input: string;
@@ -38,9 +46,18 @@ type InvocationRead =
 	| { readonly valid: true; readonly invocation: Invocation }
 	| { readonly valid: false; readonly problem: string };
 
+type Exchange = {
+	readonly path: string;
+	readonly init: RequestInit;
+	answerOf(body: unknown): string | undefined;
+};
+
 const operationList = z.object({
 	operations: z.array(
-		z.object({ name: z.string(), kind: z.enum(OPERATION_KINDS) }),
+		z.object({
+			name: z.string(),
+			kind: z.enum(OPERATION_KINDS),
+		}),
 	),
 });
 
@@ -56,6 +73,13 @@ const problemDetails = z.object({
 	),
 });
 
+class UnexpectedOperationNameError extends Error {
+	constructor(name: string) {
+		super(`${JSON.stringify(name)} is not the name of an operation`);
+		this.name = "UnexpectedOperationNameError";
+	}
+}
+
 function readInvocation(args: readonly string[]): InvocationRead {
 	let parsed: ReturnType<typeof parseOptions>;
 	try {
@@ -66,18 +90,18 @@ function readInvocation(args: readonly string[]): InvocationRead {
 		throw error;
 	}
 	const { values, positionals } = parsed;
-	const [plugin, command, ...rest] = positionals;
-	if (plugin === LIST_COMMAND && command === undefined) {
+	const [plugin, operation, ...rest] = positionals;
+	if (plugin === LISTING_CLI_COMMAND && operation === undefined) {
 		if (Object.keys(values).length > 0)
 			return { valid: false, problem: "operations takes no options" };
-		return { valid: true, invocation: { command: "list" } };
+		return { valid: true, invocation: { action: "list" } };
 	}
 	if (
 		plugin === undefined ||
-		command === undefined ||
+		operation === undefined ||
 		rest.length > 0 ||
 		!isPluginName(plugin) ||
-		!OPERATION_COMMAND.test(command)
+		!KEBAB_CASE_OPERATION.test(operation)
 	)
 		return { valid: false, problem: "the command is not valid" };
 	const { workspace, input } = values;
@@ -85,12 +109,13 @@ function readInvocation(args: readonly string[]): InvocationRead {
 		return { valid: false, problem: "--workspace is required" };
 	if (input === undefined)
 		return { valid: false, problem: "--input is required" };
-	if (!isJson(input)) return { valid: false, problem: "--input is not JSON" };
+	if (!parseJsonText(input).parsed)
+		return { valid: false, problem: "--input is not JSON" };
 	return {
 		valid: true,
 		invocation: {
-			command: "call",
-			operation: `${plugin}.${operationNameOf(command)}`,
+			action: "call",
+			operation: `${plugin}${OPERATION_NAME_SEPARATOR}${camelCaseOf(operation)}`,
 			workspace,
 			input,
 			idempotencyKey: values["idempotency-key"],
@@ -111,46 +136,109 @@ function parseOptions(args: readonly string[]) {
 	});
 }
 
-function isJson(text: string): boolean {
-	try {
-		JSON.parse(text);
-		return true;
-	} catch (error) {
-		if (error instanceof SyntaxError) return false;
-		throw error;
-	}
-}
-
-function operationNameOf(command: string): string {
-	return command.replace(/-([a-z])/g, (_, letter: string) =>
+function camelCaseOf(kebabCase: string): string {
+	return kebabCase.replace(/-([a-z])/g, (_, letter: string) =>
 		letter.toUpperCase(),
 	);
 }
 
-function commandOf(operation: string): string {
-	const [owner = "", name = ""] = operation.split(".");
-	const kebab = name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
-	return `${owner} ${kebab}`;
+type QualifiedOperationName = {
+	readonly plugin: string;
+	readonly name: string;
+};
+
+function findQualifiedOperationName(
+	operation: string,
+): QualifiedOperationName | undefined {
+	const separator = operation.indexOf(OPERATION_NAME_SEPARATOR);
+	const plugin = operation.slice(0, separator);
+	const name = operation.slice(separator + OPERATION_NAME_SEPARATOR.length);
+	if (separator < 0 || !isPluginName(plugin) || !OPERATION_NAME.test(name))
+		return undefined;
+	return { plugin, name };
+}
+
+function cliCommandOf(operation: string): string {
+	const qualified = findQualifiedOperationName(operation);
+	if (qualified === undefined)
+		throw new UnexpectedOperationNameError(operation);
+	const { plugin, name } = qualified;
+	const kebabCase = name.replace(
+		/[A-Z]/g,
+		(letter) => `-${letter.toLowerCase()}`,
+	);
+	return `${plugin} ${kebabCase}`;
+}
+
+function exchangeFor(invocation: Invocation, config: CliConfig): Exchange {
+	const authorization = { Authorization: `Bearer ${config.token.reveal()}` };
+	switch (invocation.action) {
+		case "list":
+			return {
+				path: OPERATION_LIST_PATH,
+				init: { headers: authorization },
+				answerOf: listingOf,
+			};
+		case "call":
+			return {
+				path: operationPathOf(invocation),
+				init: {
+					method: "POST",
+					headers: {
+						...authorization,
+						...(invocation.idempotencyKey === undefined
+							? {}
+							: { [IDEMPOTENCY_KEY_HEADER]: invocation.idempotencyKey }),
+					},
+					body: invocation.input,
+				},
+				answerOf: (output) => `${JSON.stringify(output)}\n`,
+			};
+	}
+}
+
+function operationPathOf({
+	workspace,
+	operation,
+}: {
+	readonly workspace: string;
+	readonly operation: string;
+}): string {
+	return OPERATION_PATH_TEMPLATE.replace("{workspace}", () =>
+		encodeURIComponent(workspace),
+	).replace("{operation}", () => encodeURIComponent(operation));
+}
+
+function listingOf(body: unknown): string | undefined {
+	const listed = operationList.safeParse(body);
+	if (!listed.success) return undefined;
+	return listed.data.operations
+		.map(({ name, kind }) => `${cliCommandOf(name)}\t${name}\t${kind}\n`)
+		.join("");
 }
 
 async function invoke(
 	invocation: Invocation,
 	config: CliConfig,
 ): Promise<ExitCode> {
-	const response = await send(invocation, config);
+	const exchange = exchangeFor(invocation, config);
+	const response = await send(exchange, config.instanceUrl);
 	if (response === undefined) {
 		writeError(
 			`the instance at ${config.instanceUrl.origin} cannot be reached`,
 		);
 		return EXIT_CODES.failed;
 	}
-	const body = await jsonOf(response);
-	const answer = response.ok ? answerOf(invocation, body) : undefined;
+	const body = parseJsonText(await response.text());
+	const answer =
+		response.ok && body.parsed ? exchange.answerOf(body.value) : undefined;
 	if (answer !== undefined) {
 		process.stdout.write(answer);
 		return EXIT_CODES.succeeded;
 	}
-	const problem = problemDetails.safeParse(body);
+	const problem = problemDetails.safeParse(
+		body.parsed ? body.value : undefined,
+	);
 	writeError(
 		problem.success
 			? describeProblem(problem.data)
@@ -160,25 +248,13 @@ async function invoke(
 }
 
 async function send(
-	invocation: Invocation,
-	{ instanceUrl, token }: CliConfig,
+	{ path, init }: Exchange,
+	instanceUrl: URL,
 ): Promise<Response | undefined> {
-	const headers = new Headers({ Authorization: `Bearer ${token.reveal()}` });
-	const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 	try {
-		if (invocation.command === "list")
-			return await fetch(new URL(OPERATIONS_PATH, instanceUrl), {
-				headers,
-				signal,
-			});
-		if (invocation.idempotencyKey !== undefined)
-			headers.set(IDEMPOTENCY_KEY_HEADER, invocation.idempotencyKey);
-		const path = `/api/workspaces/${encodeURIComponent(invocation.workspace)}/operations/${encodeURIComponent(invocation.operation)}`;
 		return await fetch(new URL(path, instanceUrl), {
-			method: "POST",
-			headers,
-			body: invocation.input,
-			signal,
+			...init,
+			signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 		});
 	} catch (error) {
 		if (error instanceof TypeError || isTimeout(error)) return undefined;
@@ -188,26 +264,6 @@ async function send(
 
 function isTimeout(error: unknown): boolean {
 	return error instanceof DOMException && error.name === "TimeoutError";
-}
-
-async function jsonOf(response: Response): Promise<unknown> {
-	const text = await response.text();
-	try {
-		return JSON.parse(text);
-	} catch (error) {
-		if (error instanceof SyntaxError) return undefined;
-		throw error;
-	}
-}
-
-function answerOf(invocation: Invocation, body: unknown): string | undefined {
-	if (body === undefined) return undefined;
-	if (invocation.command === "call") return `${JSON.stringify(body)}\n`;
-	const listed = operationList.safeParse(body);
-	if (!listed.success) return undefined;
-	return listed.data.operations
-		.map(({ name, kind }) => `${commandOf(name)}\t${name}\t${kind}\n`)
-		.join("");
 }
 
 function describeProblem(problem: z.infer<typeof problemDetails>): string {
