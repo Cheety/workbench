@@ -102,6 +102,12 @@ function toolsCall(name: string, args: unknown): string {
 	});
 }
 
+const TOOLS_LIST = JSON.stringify({
+	jsonrpc: "2.0",
+	id: 1,
+	method: "tools/list",
+});
+
 const MCP_HEADERS = {
 	Accept: "application/json, text/event-stream",
 	"Content-Type": "application/json",
@@ -324,24 +330,26 @@ describe("an MCP request with a body over 1 MiB", () => {
 	});
 });
 
+const WITHOUT_VALID_TOKEN = [
+	{ case: "no token", reason: "missing_token", headers: async () => ({}) },
+	{
+		case: "an unknown token",
+		reason: "unknown_token",
+		headers: async () => ({ Authorization: "Bearer wbt_never-issued" }),
+	},
+	{
+		case: "an expired token",
+		reason: "expired_token",
+		headers: async (api: ApiInstance) => {
+			const token = await api.issueToken();
+			api.setClock(IN_A_MONTH);
+			return { Authorization: `Bearer ${token}` };
+		},
+	},
+];
+
 describe("an MCP request without a valid token", () => {
-	test.each([
-		{ case: "no token", reason: "missing_token", headers: async () => ({}) },
-		{
-			case: "an unknown token",
-			reason: "unknown_token",
-			headers: async () => ({ Authorization: "Bearer wbt_never-issued" }),
-		},
-		{
-			case: "an expired token",
-			reason: "expired_token",
-			headers: async (api: ApiInstance) => {
-				const token = await api.issueToken();
-				api.setClock(IN_A_MONTH);
-				return { Authorization: `Bearer ${token}` };
-			},
-		},
-	])(
+	test.each(WITHOUT_VALID_TOKEN)(
 		"is rejected with 401 problem details and calls no tool when it carries $case",
 		async ({ reason, headers }) => {
 			const api = await startLedgerInstance();
@@ -373,16 +381,36 @@ describe("an MCP request without a valid token", () => {
 		},
 	);
 
-	test("lists no tools", async () => {
-		const api = await startLedgerInstance();
+	test.each(WITHOUT_VALID_TOKEN)(
+		"is rejected with 401 problem details instead of the tools when it lists them with $case",
+		async ({ reason, headers }) => {
+			const api = await startLedgerInstance();
 
-		const connecting = mcp.connectedClient(api.url, "wbt_never-issued");
+			const response = await api.post(MCP_PATH, TOOLS_LIST, {
+				...MCP_HEADERS,
+				...(await headers(api)),
+			});
 
-		await expect(connecting).rejects.toThrow();
-		expect(api.logEntries).toContainEqual(
-			expect.objectContaining({ message: "request not authenticated" }),
-		);
-	});
+			expect(response.status).toBe(401);
+			expect(response.headers.get("WWW-Authenticate")).toBe("Bearer");
+			expect(await response.json()).toEqual({
+				type: "urn:workbench:problem:unauthenticated",
+				title: "Unauthorized",
+				status: 401,
+				detail: "the request needs a valid API token as a bearer token",
+				code: "unauthenticated",
+				correlationId: expect.any(String),
+				issues: [],
+			});
+			expect(api.logEntries).toContainEqual(
+				expect.objectContaining({
+					level: "warn",
+					message: "request not authenticated",
+					reason,
+				}),
+			);
+		},
+	);
 });
 
 describe("an MCP request with another method than POST", () => {
