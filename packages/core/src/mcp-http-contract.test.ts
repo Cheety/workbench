@@ -7,8 +7,8 @@ import {
 	OperationError,
 } from "@workbench/sdk";
 import { z } from "zod";
-import { IDEMPOTENCY_KEY_PATTERN } from "./idempotency-keys.ts";
 import type { PluginPackage } from "./kernel.ts";
+import { OPENAPI_DOCUMENT_PATH } from "./openapi.ts";
 import {
 	API_INSTANCE_WORKSPACE,
 	type ApiInstance,
@@ -20,6 +20,32 @@ const REFERENCE_DIRECTORY = join(
 	new URL("../../", import.meta.url).pathname,
 	"plugin-reference",
 );
+
+const documentedIdempotencyKey = z.object({
+	paths: z.object({
+		"/api/workspaces/{workspace}/operations/reference.createNote": z.object({
+			post: z.object({
+				parameters: z.tuple([
+					z.object({ name: z.literal("workspace") }),
+					z.object({
+						name: z.literal("Idempotency-Key"),
+						schema: z.object({ pattern: z.string() }),
+					}),
+				]),
+			}),
+		}),
+	}),
+});
+
+async function documentedIdempotencyKeyPattern(): Promise<string> {
+	const { paths } = documentedIdempotencyKey.parse(
+		await Bun.file(OPENAPI_DOCUMENT_PATH).json(),
+	);
+	const [, idempotencyKey] =
+		paths["/api/workspaces/{workspace}/operations/reference.createNote"].post
+			.parameters;
+	return idempotencyKey.schema.pattern;
+}
 
 const UNKNOWN_WORKSPACE = "00000000-0000-4000-8000-00000000bbbb";
 
@@ -109,6 +135,7 @@ function answerOfTool(result: unknown): Answer {
 
 describe("the reference operations listed as MCP tools", () => {
 	test("name createNote and listNotes with the input schema of the HTTP API contract under input", async () => {
+		const idempotencyKeyPattern = await documentedIdempotencyKeyPattern();
 		const api = await startReferenceInstance();
 		const client = await mcp.connectedClient(api.url, await api.issueToken());
 
@@ -130,7 +157,7 @@ describe("the reference operations listed as MCP tools", () => {
 						},
 						idempotencyKey: {
 							type: "string",
-							pattern: IDEMPOTENCY_KEY_PATTERN,
+							pattern: idempotencyKeyPattern,
 						},
 					},
 					required: ["workspace", "input"],

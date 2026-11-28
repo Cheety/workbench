@@ -6,7 +6,6 @@ import {
 	OperationError,
 } from "@workbench/sdk";
 import { z } from "zod";
-import { IDEMPOTENCY_KEY_PATTERN } from "./idempotency-keys.ts";
 import type { PluginPackage } from "./kernel.ts";
 import { OPENAPI_DOCUMENT_PATH } from "./openapi.ts";
 import {
@@ -103,6 +102,32 @@ function toolsCall(name: string, args: unknown): string {
 	});
 }
 
+const documentedIdempotencyKey = z.object({
+	paths: z.object({
+		"/api/workspaces/{workspace}/operations/reference.createNote": z.object({
+			post: z.object({
+				parameters: z.tuple([
+					z.object({ name: z.literal("workspace") }),
+					z.object({
+						name: z.literal("Idempotency-Key"),
+						schema: z.object({ pattern: z.string() }),
+					}),
+				]),
+			}),
+		}),
+	}),
+});
+
+async function documentedIdempotencyKeyPattern(): Promise<string> {
+	const { paths } = documentedIdempotencyKey.parse(
+		await Bun.file(OPENAPI_DOCUMENT_PATH).json(),
+	);
+	const [, idempotencyKey] =
+		paths["/api/workspaces/{workspace}/operations/reference.createNote"].post
+			.parameters;
+	return idempotencyKey.schema.pattern;
+}
+
 const TOOLS_LIST = JSON.stringify({
 	jsonrpc: "2.0",
 	id: 1,
@@ -133,6 +158,7 @@ describe("the MCP server of the instance", () => {
 
 describe("the operations listed as MCP tools", () => {
 	test("name each operation of the core and the active plugins with its input schema inside a workspace", async () => {
+		const idempotencyKeyPattern = await documentedIdempotencyKeyPattern();
 		const api = await startLedgerInstance();
 		const client = await mcp.connectedClient(api.url, await api.issueToken());
 
@@ -160,7 +186,7 @@ describe("the operations listed as MCP tools", () => {
 						},
 						required: ["amount"],
 					},
-					idempotencyKey: { type: "string", pattern: IDEMPOTENCY_KEY_PATTERN },
+					idempotencyKey: { type: "string", pattern: idempotencyKeyPattern },
 				},
 				required: ["workspace", "input"],
 				additionalProperties: false,
