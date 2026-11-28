@@ -287,6 +287,31 @@ describe("an API token scoped to operations", () => {
 		},
 	);
 
+	test("refuses an instance admin an operation on a workspace outside its scope with 403 operation_outside_token_scope", async () => {
+		const api = await startLedgerInstance();
+		const admin = await api.issueInstanceAdminToken();
+		const member = await api.issueIdentifiedToken("viewer");
+		const scoped = await createToken(api, admin.token, {
+			operations: ["core.revokeMembership"],
+			workspaces: null,
+			validDays: 7,
+		});
+
+		const response = await api.post(
+			onWorkspace(WORKSPACE, "core.grantMembership"),
+			JSON.stringify({
+				actor: { kind: "service_account", id: member.serviceAccountId },
+				role: "editor",
+			}),
+			bearer(scoped.token),
+		);
+
+		expect(response.status).toBe(403);
+		expect(await response.json()).toMatchObject({
+			code: "operation_outside_token_scope",
+		});
+	});
+
 	test("rejects a scope naming an operation neither the core nor a plugin has with core.unknown_scope_operation", async () => {
 		const api = await startLedgerInstance();
 		const owner = await api.issueToken("owner");
