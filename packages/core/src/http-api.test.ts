@@ -792,9 +792,18 @@ describe("the operations listed over HTTP", () => {
 			headers: bearer(token),
 		});
 
+		const listed = z
+			.object({ operations: z.array(z.looseObject({})) })
+			.parse(await response.json());
+		expect(documentedList.safeParse(listed).error?.issues).toBeUndefined();
 		expect(
-			documentedList.safeParse(await response.json()).error?.issues,
-		).toBeUndefined();
+			documentedList.safeParse({
+				operations: listed.operations.map((operation) => ({
+					...operation,
+					kind: "command",
+				})),
+			}).success,
+		).toBe(false);
 	});
 
 	test("are not listed without a valid token", async () => {
