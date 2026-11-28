@@ -1,4 +1,4 @@
-import type { Authentication } from "./api-tokens.ts";
+import type { AuthenticatedToken, Authentication } from "./api-tokens.ts";
 import type { Logger } from "./logger.ts";
 import type { OperationPipeline } from "./operation-pipeline.ts";
 import {
@@ -42,7 +42,7 @@ type ApiAuthentication =
 	| { readonly authenticated: false; readonly reason: "missing_token" };
 
 export type RequestAuthentication =
-	| Extract<Authentication, { readonly authenticated: true }>
+	| AuthenticatedToken
 	| { readonly authenticated: false; readonly response: Response };
 
 export async function authenticateRequest(

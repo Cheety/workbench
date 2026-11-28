@@ -6,7 +6,8 @@ import {
 	ListToolsRequestSchema,
 	type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { Actor, OperationKind } from "@workbench/sdk";
+import type { OperationKind } from "@workbench/sdk";
+import type { AuthenticatedToken } from "./api-tokens.ts";
 import {
 	type ApiRequest,
 	authenticateRequest,
@@ -54,12 +55,6 @@ export type McpApi = Pick<HttpApi, "authenticate" | "pipeline"> & {
 	readonly operations: Pick<OperationRegistry, "list">;
 };
 
-type ToolCaller = {
-	readonly actor: Actor;
-	readonly apiTokenId: string;
-	readonly correlationId: string;
-};
-
 export async function answerMcpRequest(
 	api: McpApi,
 	incoming: ApiRequest,
@@ -72,11 +67,7 @@ export async function answerMcpRequest(
 	}
 	const authentication = await authenticateRequest(api, incoming);
 	if (!authentication.authenticated) return authentication.response;
-	const server = mcpServerFor(api, {
-		actor: authentication.actor,
-		apiTokenId: authentication.apiTokenId,
-		correlationId,
-	});
+	const server = mcpServerFor(api, authentication, correlationId);
 	const transport = new WebStandardStreamableHTTPServerTransport({
 		enableJsonResponse: true,
 		maxRequestBodySize: MAX_BODY_BYTES,
@@ -89,13 +80,17 @@ export async function answerMcpRequest(
 	}
 }
 
-function mcpServerFor(api: McpApi, caller: ToolCaller): Server {
+function mcpServerFor(
+	api: McpApi,
+	authentication: AuthenticatedToken,
+	correlationId: string,
+): Server {
 	const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
 	server.setRequestHandler(ListToolsRequestSchema, () => ({
 		tools: api.operations.list().map(toolOf),
 	}));
 	server.setRequestHandler(CallToolRequestSchema, ({ params }) =>
-		callTool(api, caller, params),
+		callTool(api, authentication, correlationId, params),
 	);
 	return server;
 }
@@ -118,7 +113,8 @@ function toolOf(operation: RegisteredOperation): Tool {
 
 async function callTool(
 	api: McpApi,
-	caller: ToolCaller,
+	authentication: AuthenticatedToken,
+	correlationId: string,
 	params: {
 		readonly name: string;
 		readonly arguments?: Readonly<Record<string, unknown>> | undefined;
@@ -126,20 +122,20 @@ async function callTool(
 ): Promise<CallToolResult> {
 	const workspace = params.arguments?.workspace;
 	if (typeof workspace !== "string" || !isWorkspaceId(workspace))
-		return toolError(INVALID_WORKSPACE_ARGUMENT, caller.correlationId);
+		return toolError(INVALID_WORKSPACE_ARGUMENT, correlationId);
 	const result = await api.pipeline.invoke({
 		operation: params.name.replace(
 			TOOL_NAME_SEPARATOR,
 			OPERATION_NAME_SEPARATOR,
 		),
-		actor: caller.actor,
-		apiTokenId: caller.apiTokenId,
+		actor: authentication.actor,
+		apiTokenId: authentication.apiTokenId,
 		idempotencyKey: null,
 		workspace,
 		input: params.arguments?.input,
-		correlationId: caller.correlationId,
+		correlationId: correlationId,
 	});
-	if (!result.ok) return toolError(result.failure, caller.correlationId);
+	if (!result.ok) return toolError(result.failure, correlationId);
 	return { content: [{ type: "text", text: JSON.stringify(result.output) }] };
 }
 
