@@ -2450,7 +2450,10 @@ describe("jobs of a plugin", () => {
 		expect(plugins.failures).toEqual([]);
 		expect(plugins.jobs.names()).toEqual(["board.archiveCards"]);
 		expect(plugins.jobs.find("board.archiveCards")).toEqual(
-			expect.objectContaining({ plugin: "board", name: "board.archiveCards" }),
+			expect.objectContaining({
+				owner: { kind: "plugin", name: "board" },
+				name: "board.archiveCards",
+			}),
 		);
 	});
 

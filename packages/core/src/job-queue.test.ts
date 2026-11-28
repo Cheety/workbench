@@ -11,6 +11,7 @@ import { Secret } from "./config.ts";
 import { type HookTimeout, setSystemTimer } from "./hook-timeout.ts";
 import { createJobQueue, enqueueJob } from "./job-queue.ts";
 import { type JobRegistry, readJobs, registerJobs } from "./job-registry.ts";
+import { pluginOwner } from "./owner.ts";
 import { startPollLoop } from "./poll-loop.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
@@ -52,7 +53,8 @@ function registryOf<Payload = { cardId: string }>(
 	...definitions: readonly JobDefinition<Payload>[]
 ): JobRegistry {
 	return registerJobs(
-		readJobs("mailer", { jobs: definitions, cronJobs: undefined }).value,
+		readJobs(pluginOwner("mailer"), { jobs: definitions, cronJobs: undefined })
+			.value,
 	);
 }
 
@@ -108,7 +110,7 @@ async function enqueueReminder(
 	await sql.begin((transaction) =>
 		enqueueJob(transaction, jobs, {
 			id,
-			plugin: "mailer",
+			owner: pluginOwner("mailer"),
 			definition: sendingReminders(async () => {}),
 			payload: { cardId: "card-1" },
 			enqueuedAt: NOW,
@@ -176,7 +178,7 @@ async function enqueue<Payload>(
 	await sql.begin((transaction) =>
 		enqueueJob(transaction, registryOf(definition), {
 			id: JOB,
-			plugin: "mailer",
+			owner: pluginOwner("mailer"),
 			definition,
 			payload,
 			enqueuedAt: NOW,
@@ -1052,7 +1054,7 @@ describe("a job that fails", () => {
 
 function everyMinute(run: Date[]): JobRegistry {
 	return registerJobs(
-		readJobs("mailer", {
+		readJobs(pluginOwner("mailer"), {
 			jobs: undefined,
 			cronJobs: [
 				defineCronJob({
@@ -1214,7 +1216,7 @@ describe("a cron job of an instance with two processes", () => {
 		cleanups.push(() => second.close());
 		const run: Date[] = [];
 		const jobs = registerJobs(
-			readJobs("mailer", {
+			readJobs(pluginOwner("mailer"), {
 				jobs: undefined,
 				cronJobs: [
 					defineCronJob({
@@ -1281,7 +1283,7 @@ describe("a cron job of an instance with two processes", () => {
 	test("is not enqueued by a mutation under the name of a job", async () => {
 		const database = await migratedDatabase();
 		const jobs = registerJobs(
-			readJobs("mailer", {
+			readJobs(pluginOwner("mailer"), {
 				jobs: undefined,
 				cronJobs: [
 					defineCronJob({

@@ -6,12 +6,13 @@ import {
 } from "@workbench/sdk";
 import { type CronSchedule, readCronSchedule } from "./cron-schedule.ts";
 import { isRecord } from "./is-record.ts";
+import { type Owner, ownerName } from "./owner.ts";
 import { quote } from "./quote.ts";
 import { type Validator, validatorOf } from "./schema-validation.ts";
 
 export type RegisteredEnqueuedJob = {
 	readonly kind: "enqueued";
-	readonly plugin: string;
+	readonly owner: Owner;
 	readonly name: string;
 	readonly maxAttempts: number;
 	readonly validatePayload: Validator;
@@ -20,7 +21,7 @@ export type RegisteredEnqueuedJob = {
 
 export type RegisteredCronJob = {
 	readonly kind: "cron";
-	readonly plugin: string;
+	readonly owner: Owner;
 	readonly name: string;
 	readonly maxAttempts: number;
 	readonly schedule: CronSchedule;
@@ -76,7 +77,7 @@ type JobListReader = {
 	): JobRead;
 };
 
-type CommonParts = Pick<RegisteredJob, "plugin" | "name" | "maxAttempts"> & {
+type CommonParts = Pick<RegisteredJob, "owner" | "name" | "maxAttempts"> & {
 	run(job: unknown, ctx: JobContext): Promise<void>;
 };
 
@@ -122,13 +123,13 @@ const CRON_JOBS: JobListReader = {
 	},
 };
 
-export function readJobs(plugin: string, declared: DeclaredJobs): JobsRead {
+export function readJobs(owner: Owner, declared: DeclaredJobs): JobsRead {
 	const value: RegisteredJob[] = [];
 	const problems: string[] = [];
 	const seen = new Set<string>();
 	for (const read of [
-		...readList(plugin, declared.jobs, ENQUEUED_JOBS),
-		...readList(plugin, declared.cronJobs, CRON_JOBS),
+		...readList(owner, declared.jobs, ENQUEUED_JOBS),
+		...readList(owner, declared.cronJobs, CRON_JOBS),
 	]) {
 		if (!read.valid) {
 			problems.push(read.problem);
@@ -145,7 +146,7 @@ export function readJobs(plugin: string, declared: DeclaredJobs): JobsRead {
 }
 
 function readList(
-	plugin: string,
+	owner: Owner,
 	declared: unknown,
 	list: JobListReader,
 ): readonly JobRead[] {
@@ -155,12 +156,12 @@ function readList(
 			invalid(`${list.name} must be a list of ${list.subject} definitions`),
 		];
 	return declared.map((candidate, position) =>
-		readJob(plugin, position, candidate, list),
+		readJob(owner, position, candidate, list),
 	);
 }
 
 function readJob(
-	plugin: string,
+	owner: Owner,
 	position: number,
 	candidate: unknown,
 	list: JobListReader,
@@ -174,7 +175,7 @@ function readJob(
 		return invalid(
 			`${list.name}[${position}].name must be in camelCase, such as ${quote(list.exampleName)}`,
 		);
-	const fullName = jobName(plugin, { name });
+	const fullName = jobName(ownerName(owner), { name });
 	if (
 		typeof maxAttempts !== "number" ||
 		!Number.isInteger(maxAttempts) ||
@@ -190,7 +191,7 @@ function readJob(
 		);
 	return list.read(
 		{
-			plugin,
+			owner,
 			name: fullName,
 			maxAttempts,
 			run: async (job, ctx) => {

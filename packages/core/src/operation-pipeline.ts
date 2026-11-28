@@ -13,18 +13,12 @@ import { describeThrown } from "./failure-reason.ts";
 import { enqueueJob } from "./job-queue.ts";
 import type { JobRegistry } from "./job-registry.ts";
 import type { Logger } from "./logger.ts";
-import {
-	type OperationOwner,
-	type OperationRegistry,
-	ownerName,
-	type RegisteredOperation,
+import type {
+	OperationRegistry,
+	RegisteredOperation,
 } from "./operation-registry.ts";
+import { type Owner, ownerName, schemaOf } from "./owner.ts";
 import { quote } from "./quote.ts";
-import {
-	CORE_SCHEMA,
-	pluginSchemaName,
-	type SchemaName,
-} from "./schema-name.ts";
 import type { ValidationIssue } from "./schema-validation.ts";
 import { statementsIn } from "./transaction-statements.ts";
 import { workspaceExists } from "./workspaces.ts";
@@ -225,15 +219,6 @@ function inTransaction(
 	return BEGIN_TRANSACTION[operation.kind](sql, body);
 }
 
-function schemaOf(owner: OperationOwner): SchemaName {
-	switch (owner.kind) {
-		case "core":
-			return CORE_SCHEMA;
-		case "plugin":
-			return pluginSchemaName(owner.name);
-	}
-}
-
 async function requireWorkspace(
 	transaction: SQL,
 	workspace: string,
@@ -306,7 +291,7 @@ function enqueuerOf(
 				throw new JobEnqueuedByQueryError(operation.name);
 			await enqueueJob(transaction, sources.jobs, {
 				id: sources.newJobId(),
-				plugin: ownerName(operation.owner),
+				owner: operation.owner,
 				definition,
 				payload,
 				enqueuedAt: sources.now(),
@@ -361,7 +346,7 @@ async function runExecute(
 function logAndMapFailure(
 	error: unknown,
 	logger: Logger,
-	owner: OperationOwner,
+	owner: Owner,
 ): OperationFailure {
 	if (error instanceof WorkspaceNotFoundError) return WORKSPACE_NOT_FOUND;
 	if (error instanceof OperationError)

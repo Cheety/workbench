@@ -16,6 +16,7 @@ import {
 	type RegisteredOperation,
 	registerOperations,
 } from "./operation-registry.ts";
+import { pluginOwner } from "./owner.ts";
 import type { CoreSchemaMigration } from "./schema-migrations.ts";
 import { type LogEntry, recordingLogger } from "./testing/recording-logger.ts";
 
@@ -365,7 +366,7 @@ describe("events of an instance", () => {
 describe("jobs of an instance", () => {
 	const archiveLabels: RegisteredJob = {
 		kind: "enqueued",
-		plugin: "board",
+		owner: pluginOwner("board"),
 		name: "board.archiveLabels",
 		maxAttempts: 3,
 		validatePayload: async (value) => ({ valid: true, value }),
