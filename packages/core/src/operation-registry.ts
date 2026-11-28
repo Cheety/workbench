@@ -3,6 +3,7 @@ import {
 	OPERATION_KINDS,
 	OPERATION_TARGETS,
 	type OperationContext,
+	type OperationDefinition,
 	type OperationKind,
 	type OperationTarget,
 	type Schema,
@@ -77,20 +78,27 @@ export function defineInstanceOperation<Input, Output>(
 	return definition;
 }
 
-export class InvalidInstanceOperationError extends Error {
+export class InvalidCoreOperationError extends Error {
 	constructor(name: string) {
 		super(
-			`the instance operation ${quote(name)} must be named in camelCase, name a right of its owner and declare its input and output as schemas`,
+			`the core operation ${quote(name)} must be named in camelCase, name a right of its owner and declare its input and output as schemas`,
 		);
-		this.name = "InvalidInstanceOperationError";
+		this.name = "InvalidCoreOperationError";
 	}
 }
 
-export function instanceOperationOf(
+type CoreOperationDeclaration = {
+	readonly name: string;
+	readonly kind: OperationKind;
+	readonly right: string;
+	readonly input: unknown;
+	readonly output: unknown;
+};
+
+function describedCoreOperationOf(
 	owner: Owner,
-	definition: InstanceOperationDefinition<unknown, unknown>,
-	grant: InstanceAdminGrant | EveryActorGrant,
-): InstanceOperation {
+	definition: CoreOperationDeclaration,
+): DescribedOperation {
 	const validateInput = validatorOf(definition.input);
 	const validateOutput = validatorOf(definition.output);
 	if (
@@ -99,7 +107,7 @@ export function instanceOperationOf(
 		validateInput === undefined ||
 		validateOutput === undefined
 	)
-		throw new InvalidInstanceOperationError(definition.name);
+		throw new InvalidCoreOperationError(definition.name);
 	return {
 		name: qualifiedOperationName({
 			plugin: ownerName(owner),
@@ -108,12 +116,35 @@ export function instanceOperationOf(
 		owner,
 		kind: definition.kind,
 		right: definition.right,
-		scope: "instance",
-		grant,
 		validateInput,
 		validateOutput,
 		describeInput: jsonSchemaReaderOf(definition.input, "input"),
 		describeOutput: jsonSchemaReaderOf(definition.output, "output"),
+	};
+}
+
+export function instanceOperationOf(
+	owner: Owner,
+	definition: InstanceOperationDefinition<unknown, unknown>,
+	grant: InstanceAdminGrant | EveryActorGrant,
+): InstanceOperation {
+	return {
+		...describedCoreOperationOf(owner, definition),
+		scope: "instance",
+		grant,
+		execute: (value, ctx) => definition.execute(value, ctx),
+	};
+}
+
+export function instanceAdminWorkspaceOperationOf(
+	owner: Owner,
+	definition: OperationDefinition<unknown, unknown>,
+): WorkspaceOperation {
+	return {
+		...describedCoreOperationOf(owner, definition),
+		scope: "workspace",
+		target: definition.target,
+		grant: { by: "instance_admin" },
 		execute: (value, ctx) => definition.execute(value, ctx),
 	};
 }

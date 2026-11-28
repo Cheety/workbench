@@ -10,6 +10,7 @@ import {
 	revokeMembershipOperation,
 } from "./memberships.ts";
 import {
+	instanceAdminWorkspaceOperationOf,
 	instanceOperationOf,
 	type RegisteredOperation,
 	readOperations,
@@ -49,23 +50,12 @@ function readCoreOperations(): readonly RegisteredOperation[] {
 		[listAuditEntries],
 		rights.value,
 	);
-	const grantedToInstanceAdmins = readOperations(
-		CORE_OWNER,
-		[grantMembershipOperation, revokeMembershipOperation],
-		rights.value,
-	);
-	const problems = [
-		...rights.problems,
-		...grantedByRole.problems,
-		...grantedToInstanceAdmins.problems,
-	];
+	const problems = [...rights.problems, ...grantedByRole.problems];
 	if (problems.length > 0) throw new InvalidCoreOperationsError(problems);
 	return [
 		...grantedByRole.value,
-		...grantedToInstanceAdmins.value.map((operation) => ({
-			...operation,
-			grant: INSTANCE_ADMIN,
-		})),
+		instanceAdminWorkspaceOperationOf(CORE_OWNER, grantMembershipOperation),
+		instanceAdminWorkspaceOperationOf(CORE_OWNER, revokeMembershipOperation),
 		instanceOperationOf(CORE_OWNER, createWorkspaceOperation, INSTANCE_ADMIN),
 		instanceOperationOf(CORE_OWNER, defineRoleOperation, INSTANCE_ADMIN),
 		instanceOperationOf(CORE_OWNER, listInstanceAuditEntries, INSTANCE_ADMIN),
