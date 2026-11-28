@@ -11,6 +11,7 @@ import {
 	type OperationPipeline,
 	type OperationResult,
 } from "./operation-pipeline.ts";
+import { roleName } from "./role-name.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
 	type MigrationRunner,
@@ -112,7 +113,7 @@ async function startBellPipeline(
 	await grantMembership(database.sql, {
 		workspace: WORKSPACE,
 		actor: ALICE,
-		role: "owner",
+		role: roleName("owner"),
 		createdAt,
 	});
 	const pool = new SQL(database.url, { max: 2 });

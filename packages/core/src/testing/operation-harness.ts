@@ -17,6 +17,7 @@ import {
 	type OperationResult,
 } from "../operation-pipeline.ts";
 import { readPluginPackage } from "../plugin-discovery.ts";
+import { roleName } from "../role-name.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
 	type MigrationRunner,
@@ -215,7 +216,7 @@ function harnessOf(
 					await grantMembership(transaction, {
 						workspace: id,
 						actor,
-						role,
+						role: roleName(role),
 						createdAt,
 					});
 			});

@@ -8,6 +8,7 @@ import { isInstanceAdminOf } from "../instance-admins.ts";
 import { type PluginPackage, startPlugins } from "../kernel.ts";
 import { grantMembership } from "../memberships.ts";
 import { createOperationPipeline } from "../operation-pipeline.ts";
+import { roleName } from "../role-name.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
 	type MigrationRunner,
@@ -198,7 +199,7 @@ async function startedApiInstance(
 		await grantMembership(database.sql, {
 			workspace: API_INSTANCE_WORKSPACE,
 			actor: { kind: "service_account", id: issued.serviceAccountId },
-			role,
+			role: roleName(role),
 			createdAt: clock,
 		});
 		return issued;

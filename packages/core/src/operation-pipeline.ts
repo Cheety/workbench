@@ -39,6 +39,7 @@ import type {
 } from "./operation-registry.ts";
 import { type Owner, ownerName, schemaOf } from "./owner.ts";
 import { quote } from "./quote.ts";
+import type { RoleName } from "./role-name.ts";
 import { customRoleGrants, isStartRole } from "./roles.ts";
 import type { ValidationIssue } from "./schema-validation.ts";
 import { statementsIn } from "./transaction-statements.ts";
@@ -586,7 +587,7 @@ async function authorizeOnWorkspace(
 
 async function roleGrants(
 	transaction: SQL,
-	role: string,
+	role: RoleName,
 	{
 		right,
 		grantedTo,

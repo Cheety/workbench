@@ -8,26 +8,26 @@ import {
 import type { SQL } from "bun";
 import { z } from "zod";
 import { quote } from "./quote.ts";
-import { roleName } from "./roles.ts";
+import { type RoleName, roleNameSchema } from "./role-name.ts";
 import { isWorkspaceId } from "./workspaces.ts";
 
 export type NewMembership = {
 	readonly workspace: string;
 	readonly actor: Actor;
-	readonly role: string;
+	readonly role: RoleName;
 	readonly createdAt: Date;
 };
 
 export type FoundMembership =
 	| { readonly kind: "no_workspace" }
 	| { readonly kind: "not_member" }
-	| { readonly kind: "member"; readonly role: string };
+	| { readonly kind: "member"; readonly role: RoleName };
 
 export type MembershipLock = "share" | "none";
 
 const MAX_ACTOR_ID_LENGTH = 200;
 
-const membershipRow = z.object({ role: z.string() });
+const membershipRow = z.object({ role: roleNameSchema });
 
 const workspaceRow = z.object({ id: z.string() });
 
@@ -97,7 +97,7 @@ export const grantMembershipOperation = defineOperation({
 	kind: "mutation",
 	target: "workspace",
 	right: membershipManage.name,
-	input: z.object({ actor: memberActor, role: roleName }),
+	input: z.object({ actor: memberActor, role: roleNameSchema }),
 	output: z.object({
 		workspace: z.string(),
 		actor: memberActor,

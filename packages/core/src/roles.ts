@@ -8,16 +8,13 @@ import type { SQL } from "bun";
 import { z } from "zod";
 import { defineInstanceOperation } from "./operation-registry.ts";
 import { quote } from "./quote.ts";
-
-const ROLE_NAME = /^[a-z][a-z0-9-]{0,62}$/;
+import { type RoleName, roleNameSchema } from "./role-name.ts";
 
 const MAX_RIGHTS_OF_A_ROLE = 200;
 
 const MAX_RIGHT_NAME_LENGTH = 200;
 
-export const roleName = z.string().regex(ROLE_NAME);
-
-export function isStartRole(role: string): role is StartRole {
+export function isStartRole(role: RoleName): role is RoleName & StartRole {
 	return START_ROLES.some((startRole) => startRole === role);
 }
 
@@ -25,7 +22,7 @@ const grantedRow = z.object({ granted: z.boolean() });
 
 export async function customRoleGrants(
 	sql: SQL,
-	role: string,
+	role: RoleName,
 	right: string,
 ): Promise<boolean> {
 	const [row] = await sql`
@@ -45,7 +42,7 @@ export const defineRoleOperation = defineInstanceOperation({
 	kind: "mutation",
 	right: roleDefine.name,
 	input: z.object({
-		name: roleName,
+		name: roleNameSchema,
 		rights: z
 			.array(z.string().min(1).max(MAX_RIGHT_NAME_LENGTH))
 			.max(MAX_RIGHTS_OF_A_ROLE)

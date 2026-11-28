@@ -19,6 +19,7 @@ import {
 	createOperationPipeline,
 	type OperationPipeline,
 } from "./operation-pipeline.ts";
+import { roleName } from "./role-name.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
 	type MigrationRunner,
@@ -465,19 +466,19 @@ async function startLedgerPipeline(
 	await grantMembership(database.sql, {
 		workspace: WORKSPACE,
 		actor: ALICE,
-		role: "owner",
+		role: roleName("owner"),
 		createdAt: new Date("2026-11-27T09:00:00.000Z"),
 	});
 	await grantMembership(database.sql, {
 		workspace: WORKSPACE,
 		actor: BOB,
-		role: "owner",
+		role: roleName("owner"),
 		createdAt: new Date("2026-11-27T09:00:00.000Z"),
 	});
 	await grantMembership(database.sql, {
 		workspace: WORKSPACE,
 		actor: ALICE_AS_SERVICE_ACCOUNT,
-		role: "owner",
+		role: roleName("owner"),
 		createdAt: new Date("2026-11-27T09:00:00.000Z"),
 	});
 	const pool = new SQL(database.url, { max: CONCURRENT_CALLS });

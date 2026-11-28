@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { Glob, type Subprocess, type TCPSocketListener } from "bun";
 import { z } from "zod";
 import { grantMembership } from "./memberships.ts";
+import { roleName } from "./role-name.ts";
 import { CORE_MIGRATIONS_DIRECTORY } from "./schema-migrations.ts";
 import { mcpTestbed } from "./testing/mcp-testbed.ts";
 import {
@@ -135,7 +136,7 @@ async function operatorTokenOfOwner(database: FreshDatabase): Promise<string> {
 	await grantMembership(database.sql, {
 		workspace: WORKSPACE.id,
 		actor: { kind: "service_account", id: serviceAccount },
-		role: "owner",
+		role: roleName("owner"),
 		createdAt: WORKSPACE.createdAt,
 	});
 	return token;
