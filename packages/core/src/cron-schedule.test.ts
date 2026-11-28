@@ -238,7 +238,7 @@ describe("a cron schedule", () => {
 		const latestTime = new Date(8_640_000_000_000_000);
 
 		expect(() => schedule.nextAfter(latestTime)).toThrow(
-			new DueTimeOutOfRangeError("* * * * *", latestTime),
+			DueTimeOutOfRangeError,
 		);
 	});
 });

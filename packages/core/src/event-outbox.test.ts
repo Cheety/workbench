@@ -297,6 +297,22 @@ function cancellationBehindAGate(database: FreshDatabase): {
 	return { gate, cancellation };
 }
 
+function unreachablePostgres(database: FreshDatabase): {
+	readonly sql: SQL;
+	readonly cancellation: SQL;
+} {
+	const gate = PostgresGate.create(database.url);
+	gate.refuse();
+	const sql = new SQL(gate.url, { max: 1, connectionTimeout: 1 });
+	const cancellation = new SQL(gate.url, { max: 1, connectionTimeout: 1 });
+	cleanups.push(async () => {
+		await cancellation.close();
+		await sql.close();
+		gate.close();
+	});
+	return { sql, cancellation };
+}
+
 async function refuseNewConnections(database: FreshDatabase): Promise<void> {
 	const name = new URL(database.url).pathname.slice(1);
 	const admin = new SQL(TEST_DATABASE_URL, { max: 1 });
@@ -638,14 +654,17 @@ describe("event delivery", () => {
 
 	test("asks Postgres for nothing until the core schema exists", async () => {
 		const database = await freshDatabase();
+		const unreachable = unreachablePostgres(database);
 		const { delivery } = deliveryOf({
-			sql: database.sql,
-			cancellation: database.cancellation,
+			sql: unreachable.sql,
+			cancellation: unreachable.cancellation,
 			events: registryOf(subscribing("search", labelRenamed, async () => {})),
 			hasCoreSchema: () => false,
 		});
 
-		await expect(delivery.deliverDue(NOT_STOPPED)).resolves.toBeUndefined();
+		const delivered = delivery.deliverDue(NOT_STOPPED);
+
+		await expect(delivered).resolves.toBeUndefined();
 	});
 
 	test("hands an event to its handler once when two deliveries run at the same time", async () => {

@@ -99,6 +99,15 @@ function billing(deliverInvoice: DeliverInvoice): PluginPackage {
 			return { id };
 		},
 	});
+	const draftInvoice = defineOperation({
+		...sendInvoice,
+		name: "draftInvoice",
+		execute: async ({ amount }, ctx) => {
+			const id = ctx.newId();
+			await ctx.sql`INSERT INTO invoices (id, amount) VALUES (${id}, ${amount})`;
+			return { id };
+		},
+	});
 	const sendInvoiceWithUndeclaredJob = defineOperation({
 		...sendInvoice,
 		name: "sendInvoiceWithUndeclaredJob",
@@ -149,6 +158,7 @@ function billing(deliverInvoice: DeliverInvoice): PluginPackage {
 				manifest: { name: "billing", capabilities: [DATABASE_CAPABILITY] },
 				operations: [
 					sendInvoice,
+					draftInvoice,
 					sendInvoiceWithUndeclaredJob,
 					sendInvoiceWithMalformedJob,
 					countInvoices,
@@ -720,6 +730,12 @@ describe("the pipeline", () => {
 	test.each([
 		["once after a mutation that enqueued a job", "billing.sendInvoice", 5, 1],
 		["not after a mutation that was rolled back", "billing.sendInvoice", -5, 0],
+		[
+			"not after a committed mutation that enqueued nothing",
+			"billing.draftInvoice",
+			5,
+			0,
+		],
 		["not after a query", "billing.countInvoices", 5, 0],
 	])(
 		"tells the job queue that jobs were committed %s",

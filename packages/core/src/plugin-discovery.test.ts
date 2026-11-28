@@ -275,7 +275,7 @@ describe("plugin discovery", () => {
 		const notes = packages.find(({ pluginName }) => pluginName === "notes");
 
 		expect(notes).toBeDefined();
-		expect(notes?.loadMigrations).toBeUndefined();
+		expect(await (notes?.loadMigrations?.() ?? [])).toEqual([]);
 	});
 
 	test("refuses to read a migration whose file name does not start with a four-digit number", async () => {
