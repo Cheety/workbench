@@ -339,6 +339,8 @@ describe("a job that exceeds its timeout", () => {
 				retryInMs: 2500,
 			}),
 		]);
+		expect(timer.delaysMs).toEqual([250, 250]);
+		expect(timer.pendingCount()).toBe(0);
 	});
 
 	test("counts as failed when its payload schema does not finish validating in time", async () => {
@@ -371,6 +373,7 @@ describe("a job that exceeds its timeout", () => {
 				retryInMs: 2500,
 			}),
 		]);
+		expect(timer.delaysMs).toEqual([250]);
 	});
 
 	test("is not run when its payload schema finishes validating after its time is up", async () => {
@@ -415,6 +418,7 @@ describe("a job that exceeds its timeout", () => {
 		await database.sql`SELECT 1`;
 
 		expect(run).toEqual([]);
+		expect(timer.delaysMs).toEqual([250]);
 	});
 
 	test("is refused what it writes after its time is up, and leaves nothing of it behind", async () => {

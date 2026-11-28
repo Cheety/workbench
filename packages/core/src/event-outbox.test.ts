@@ -457,6 +457,8 @@ describe("event delivery", () => {
 				retryInMs: 500,
 			}),
 		]);
+		expect(timer.delaysMs).toEqual([250, 250]);
+		expect(timer.pendingCount()).toBe(0);
 	});
 
 	test("gives up on a payload schema that does not finish validating in time, as on a handler", async () => {
@@ -491,6 +493,7 @@ describe("event delivery", () => {
 				attempt: 1,
 			}),
 		]);
+		expect(timer.delaysMs).toEqual([250]);
 	});
 
 	test("does not start a handler whose payload schema finishes validating after its time is up", async () => {
@@ -534,6 +537,7 @@ describe("event delivery", () => {
 		await database.sql`SELECT 1`;
 
 		expect(handled).toEqual([]);
+		expect(timer.delaysMs).toEqual([250]);
 	});
 
 	test("tells the operator the wait it stored for the retry, though every draw of the jitter differs", async () => {
