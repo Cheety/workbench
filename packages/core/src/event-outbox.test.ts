@@ -297,20 +297,21 @@ function cancellationBehindAGate(database: FreshDatabase): {
 	return { gate, cancellation };
 }
 
-function unreachablePostgres(database: FreshDatabase): {
+function postgresBehindAGate(database: FreshDatabase): {
+	readonly gate: PostgresGate;
 	readonly sql: SQL;
 	readonly cancellation: SQL;
 } {
 	const gate = PostgresGate.create(database.url);
-	gate.refuse();
-	const sql = new SQL(gate.url, { max: 1, connectionTimeout: 1 });
-	const cancellation = new SQL(gate.url, { max: 1, connectionTimeout: 1 });
+	gate.forward();
+	const sql = new SQL(gate.url, { max: 1 });
+	const cancellation = new SQL(gate.url, { max: 1 });
 	cleanups.push(async () => {
 		await cancellation.close();
 		await sql.close();
 		gate.close();
 	});
-	return { sql, cancellation };
+	return { gate, sql, cancellation };
 }
 
 async function refuseNewConnections(database: FreshDatabase): Promise<void> {
@@ -658,17 +659,17 @@ describe("event delivery", () => {
 
 	test("asks Postgres for nothing until the core schema exists", async () => {
 		const database = await freshDatabase();
-		const unreachable = unreachablePostgres(database);
+		const { gate, sql, cancellation } = postgresBehindAGate(database);
 		const { delivery } = deliveryOf({
-			sql: unreachable.sql,
-			cancellation: unreachable.cancellation,
+			sql,
+			cancellation,
 			events: registryOf(subscribing("search", labelRenamed, async () => {})),
 			hasCoreSchema: () => false,
 		});
 
-		const delivered = delivery.deliverDue(NOT_STOPPED);
+		await delivery.deliverDue(NOT_STOPPED);
 
-		await expect(delivered).resolves.toBeUndefined();
+		expect(gate.acceptedConnections).toBe(0);
 	});
 
 	test("hands an event to its handler once when two deliveries run at the same time", async () => {
