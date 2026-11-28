@@ -600,6 +600,73 @@ describe("an API token that is revoked or expired", () => {
 		});
 	});
 
+	test("is rejected with 401 revoked_token when only a token it was created with is marked revoked", async () => {
+		const api = await startLedgerInstance();
+		const owner = await api.issueToken("owner");
+		const parent = await createToken(api, owner, {
+			operations: null,
+			workspaces: null,
+			validDays: 7,
+		});
+		const child = await createToken(api, parent.token, {
+			operations: null,
+			workspaces: null,
+			validDays: 7,
+		});
+		await api.database
+			.sql`UPDATE core.api_tokens SET revoked_at = now() WHERE id = ${parent.id}`;
+
+		const response = await api.post(
+			onWorkspace(WORKSPACE, "ledger.readEntries"),
+			"{}",
+			bearer(child.token),
+		);
+
+		expect(response.status).toBe(401);
+		expect(api.logEntries).toContainEqual(
+			expect.objectContaining({
+				message: "request not authenticated",
+				reason: "revoked_token",
+			}),
+		);
+	});
+
+	test("creates no token once only a token the token of the call was created with is marked revoked", async () => {
+		const api = await startLedgerInstance();
+		const owner = await api.issueIdentifiedToken("owner");
+		const parent = await createToken(api, owner.token, {
+			operations: null,
+			workspaces: null,
+			validDays: 7,
+		});
+		const child = await createToken(api, parent.token, {
+			operations: null,
+			workspaces: null,
+			validDays: 7,
+		});
+		await api.database
+			.sql`UPDATE core.api_tokens SET revoked_at = now() WHERE id = ${parent.id}`;
+
+		const created = await api.invoke({
+			operation: "core.createApiToken",
+			actor: { kind: "service_account", id: owner.serviceAccountId },
+			apiToken: {
+				id: child.id,
+				expiresAt: IN_A_WEEK,
+				scope: { operations: null, workspaces: null },
+			},
+			idempotencyKey: null,
+			workspace: null,
+			input: { operations: null, workspaces: null, validDays: 1 },
+			correlationId: "parent-revoked-meanwhile",
+		});
+
+		expect(created).toMatchObject({
+			ok: false,
+			failure: { code: "core.calling_token_invalid" },
+		});
+	});
+
 	test("is rejected with 401 once its validity has run out", async () => {
 		const api = await startLedgerInstance();
 		const owner = await api.issueToken("owner");
