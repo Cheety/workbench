@@ -148,7 +148,7 @@ for body in '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' '{"jsonrpc":"2.0","
 curl -si http://127.0.0.1:3123/api/mcp -H 'Accept: application/json, text/event-stream' -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":4,"method":"tools/list"}' | head -1
 ```
 
-`tools/list` nennt `core_listAuditEntries`, `reference_createNote`, `reference_listNotes` und `reference_renameNote`, jedes mit `workspace` und `input` im `inputSchema`. Der erste Aufruf antwortet mit einem Textblock, der die Notiz als JSON enthält, wie der Body von `POST …/operations/reference.createNote`; der zweite mit `isError: true` und Problem Details mit `code` `invalid_input`. Ohne Token antwortet der Endpunkt mit `401 Unauthorized`.
+`tools/list` nennt die Tools des Cores (`core_createWorkspace`, `core_defineRole`, `core_grantMembership`, `core_listAuditEntries`, `core_listInstanceAuditEntries`, `core_listWorkspaces`, `core_revokeMembership`) und `reference_createNote`, `reference_listNotes` und `reference_renameNote`, jedes mit `input` im `inputSchema`, alle außer `core_createWorkspace`, `core_defineRole`, `core_listInstanceAuditEntries` und `core_listWorkspaces` auch mit `workspace`. Der erste Aufruf antwortet mit einem Textblock, der die Notiz als JSON enthält, wie der Body von `POST …/operations/reference.createNote`; der zweite mit `isError: true` und Problem Details mit `code` `invalid_input`. Ohne Token antwortet der Endpunkt mit `401 Unauthorized`.
 
 ## Eine Operation per CLI aufrufen
 
@@ -163,7 +163,43 @@ bun run --silent workbench reference create-note --workspace 00000000-0000-4000-
 curl -s http://127.0.0.1:3123/api/operations -H "Authorization: Bearer $WORKBENCH_TOKEN"
 ```
 
-Die Liste nennt `core list-audit-entries`, `reference create-note`, `reference list-notes` und `reference rename-note`, je mit dem Namen der Operation und ihrer Art, wie `GET /api/operations`; `exit 0`. Der erste Aufruf gibt die Notiz als JSON aus, wie der Body von `POST …/operations/reference.createNote`, mit `exit 0`; der zweite `invalid_input: …`, darunter `title: Too small: …` und die Korrelations-ID, mit `exit 1`; der dritte `--input is not JSON` und die Zeile `usage: workbench …`, mit `exit 2`, und das Log des Servers hat dafür keinen Eintrag `request completed`. Ohne `WORKBENCH_TOKEN` und ohne `~/.config/workbench/cli.json` endet jeder Aufruf mit `invalid configuration:` und `exit 2`; `grep -c "$WORKBENCH_TOKEN" /tmp/workbench-verify.log` zählt `0`.
+Die Liste nennt die sieben Kommandos des Cores von `core create-workspace` bis `core revoke-membership`, `reference create-note`, `reference list-notes` und `reference rename-note`, je mit dem Namen der Operation und ihrer Art, wie `GET /api/operations`; `exit 0`. Der erste Aufruf gibt die Notiz als JSON aus, wie der Body von `POST …/operations/reference.createNote`, mit `exit 0`; der zweite `invalid_input: …`, darunter `title: Too small: …` und die Korrelations-ID, mit `exit 1`; der dritte `--input is not JSON` und die Zeile `usage: workbench …`, mit `exit 2`, und das Log des Servers hat dafür keinen Eintrag `request completed`. Ohne `WORKBENCH_TOKEN` und ohne `~/.config/workbench/cli.json` endet jeder Aufruf mit `invalid configuration:` und `exit 2`; `grep -c "$WORKBENCH_TOKEN" /tmp/workbench-verify.log` zählt `0`.
+
+## Workspaces, Mitgliedschaften und Rollen über Operationen verwalten
+
+Einen Service-Account als Instanz-Admin und einen zweiten als Mitglied anlegen, dann den Server wie unter [Server starten](#server-starten) starten, aber mit dem Admin in `INSTANCE_ADMIN_SERVICE_ACCOUNTS`:
+
+```sh
+DATABASE_URL=postgres://workbench:workbench@127.0.0.1:54329/workbench_verify bun packages/core/src/create-service-account.ts --name admin --valid-days 1 > /tmp/workbench-verify-admin.json
+DATABASE_URL=postgres://workbench:workbench@127.0.0.1:54329/workbench_verify bun packages/core/src/create-service-account.ts --name member --valid-days 1 > /tmp/workbench-verify-member.json
+DATABASE_URL=postgres://workbench:workbench@127.0.0.1:54329/workbench_verify PORT=3123 PLUGINS=reference INSTANCE_ADMIN_SERVICE_ACCOUNTS="$(sed -E 's/.*"serviceAccount":"([^"]+)".*/\1/' /tmp/workbench-verify-admin.json)" bun packages/core/src/main.ts > /tmp/workbench-verify.log 2>&1 & echo $! > /tmp/workbench-verify.pid
+```
+
+Der Admin legt einen Workspace an, definiert die Rolle `reader` mit nur `reference.note.read` und gibt sie dem Mitglied; die ID des Workspace liegt danach in `/tmp/workbench-verify.workspace`:
+
+```sh
+export ADMIN="$(sed -E 's/.*"token":"([^"]+)".*/\1/' /tmp/workbench-verify-admin.json)" MEMBER="$(sed -E 's/.*"token":"([^"]+)".*/\1/' /tmp/workbench-verify-member.json)" MEMBER_ID="$(sed -E 's/.*"serviceAccount":"([^"]+)".*/\1/' /tmp/workbench-verify-member.json)"
+curl -s -X POST http://127.0.0.1:3123/api/operations/core.createWorkspace -H "Authorization: Bearer $ADMIN" -d '{"name":"Verify"}' | sed -E 's/.*"id":"([^"]+)".*/\1/' > /tmp/workbench-verify.workspace
+curl -s -X POST http://127.0.0.1:3123/api/operations/core.defineRole -H "Authorization: Bearer $ADMIN" -d '{"name":"reader","rights":["reference.note.read"]}'; echo
+curl -s -X POST "http://127.0.0.1:3123/api/workspaces/$(cat /tmp/workbench-verify.workspace)/operations/core.grantMembership" -H "Authorization: Bearer $ADMIN" -d "{\"actor\":{\"kind\":\"service_account\",\"id\":\"$MEMBER_ID\"},\"role\":\"reader\"}"; echo
+```
+
+Dann als Mitglied die eigenen Workspaces listen, Notizen listen und eine anlegen, und als Mitglied einen Workspace anlegen:
+
+```sh
+curl -s -X POST http://127.0.0.1:3123/api/operations/core.listWorkspaces -H "Authorization: Bearer $MEMBER" -d '{"limit":10,"cursor":null}'; echo
+for operation in listNotes createNote; do curl -s -o /dev/null -w "%{http_code}\n" -X POST "http://127.0.0.1:3123/api/workspaces/$(cat /tmp/workbench-verify.workspace)/operations/reference.$operation" -H "Authorization: Bearer $MEMBER" -d '{"limit":10,"title":"Plan"}'; done
+curl -s -X POST http://127.0.0.1:3123/api/operations/core.createWorkspace -H "Authorization: Bearer $MEMBER" -d '{"name":"Mine"}'; echo
+curl -s -X POST http://127.0.0.1:3123/api/operations/core.listInstanceAuditEntries -H "Authorization: Bearer $ADMIN" -d '{"limit":10,"cursor":null}'; echo
+```
+
+`core.listWorkspaces` nennt genau den Workspace `Verify` mit `"role":"reader"`. `reference.listNotes` antwortet `200`; `reference.createNote` mit `403`, weil `reader` nur `reference.note.read` hat. Das Anlegen durch das Mitglied scheitert mit `403` und `code` `not_instance_admin`. Das Audit der Instanz nennt, die neuesten zuerst, den verweigerten `core.createWorkspace` des Mitglieds (`denied`, `not_instance_admin`), sein verweigertes `reference.createNote` (`missing_right`), `core.grantMembership` mit dem Workspace, `core.defineRole` und `core.createWorkspace` mit `"workspace":null`. In der Datenbank zeigt sich dasselbe:
+
+```sh
+docker compose -f compose.dev.yaml exec -T postgres psql -U workbench -d workbench_verify -c 'TABLE core.roles' -c 'TABLE core.role_rights' -c 'SELECT workspace_id, actor_kind, role FROM core.memberships'
+```
+
+`core.roles` nennt `owner`, `editor`, `viewer` und `reader`, `core.role_rights` nur `reader | reference.note.read`. Ohne `INSTANCE_ADMIN_SERVICE_ACCOUNTS` antwortet auch der Admin mit `403 not_instance_admin`.
 
 ## Image und Compose prüfen
 

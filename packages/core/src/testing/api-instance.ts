@@ -1,12 +1,14 @@
-import type { StartRole } from "@workbench/sdk";
+import type { Actor, OperationKind } from "@workbench/sdk";
 import { SQL } from "bun";
 import { authenticateToken } from "../api-tokens.ts";
 import { Secret } from "../config.ts";
 import { setSystemTimer } from "../hook-timeout.ts";
 import type { HttpApi } from "../http-api.ts";
+import { isInstanceAdminOf } from "../instance-admins.ts";
 import { type PluginPackage, startPlugins } from "../kernel.ts";
 import { grantMembership } from "../memberships.ts";
 import { createOperationPipeline } from "../operation-pipeline.ts";
+import { roleName } from "../role-name.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
 	type MigrationRunner,
@@ -36,21 +38,28 @@ export type IdentifiedToken = {
 };
 
 export class UnidentifiedApiTokenError extends Error {
-	constructor(idsIssued: number) {
+	constructor(tokensFound: number) {
 		super(
-			`creating a service account issued ${idsIssued} ids, expected one for the service account and one for its API token`,
+			`the new service account has ${tokensFound} API tokens, expected exactly one`,
 		);
 		this.name = "UnidentifiedApiTokenError";
 	}
 }
 
+export type OperationListed = {
+	readonly name: string;
+	readonly kind: OperationKind;
+};
+
 export type ApiInstance = {
 	readonly url: string;
+	readonly registeredOperations: readonly OperationListed[];
 	readonly database: FreshDatabase;
 	readonly logEntries: readonly LogEntry[];
 	refuseAuthenticationDatabase(): void;
-	issueToken(role: StartRole): Promise<string>;
-	issueIdentifiedToken(role: StartRole): Promise<IdentifiedToken>;
+	issueToken(role: string): Promise<string>;
+	issueIdentifiedToken(role: string): Promise<IdentifiedToken>;
+	issueInstanceAdminToken(): Promise<IdentifiedToken>;
 	setClock(now: Date): void;
 	post(
 		path: string,
@@ -125,6 +134,8 @@ async function startedApiInstance(
 		return `00000000-0000-4000-8000-${String(issuedIds).padStart(12, "0")}`;
 	};
 	let clock = NOW;
+	const instanceAdmins: Actor[] = [];
+	const isInstanceAdmin = isInstanceAdminOf(instanceAdmins);
 	let issuedTokens = 0;
 	let issuedCorrelationIds = 0;
 	const api: HttpApi = {
@@ -142,6 +153,7 @@ async function startedApiInstance(
 			newJobId: newId,
 			jobsCommitted: () => {},
 			random: () => 0.5,
+			isInstanceAdmin,
 			logger,
 		}),
 		operations: running.operations,
@@ -159,48 +171,58 @@ async function startedApiInstance(
 	});
 	cleanups.push(() => server.stop());
 	const url = `http://127.0.0.1:${server.port}`;
-	const issueIdentifiedToken = async (
-		role: StartRole,
-	): Promise<IdentifiedToken> => {
+	const issueAccount = async (): Promise<IdentifiedToken> => {
 		issuedTokens += 1;
-		const idsOfTheAccount: string[] = [];
 		const issued = await createServiceAccount(
 			database.sql,
 			{ name: `agent ${issuedTokens}`, validDays: 30 },
 			{
 				now: () => clock,
-				newId: () => {
-					const id = newId();
-					idsOfTheAccount.push(id);
-					return id;
-				},
+				newId,
 				newToken: () => new Secret(`wbt_test-token-${issuedTokens}`),
 			},
 		);
-		const [apiTokenId, ...unexpected] = idsOfTheAccount.filter(
-			(id) => id !== issued.serviceAccountId,
-		);
-		if (apiTokenId === undefined || unexpected.length > 0)
-			throw new UnidentifiedApiTokenError(idsOfTheAccount.length);
-		await grantMembership(database.sql, {
-			workspace: API_INSTANCE_WORKSPACE,
-			actor: { kind: "service_account", id: issued.serviceAccountId },
-			role,
-			createdAt: clock,
-		});
+		const tokens: { id: string }[] =
+			await database.sql`SELECT id FROM core.api_tokens WHERE service_account_id = ${issued.serviceAccountId}`;
+		const [apiToken, ...unexpected] = tokens;
+		if (apiToken === undefined || unexpected.length > 0)
+			throw new UnidentifiedApiTokenError(tokens.length);
 		return {
 			token: issued.token.reveal(),
 			serviceAccountId: issued.serviceAccountId,
-			apiTokenId,
+			apiTokenId: apiToken.id,
 		};
+	};
+	const issueIdentifiedToken = async (
+		role: string,
+	): Promise<IdentifiedToken> => {
+		const issued = await issueAccount();
+		await grantMembership(database.sql, {
+			workspace: API_INSTANCE_WORKSPACE,
+			actor: { kind: "service_account", id: issued.serviceAccountId },
+			role: roleName(role),
+			createdAt: clock,
+		});
+		return issued;
 	};
 	return {
 		url,
+		registeredOperations: running.operations
+			.list()
+			.map(({ name, kind }) => ({ name, kind })),
 		database,
 		logEntries: entries,
 		refuseAuthenticationDatabase: () => authenticationGate.refuse(),
 		issueToken: async (role) => (await issueIdentifiedToken(role)).token,
 		issueIdentifiedToken,
+		issueInstanceAdminToken: async () => {
+			const issued = await issueAccount();
+			instanceAdmins.push({
+				kind: "service_account",
+				id: issued.serviceAccountId,
+			});
+			return issued;
+		},
 		setClock: (now) => {
 			clock = now;
 		},

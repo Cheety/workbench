@@ -8,6 +8,7 @@ import {
 	type OperationTarget,
 } from "@workbench/sdk";
 import type { SQL } from "bun";
+import { isSameActor } from "./actor.ts";
 import {
 	type AuditOutcome,
 	type DenialReason,
@@ -30,11 +31,16 @@ import type { JobRegistry } from "./job-registry.ts";
 import type { Logger } from "./logger.ts";
 import { findMembership, type MembershipLock } from "./memberships.ts";
 import type {
+	InstanceContext,
+	InstanceOperation,
 	OperationRegistry,
 	RegisteredOperation,
+	WorkspaceOperation,
 } from "./operation-registry.ts";
 import { type Owner, ownerName, schemaOf } from "./owner.ts";
 import { quote } from "./quote.ts";
+import type { RoleName } from "./role-name.ts";
+import { customRoleGrants, isStartRole } from "./roles.ts";
 import type { ValidationIssue } from "./schema-validation.ts";
 import { statementsIn } from "./transaction-statements.ts";
 
@@ -43,7 +49,7 @@ export type OperationCall = {
 	readonly actor: Actor;
 	readonly apiTokenId: string | null;
 	readonly idempotencyKey: string | null;
-	readonly workspace: string;
+	readonly workspace: string | null;
 	readonly input: unknown;
 	readonly correlationId: string;
 };
@@ -78,6 +84,7 @@ export type OperationPipelineOptions = {
 	readonly newJobId: () => string;
 	readonly jobsCommitted: () => void;
 	readonly random: () => number;
+	readonly isInstanceAdmin: (actor: Actor) => boolean;
 	readonly logger: Logger;
 };
 
@@ -114,6 +121,27 @@ const WORKSPACE_NOT_FOUND: OperationFailure = {
 	issues: [],
 };
 
+const WORKSPACE_REQUIRED: OperationFailure = {
+	code: "workspace_required",
+	kind: "invalid_input",
+	detail: "the operation runs on a workspace, but the call names none",
+	issues: [],
+};
+
+export const WORKSPACE_NOT_EXPECTED: OperationFailure = {
+	code: "workspace_not_expected",
+	kind: "invalid_input",
+	detail: "the operation runs on the instance, but the call names a workspace",
+	issues: [],
+};
+
+const NOT_INSTANCE_ADMIN: OperationFailure = {
+	code: "not_instance_admin",
+	kind: "forbidden",
+	detail: "only an instance admin may call the operation",
+	issues: [],
+};
+
 const MISSING_RIGHT: OperationFailure = {
 	code: "missing_right",
 	kind: "forbidden",
@@ -141,22 +169,48 @@ const DENIALS: Record<DenialReason, OperationFailure> = {
 	missing_right: MISSING_RIGHT,
 	object_not_found: OBJECT_NOT_FOUND,
 	not_object_holder: NOT_OBJECT_HOLDER,
+	not_instance_admin: NOT_INSTANCE_ADMIN,
 };
 
-const DENIALS_BY_TARGET: Record<OperationTarget, readonly DenialReason[]> = {
-	workspace: ["workspace_not_found", "missing_right"],
-	object: [
-		"workspace_not_found",
-		"missing_right",
-		"object_not_found",
-		"not_object_holder",
-	],
+const INSTANCE_DENIALS: Record<
+	InstanceOperation["grant"]["by"],
+	readonly DenialReason[]
+> = {
+	instance_admin: ["not_instance_admin"],
+	every_actor: [],
 };
+
+const WORKSPACE_DENIALS: Record<
+	WorkspaceOperation["grant"]["by"],
+	readonly DenialReason[]
+> = {
+	role: ["workspace_not_found", "missing_right"],
+	instance_admin: ["workspace_not_found", "not_instance_admin"],
+};
+
+const OBJECT_DENIALS: Record<OperationTarget, readonly DenialReason[]> = {
+	workspace: [],
+	object: ["object_not_found", "not_object_holder"],
+};
+
+function denialReasonsOf(
+	operation: RegisteredOperation,
+): readonly DenialReason[] {
+	switch (operation.scope) {
+		case "instance":
+			return INSTANCE_DENIALS[operation.grant.by];
+		case "workspace":
+			return [
+				...WORKSPACE_DENIALS[operation.grant.by],
+				...OBJECT_DENIALS[operation.target],
+			];
+	}
+}
 
 export function denialsOf(
-	target: OperationTarget,
+	operation: RegisteredOperation,
 ): readonly OperationFailure[] {
-	return DENIALS_BY_TARGET[target].map((reason) => DENIALS[reason]);
+	return denialReasonsOf(operation).map((reason) => DENIALS[reason]);
 }
 
 class CallFailedError extends Error {
@@ -238,6 +292,34 @@ export function createOperationPipeline(
 	return { invoke: (call) => invoke(call, options) };
 }
 
+type ScopedCall =
+	| {
+			readonly scope: "workspace";
+			readonly operation: WorkspaceOperation;
+			readonly workspace: string;
+	  }
+	| { readonly scope: "instance"; readonly operation: InstanceOperation };
+
+type ScopedCallOf =
+	| { readonly ok: true; readonly call: ScopedCall }
+	| { readonly ok: false; readonly failure: OperationFailure };
+
+function scopedCallOf(
+	operation: RegisteredOperation,
+	workspace: string | null,
+): ScopedCallOf {
+	switch (operation.scope) {
+		case "workspace":
+			return workspace === null
+				? { ok: false, failure: WORKSPACE_REQUIRED }
+				: { ok: true, call: { scope: "workspace", operation, workspace } };
+		case "instance":
+			return workspace === null
+				? { ok: true, call: { scope: "instance", operation } }
+				: { ok: false, failure: WORKSPACE_NOT_EXPECTED };
+	}
+}
+
 async function invoke(
 	call: OperationCall,
 	options: OperationPipelineOptions,
@@ -250,35 +332,40 @@ async function invoke(
 			detail: `no operation is named ${quote(call.operation)}`,
 			issues: [],
 		});
+	const scoped = scopedCallOf(operation, call.workspace);
+	if (!scoped.ok) return failed(scoped.failure);
 	const logger = loggerOf(call, operation, options.logger);
 	const key = idempotencyKeyOf(call, operation.kind);
 	if (!key.valid) return failed(INVALID_IDEMPOTENCY_KEY);
 	try {
-		const publisher = publisherOf(call, operation, options);
-		const enqueuer = enqueuerOf(call, operation, options);
+		const publisher = publisherOf(operation, options);
+		const enqueuer = enqueuerOf(operation, options);
 		const output = await inTransaction(
 			operation,
 			options.sql,
 			async (transaction) => {
-				await authorize(transaction, call, operation);
+				await authorize(
+					transaction,
+					call.actor,
+					scoped.call,
+					options.isInstanceAdmin,
+				);
 				const input = await operation.validateInput(call.input);
 				if (!input.valid) throw failedCall(invalidInput(input.issues));
 				const run = async (): Promise<unknown> => {
-					const access = accessOf(call);
-					const executed = await execute(
-						operation,
+					const executed = await executeScoped(
+						scoped.call,
 						input.value,
-						contextOf(call, transaction, options, {
-							auth: access.auth,
-							publish: publisher.publishIn(transaction),
-							enqueue: enqueuer.enqueueIn(transaction),
-						}),
-						access,
+						{ actor: call.actor, transaction },
+						{ options, publisher, enqueuer },
 					);
 					if (IS_AUDITED[operation.kind])
 						await recordAuditEntry(
 							transaction,
-							newAuditEntryOf(call, operation, options, SUCCEEDED),
+							newAuditEntryOf(call, operation, options, {
+								result: "succeeded",
+								subject: operation.auditSubjectOf(input.value, executed),
+							}),
 						);
 					return executed;
 				};
@@ -304,6 +391,47 @@ async function invoke(
 		if (error instanceof CallFailedError && error.denial !== null)
 			return deny(call, operation, options, error.denial);
 		return failed(logAndMapFailure(error, logger, operation.owner));
+	}
+}
+
+type CallEffects = {
+	readonly options: OperationPipelineOptions;
+	readonly publisher: Publisher;
+	readonly enqueuer: Enqueuer;
+};
+
+async function executeScoped(
+	scoped: ScopedCall,
+	input: unknown,
+	{ actor, transaction }: { readonly actor: Actor; readonly transaction: SQL },
+	{ options, publisher, enqueuer }: CallEffects,
+): Promise<unknown> {
+	switch (scoped.scope) {
+		case "workspace": {
+			const access = accessOf(scoped.workspace, actor);
+			return executeOnWorkspace(
+				scoped.operation,
+				input,
+				contextOf(
+					{ actor, workspace: scoped.workspace, transaction },
+					options,
+					{
+						auth: access.auth,
+						publish: publisher.publishIn(transaction, scoped.workspace),
+						enqueue: enqueuer.enqueueIn(transaction, scoped.workspace),
+					},
+				),
+				access,
+			);
+		}
+		case "instance":
+			return executeOnInstance(scoped.operation, input, {
+				actor,
+				sql: statementsIn(transaction),
+				grantableRights: options.registry.grantableRights(),
+				now: options.now,
+				newId: options.newId,
+			});
 	}
 }
 
@@ -369,8 +497,6 @@ const MEMBERSHIP_LOCK: Record<OperationKind, MembershipLock> = {
 	mutation: "share",
 };
 
-const SUCCEEDED: AuditOutcome = { result: "succeeded" };
-
 const IS_AUDITED: Record<OperationKind, boolean> = {
 	query: false,
 	mutation: true,
@@ -401,24 +527,79 @@ function inTransaction(
 
 async function authorize(
 	transaction: SQL,
-	call: OperationCall,
-	operation: RegisteredOperation,
+	actor: Actor,
+	scoped: ScopedCall,
+	isInstanceAdmin: (actor: Actor) => boolean,
+): Promise<void> {
+	switch (scoped.scope) {
+		case "instance":
+			return authorizeOnInstance(actor, scoped.operation, isInstanceAdmin);
+		case "workspace":
+			return authorizeOnWorkspace(transaction, actor, scoped, isInstanceAdmin);
+	}
+}
+
+function authorizeOnInstance(
+	actor: Actor,
+	operation: InstanceOperation,
+	isInstanceAdmin: (actor: Actor) => boolean,
+): void {
+	switch (operation.grant.by) {
+		case "every_actor":
+			return;
+		case "instance_admin":
+			if (!isInstanceAdmin(actor)) throw deniedCall("not_instance_admin");
+	}
+}
+
+async function authorizeOnWorkspace(
+	transaction: SQL,
+	actor: Actor,
+	{
+		operation,
+		workspace,
+	}: { readonly operation: WorkspaceOperation; readonly workspace: string },
+	isInstanceAdmin: (actor: Actor) => boolean,
 ): Promise<void> {
 	const membership = await findMembership(
 		transaction,
-		call.workspace,
-		call.actor,
+		workspace,
+		actor,
 		MEMBERSHIP_LOCK[operation.kind],
 	);
-	switch (membership.kind) {
-		case "no_workspace":
-			throw failedCall(WORKSPACE_NOT_FOUND);
-		case "not_member":
-			throw deniedCall("workspace_not_found");
-		case "member":
-			if (!operation.grantedTo.has(membership.role))
+	if (membership.kind === "no_workspace") throw failedCall(WORKSPACE_NOT_FOUND);
+	const { grant } = operation;
+	switch (grant.by) {
+		case "instance_admin":
+			if (isInstanceAdmin(actor)) return;
+			throw deniedCall(
+				membership.kind === "member"
+					? "not_instance_admin"
+					: "workspace_not_found",
+			);
+		case "role":
+			if (membership.kind === "not_member")
+				throw deniedCall("workspace_not_found");
+			if (
+				!(await roleGrants(transaction, membership.role, {
+					right: operation.right,
+					grantedTo: grant.grantedTo,
+				}))
+			)
 				throw deniedCall("missing_right");
 	}
+}
+
+async function roleGrants(
+	transaction: SQL,
+	role: RoleName,
+	{
+		right,
+		grantedTo,
+	}: { readonly right: string; readonly grantedTo: ReadonlySet<string> },
+): Promise<boolean> {
+	if (isStartRole(role)) return grantedTo.has(role);
+	return customRoleGrants(transaction, role, right);
 }
 
 type CallAccess = {
@@ -432,7 +613,7 @@ const REQUIRES_ACCESS_CHECK: Record<OperationTarget, boolean> = {
 	workspace: false,
 };
 
-function accessOf(call: OperationCall): CallAccess {
+function accessOf(workspace: string, actor: Actor): CallAccess {
 	let recordedDenial: CallFailedError | undefined;
 	let hasBeenChecked = false;
 	const recordDenial = (reason: DenialReason): CallFailedError => {
@@ -444,9 +625,9 @@ function accessOf(call: OperationCall): CallAccess {
 			requireAccess: (object) => {
 				hasBeenChecked = true;
 				if (object === undefined) throw failedCall(OBJECT_NOT_FOUND);
-				if (object.workspace !== call.workspace)
+				if (object.workspace !== workspace)
 					throw recordDenial("object_not_found");
-				if (object.holder !== null && !isSameActor(object.holder, call.actor))
+				if (object.holder !== null && !isSameActor(object.holder, actor))
 					throw recordDenial("not_object_holder");
 				return object;
 			},
@@ -458,19 +639,20 @@ function accessOf(call: OperationCall): CallAccess {
 	};
 }
 
-function isSameActor(left: Actor, right: Actor): boolean {
-	return left.kind === right.kind && left.id === right.id;
-}
+type WorkspaceTransaction = {
+	readonly actor: Actor;
+	readonly workspace: string;
+	readonly transaction: SQL;
+};
 
 function contextOf(
-	call: OperationCall,
-	transaction: SQL,
+	{ actor, workspace, transaction }: WorkspaceTransaction,
 	sources: Pick<OperationPipelineOptions, "now" | "newId" | "random">,
 	effects: Pick<OperationContext, "auth" | "publish" | "enqueue">,
 ): OperationContext {
 	return {
-		actor: call.actor,
-		workspace: call.workspace,
+		actor,
+		workspace,
 		auth: effects.auth,
 		sql: statementsIn(transaction),
 		now: sources.now,
@@ -482,18 +664,17 @@ function contextOf(
 }
 
 type Publisher = {
-	publishIn(transaction: SQL): OperationContext["publish"];
+	publishIn(transaction: SQL, workspace: string): OperationContext["publish"];
 	hasPublished(): boolean;
 };
 
 function publisherOf(
-	call: OperationCall,
 	operation: RegisteredOperation,
 	sources: Pick<OperationPipelineOptions, "events" | "now" | "newEventId">,
 ): Publisher {
 	let hasPublished = false;
 	return {
-		publishIn: (transaction) => async (definition, payload) => {
+		publishIn: (transaction, workspace) => async (definition, payload) => {
 			if (!CAN_PUBLISH[operation.kind])
 				throw new EventPublishedByQueryError(operation.name);
 			await recordEvent(transaction, sources.events, {
@@ -502,7 +683,7 @@ function publisherOf(
 				definition,
 				payload,
 				occurredAt: sources.now(),
-				workspace: call.workspace,
+				workspace,
 			});
 			hasPublished = true;
 		},
@@ -511,18 +692,17 @@ function publisherOf(
 }
 
 type Enqueuer = {
-	enqueueIn(transaction: SQL): OperationContext["enqueue"];
+	enqueueIn(transaction: SQL, workspace: string): OperationContext["enqueue"];
 	hasEnqueued(): boolean;
 };
 
 function enqueuerOf(
-	call: OperationCall,
 	operation: RegisteredOperation,
 	sources: Pick<OperationPipelineOptions, "jobs" | "now" | "newJobId">,
 ): Enqueuer {
 	let hasEnqueued = false;
 	return {
-		enqueueIn: (transaction) => async (definition, payload) => {
+		enqueueIn: (transaction, workspace) => async (definition, payload) => {
 			if (!CAN_ENQUEUE[operation.kind])
 				throw new JobEnqueuedByQueryError(operation.name);
 			await enqueueJob(transaction, sources.jobs, {
@@ -531,7 +711,7 @@ function enqueuerOf(
 				definition,
 				payload,
 				enqueuedAt: sources.now(),
-				workspace: call.workspace,
+				workspace,
 			});
 			hasEnqueued = true;
 		},
@@ -551,43 +731,66 @@ function newAuditEntryOf(
 		actor: call.actor,
 		apiTokenId: call.apiTokenId,
 		operation: operation.name,
-		workspace: call.workspace,
+		workspace: call.workspace ?? auditedWorkspaceOf(outcome),
 		outcome,
 	};
 }
 
-async function execute(
-	operation: RegisteredOperation,
-	input: unknown,
-	ctx: OperationContext,
-	access: CallAccess,
-): Promise<unknown> {
-	const output = await operation.validateOutput(
-		await runExecute(operation, input, ctx, access),
-	);
-	if (!output.valid) throw new InvalidOutputError(output.issues);
-	return output.value;
+function auditedWorkspaceOf(outcome: AuditOutcome): string | null {
+	switch (outcome.result) {
+		case "succeeded":
+			return outcome.subject.workspace;
+		case "denied":
+			return null;
+	}
 }
 
-async function runExecute(
-	operation: RegisteredOperation,
+async function executeOnWorkspace(
+	operation: WorkspaceOperation,
 	input: unknown,
 	ctx: OperationContext,
 	access: CallAccess,
 ): Promise<unknown> {
-	let output: unknown;
+	const executed = await executedBy(async () => {
+		try {
+			return await operation.execute(input, ctx);
+		} finally {
+			access.throwRecordedDenial();
+		}
+	});
+	if (REQUIRES_ACCESS_CHECK[operation.target] && !access.hasBeenChecked())
+		throw new ObjectAccessUncheckedError(operation.name);
+	return validOutputOf(operation, executed);
+}
+
+async function executeOnInstance(
+	operation: InstanceOperation,
+	input: unknown,
+	ctx: InstanceContext,
+): Promise<unknown> {
+	return validOutputOf(
+		operation,
+		await executedBy(() => operation.execute(input, ctx)),
+	);
+}
+
+async function executedBy(run: () => Promise<unknown>): Promise<unknown> {
 	try {
-		output = await operation.execute(input, ctx);
+		return await run();
 	} catch (error) {
-		access.throwRecordedDenial();
 		if (error instanceof OperationError || error instanceof CallFailedError)
 			throw error;
 		throw new ExecuteThrewError(error);
 	}
-	access.throwRecordedDenial();
-	if (REQUIRES_ACCESS_CHECK[operation.target] && !access.hasBeenChecked())
-		throw new ObjectAccessUncheckedError(operation.name);
-	return output;
+}
+
+async function validOutputOf(
+	operation: RegisteredOperation,
+	executed: unknown,
+): Promise<unknown> {
+	const output = await operation.validateOutput(executed);
+	if (!output.valid) throw new InvalidOutputError(output.issues);
+	return output.value;
 }
 
 function logAndMapFailure(

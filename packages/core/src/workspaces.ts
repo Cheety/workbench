@@ -1,4 +1,9 @@
-import type { SQL } from "bun";
+import { defineRight, type Sql } from "@workbench/sdk";
+import { z } from "zod";
+import { NO_AUDIT_SUBJECT } from "./audit-subject.ts";
+import { type Keyset, pageOf, pageRequestSchema } from "./keyset-pages.ts";
+import { defineInstanceOperation } from "./operation-registry.ts";
+import { roleNameSchema } from "./role-name.ts";
 
 export type NewWorkspace = {
 	readonly id: string;
@@ -6,15 +11,106 @@ export type NewWorkspace = {
 	readonly createdAt: Date;
 };
 
+const MAX_CURSOR_LENGTH = 2000;
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const MAX_WORKSPACE_NAME_LENGTH = 200;
 
 export function isWorkspaceId(value: string): boolean {
 	return UUID.test(value);
 }
 
 export async function createWorkspace(
-	sql: SQL,
+	sql: Sql,
 	workspace: NewWorkspace,
 ): Promise<void> {
 	await sql`INSERT INTO core.workspaces (id, name, created_at) VALUES (${workspace.id}, ${workspace.name}, ${workspace.createdAt})`;
 }
+
+export const workspaceCreate = defineRight({
+	name: "core.workspace.create",
+	defaultRoles: [],
+});
+
+export const workspaceList = defineRight({
+	name: "core.workspace.list",
+	defaultRoles: [],
+});
+
+const workspace = z.object({ id: z.string(), name: z.string() });
+
+export const createWorkspaceOperation = defineInstanceOperation({
+	name: "createWorkspace",
+	kind: "mutation",
+	right: workspaceCreate.name,
+	input: z.object({
+		name: z.string().trim().min(1).max(MAX_WORKSPACE_NAME_LENGTH),
+	}),
+	output: workspace,
+	execute: async ({ name }, ctx) => {
+		const id = ctx.newId();
+		await createWorkspace(ctx.sql, { id, name, createdAt: ctx.now() });
+		return { id, name };
+	},
+	auditSubject: (_input, { id }) => ({
+		...NO_AUDIT_SUBJECT,
+		workspace: id,
+	}),
+});
+
+const listedWorkspaceRow = z.object({
+	id: z.string(),
+	name: z.string(),
+	role: roleNameSchema,
+});
+
+type WorkspacePosition = {
+	readonly name: string;
+	readonly id: string;
+};
+
+const listedWorkspaces: Keyset<
+	z.infer<typeof listedWorkspaceRow>,
+	WorkspacePosition
+> = {
+	list: "the list of workspaces",
+	row: listedWorkspaceRow,
+	position: z
+		.tuple([z.string(), z.guid()])
+		.transform(([name, id]) => ({ name, id })),
+	positionOf: ({ name, id }) => ({ name, id }),
+	encode: ({ name, id }) => [name, id],
+};
+
+export const listWorkspacesOperation = defineInstanceOperation({
+	name: "listWorkspaces",
+	kind: "query",
+	right: workspaceList.name,
+	input: pageRequestSchema(MAX_CURSOR_LENGTH),
+	output: z.object({
+		workspaces: z.array(workspace.extend({ role: roleNameSchema })),
+		nextCursor: z.string().nullable(),
+	}),
+	execute: async (request, ctx) => {
+		const page = await pageOf(listedWorkspaces, request, (after, upTo) =>
+			after === null
+				? ctx.sql`
+					SELECT workspaces.id, workspaces.name, memberships.role
+					FROM core.memberships
+					JOIN core.workspaces ON workspaces.id = memberships.workspace_id
+					WHERE memberships.actor_kind = ${ctx.actor.kind} AND memberships.actor_id = ${ctx.actor.id}
+					ORDER BY workspaces.name, workspaces.id
+					LIMIT ${upTo}`
+				: ctx.sql`
+					SELECT workspaces.id, workspaces.name, memberships.role
+					FROM core.memberships
+					JOIN core.workspaces ON workspaces.id = memberships.workspace_id
+					WHERE memberships.actor_kind = ${ctx.actor.kind} AND memberships.actor_id = ${ctx.actor.id}
+						AND (workspaces.name, workspaces.id) > (${after.name}, ${after.id})
+					ORDER BY workspaces.name, workspaces.id
+					LIMIT ${upTo}`,
+		);
+		return { workspaces: page.rows, nextCursor: page.nextCursor };
+	},
+});

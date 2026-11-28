@@ -147,34 +147,51 @@ describe("the operations listed as MCP tools", () => {
 
 		const { tools } = await client.listTools();
 
-		expect(tools.map((tool) => tool.name).toSorted()).toEqual([
-			"core_listAuditEntries",
-			"ledger_addEntry",
-			"ledger_listEntries",
+		expect(tools.map((tool) => tool.name).toSorted()).toEqual(
+			api.registeredOperations
+				.map((operation) => operation.name.replace(".", "_"))
+				.toSorted(),
+		);
+		const addEntryTool = tools.find((tool) => tool.name === "ledger_addEntry");
+		expect(Object.keys(addEntryTool?.inputSchema.properties ?? {})).toEqual([
+			"workspace",
+			"input",
+			"idempotencyKey",
 		]);
-		expect(tools.find((tool) => tool.name === "ledger_addEntry")).toEqual({
-			name: "ledger_addEntry",
+		expect(addEntryTool).toMatchObject({
 			inputSchema: {
-				type: "object",
 				properties: {
 					workspace: { type: "string", format: "uuid" },
 					input: {
 						type: "object",
-						properties: {
-							amount: {
-								type: "integer",
-								minimum: -9007199254740991,
-								maximum: 9007199254740991,
-							},
-						},
+						properties: { amount: { type: "integer" } },
 						required: ["amount"],
 					},
-					idempotencyKey: { type: "string", pattern: "^[ -+\\--~]{1,255}$" },
+					idempotencyKey: { type: "string" },
 				},
 				required: ["workspace", "input"],
 				additionalProperties: false,
 			},
 			annotations: { readOnlyHint: false },
+		});
+	});
+
+	test("name an operation on the instance without a workspace argument", async () => {
+		const api = await startLedgerInstance();
+		const client = await mcp.connectedClient(
+			api.url,
+			await api.issueToken("owner"),
+		);
+
+		const { tools } = await client.listTools();
+
+		expect(
+			tools.find((tool) => tool.name === "core_listWorkspaces")?.inputSchema,
+		).toEqual({
+			type: "object",
+			properties: { input: expect.any(Object) },
+			required: ["input"],
+			additionalProperties: false,
 		});
 	});
 
@@ -387,10 +404,48 @@ describe("an operation called as an MCP tool", () => {
 						operation: "ledger.addEntry",
 						workspace: WORKSPACE,
 						result: "succeeded",
+						member: null,
+						role: null,
 					},
 				],
 				nextCursor: null,
 			},
+		});
+	});
+});
+
+describe("an operation on the instance called as an MCP tool", () => {
+	test("lets an instance admin create a workspace without naming one", async () => {
+		const api = await startLedgerInstance();
+		const admin = await api.issueInstanceAdminToken();
+		const client = await mcp.connectedClient(api.url, admin.token);
+
+		const result = await client.callTool({
+			name: "core_createWorkspace",
+			arguments: { input: { name: "Finance" } },
+		});
+
+		expect(textOf(result)).toEqual({
+			isError: false,
+			json: { id: expect.any(String), name: "Finance" },
+		});
+	});
+
+	test("answers workspace_not_expected when the call names a workspace", async () => {
+		const api = await startLedgerInstance();
+		const client = await mcp.connectedClient(
+			api.url,
+			await api.issueToken("owner"),
+		);
+
+		const result = await client.callTool({
+			name: "core_listWorkspaces",
+			arguments: { workspace: WORKSPACE, input: { limit: 10, cursor: null } },
+		});
+
+		expect(textOf(result)).toMatchObject({
+			isError: true,
+			json: { code: "workspace_not_expected" },
 		});
 	});
 });

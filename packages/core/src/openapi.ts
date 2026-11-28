@@ -5,6 +5,7 @@ import type { SetTimer } from "./hook-timeout.ts";
 import {
 	API_VERSION,
 	IDEMPOTENCY_KEY_HEADER,
+	INSTANCE_OPERATION_PATH_TEMPLATE,
 	OPERATION_LIST_PATH,
 	OPERATION_PATH_TEMPLATE,
 } from "./http-api.ts";
@@ -15,7 +16,10 @@ import {
 import type { JsonSchema } from "./json-schema.ts";
 import type { PluginPackage } from "./kernel.ts";
 import { denialsOf } from "./operation-pipeline.ts";
-import type { RegisteredOperation } from "./operation-registry.ts";
+import type {
+	OperationScope,
+	RegisteredOperation,
+} from "./operation-registry.ts";
 import { catalogPlugins } from "./plugin-catalog.ts";
 import { PROBLEM_CONTENT_TYPE, statusOf } from "./problem-details.ts";
 import { CORRELATION_ID_HEADER, VALID_CORRELATION_ID } from "./server.ts";
@@ -186,6 +190,16 @@ const OPERATION_LISTING: OpenApiListing = {
 	},
 };
 
+const PATH_TEMPLATES: Record<OperationScope, string> = {
+	workspace: OPERATION_PATH_TEMPLATE,
+	instance: INSTANCE_OPERATION_PATH_TEMPLATE,
+};
+
+const SCOPE_PARAMETERS: Record<OperationScope, readonly JsonSchema[]> = {
+	workspace: [WORKSPACE_PARAMETER],
+	instance: [],
+};
+
 export async function describeHttpApi(
 	packages: readonly PluginPackage[],
 	setTimer: SetTimer,
@@ -206,7 +220,10 @@ export async function describeHttpApi(
 				operations
 					.toSorted((left, right) => left.name.localeCompare(right.name))
 					.map((operation) => [
-						OPERATION_PATH_TEMPLATE.replace("{operation}", operation.name),
+						PATH_TEMPLATES[operation.scope].replace(
+							"{operation}",
+							operation.name,
+						),
 						{ post: describeOperation(operation) },
 					]),
 			),
@@ -235,7 +252,7 @@ function describeOperation(operation: RegisteredOperation): OpenApiOperation {
 	return {
 		operationId: operation.name,
 		parameters: [
-			WORKSPACE_PARAMETER,
+			...SCOPE_PARAMETERS[operation.scope],
 			...(TAKES_IDEMPOTENCY_KEY[operation.kind]
 				? [IDEMPOTENCY_KEY_PARAMETER]
 				: []),
@@ -264,7 +281,7 @@ function describeOperation(operation: RegisteredOperation): OpenApiOperation {
 }
 
 function deniedResponsesOf(operation: RegisteredOperation): Responses {
-	const codesByStatus = Map.groupBy(denialsOf(operation.target), (failure) =>
+	const codesByStatus = Map.groupBy(denialsOf(operation), (failure) =>
 		String(statusOf(failure.kind)),
 	);
 	return Object.fromEntries(

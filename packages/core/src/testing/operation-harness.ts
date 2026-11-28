@@ -1,7 +1,8 @@
-import type { Actor, StartRole } from "@workbench/sdk";
+import type { Actor } from "@workbench/sdk";
 import { Secret } from "../config.ts";
 import { createEventDelivery } from "../event-outbox.ts";
 import { setSystemTimer } from "../hook-timeout.ts";
+import { isInstanceAdminOf } from "../instance-admins.ts";
 import { createJobQueue } from "../job-queue.ts";
 import {
 	type PluginPackage,
@@ -16,6 +17,7 @@ import {
 	type OperationResult,
 } from "../operation-pipeline.ts";
 import { readPluginPackage } from "../plugin-discovery.ts";
+import { roleName } from "../role-name.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
 	type MigrationRunner,
@@ -41,16 +43,17 @@ export type OperationHarnessOptions = {
 	readonly newAuditEntryId?: () => string;
 	readonly random?: () => number;
 	readonly newCorrelationId?: () => string;
+	readonly instanceAdmins?: readonly Actor[];
 };
 
 export type HarnessMember = {
 	readonly actor: Actor;
-	readonly role: StartRole;
+	readonly role: string;
 };
 
 export type HarnessCall = {
 	readonly actor: Actor;
-	readonly workspace: string;
+	readonly workspace: string | null;
 	readonly operation: string;
 	readonly input: unknown;
 	readonly idempotencyKey?: string;
@@ -86,6 +89,10 @@ const AUDIT_ENTRY_ID_GROUP = "a000";
 const EVENT_ID_GROUP = "e000";
 
 const JOB_ID_GROUP = "b000";
+
+const EVENT_HANDLER_ID_GROUP = "c000";
+
+const JOB_RUN_ID_GROUP = "d000";
 
 const NOT_STOPPED = new AbortController().signal;
 
@@ -174,6 +181,7 @@ function harnessOf(
 		newJobId,
 		jobsCommitted: () => {},
 		random,
+		isInstanceAdmin: isInstanceAdminOf(options.instanceAdmins ?? []),
 		logger,
 	});
 	const delivery = createEventDelivery({
@@ -182,7 +190,7 @@ function harnessOf(
 		events: plugins.events,
 		hasCoreSchema: () => true,
 		now,
-		newId,
+		newId: sequentialIds(EVENT_HANDLER_ID_GROUP),
 		random,
 		handlerTimeout: { ms: HOOK_TIMEOUT_MS, setTimer: setSystemTimer },
 		logger,
@@ -193,7 +201,7 @@ function harnessOf(
 		jobs: plugins.jobs,
 		hasCoreSchema: () => true,
 		now,
-		newId,
+		newId: sequentialIds(JOB_RUN_ID_GROUP),
 		newJobId,
 		random,
 		runTimeout: { ms: HOOK_TIMEOUT_MS, setTimer: setSystemTimer },
@@ -212,7 +220,7 @@ function harnessOf(
 					await grantMembership(transaction, {
 						workspace: id,
 						actor,
-						role,
+						role: roleName(role),
 						createdAt,
 					});
 			});

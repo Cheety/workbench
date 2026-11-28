@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	type CliConfigSource,
 	InvalidCliConfigError,
@@ -287,6 +290,64 @@ describe("loadConfig", () => {
 			},
 		]);
 	});
+
+	test("names no instance admin when INSTANCE_ADMIN_SERVICE_ACCOUNTS is not set", () => {
+		const config = loadConfig({
+			env: { DATABASE_URL },
+			readSecretFile: noSecretFiles,
+		});
+
+		expect(config.instanceAdmins).toEqual([]);
+	});
+
+	test.each([
+		["empty", ""],
+		["blank", "  "],
+	])(
+		"names no instance admin when INSTANCE_ADMIN_SERVICE_ACCOUNTS is %s",
+		(_case, value) => {
+			const config = loadConfig({
+				env: { DATABASE_URL, INSTANCE_ADMIN_SERVICE_ACCOUNTS: value },
+				readSecretFile: noSecretFiles,
+			});
+
+			expect(config.instanceAdmins).toEqual([]);
+		},
+	);
+
+	test("reads INSTANCE_ADMIN_SERVICE_ACCOUNTS as service accounts that are instance admins", () => {
+		const config = loadConfig({
+			env: {
+				DATABASE_URL,
+				INSTANCE_ADMIN_SERVICE_ACCOUNTS:
+					"7d4b8c1e-2f3a-4b5c-8d6e-9f0a1b2c3d4e, 51c2a3b4-c5d6-4e7f-8a9b-0c1d2e3f4a5b",
+			},
+			readSecretFile: noSecretFiles,
+		});
+
+		expect(config.instanceAdmins).toEqual([
+			{ kind: "service_account", id: "7d4b8c1e-2f3a-4b5c-8d6e-9f0a1b2c3d4e" },
+			{ kind: "service_account", id: "51c2a3b4-c5d6-4e7f-8a9b-0c1d2e3f4a5b" },
+		]);
+	});
+
+	test.each([
+		["a name instead of an ID", "admin"],
+		["an empty entry", "7d4b8c1e-2f3a-4b5c-8d6e-9f0a1b2c3d4e,,"],
+	])("rejects INSTANCE_ADMIN_SERVICE_ACCOUNTS with %s", (_case, value) => {
+		const error = captureInvalidConfig({
+			DATABASE_URL,
+			INSTANCE_ADMIN_SERVICE_ACCOUNTS: value,
+		});
+
+		expect(error.issues).toEqual([
+			{
+				variable: "INSTANCE_ADMIN_SERVICE_ACCOUNTS",
+				problem:
+					"must be a comma-separated list of service account IDs (UUIDs)",
+			},
+		]);
+	});
 });
 
 const TOKEN = "wbt_s3cr3t-token";
@@ -446,5 +507,130 @@ describe("loadCliConfig", () => {
 		});
 
 		expect(JSON.stringify(config)).not.toContain(TOKEN);
+	});
+});
+
+const CONFIG_MODULE = new URL("./config.ts", import.meta.url).pathname;
+
+const LOADING_FROM_THE_ENVIRONMENT = `
+import { InvalidCliConfigError, loadCliConfigFromEnvironment } from ${JSON.stringify(CONFIG_MODULE)};
+try {
+	const config = loadCliConfigFromEnvironment();
+	console.log(JSON.stringify({ instanceUrl: config.instanceUrl.href, token: config.token.reveal() }));
+} catch (error) {
+	if (!(error instanceof InvalidCliConfigError)) throw error;
+	console.log(JSON.stringify({ issues: error.issues }));
+}
+`;
+
+const directories: string[] = [];
+
+afterEach(async () => {
+	for (const directory of directories.splice(0))
+		await rm(directory, { recursive: true, force: true });
+});
+
+async function emptyDirectory(): Promise<string> {
+	const directory = await mkdtemp(join(tmpdir(), "workbench-config-"));
+	directories.push(directory);
+	return directory;
+}
+
+async function homeWithConfigFile(content: unknown): Promise<string> {
+	const home = await emptyDirectory();
+	await mkdir(join(home, ".config", "workbench"), { recursive: true });
+	await writeFile(
+		join(home, ".config", "workbench", "cli.json"),
+		JSON.stringify(content),
+	);
+	return home;
+}
+
+async function loadedFromEnvironment(
+	env: Readonly<Record<string, string>>,
+): Promise<unknown> {
+	const loading = Bun.spawn(
+		[process.execPath, "--eval", LOADING_FROM_THE_ENVIRONMENT],
+		{ env, stdout: "pipe", stderr: "inherit" },
+	);
+	const [exitCode, stdout] = await Promise.all([
+		loading.exited,
+		new Response(loading.stdout).text(),
+	]);
+	expect(exitCode).toBe(0);
+	return JSON.parse(stdout);
+}
+
+describe("loadCliConfigFromEnvironment", () => {
+	test("reads the configuration file under HOME when XDG_CONFIG_HOME is empty", async () => {
+		const home = await homeWithConfigFile({
+			url: "https://workbench.example",
+			token: TOKEN,
+		});
+
+		const loaded = await loadedFromEnvironment({
+			XDG_CONFIG_HOME: "",
+			HOME: home,
+		});
+
+		expect(loaded).toEqual({
+			instanceUrl: "https://workbench.example/",
+			token: TOKEN,
+		});
+	});
+
+	test("takes a configuration file missing under XDG_CONFIG_HOME as none, without falling back to HOME", async () => {
+		const configHome = await emptyDirectory();
+		const home = await homeWithConfigFile({
+			url: "https://workbench.example",
+			token: TOKEN,
+		});
+		const path = join(configHome, "workbench", "cli.json");
+
+		const loaded = await loadedFromEnvironment({
+			XDG_CONFIG_HOME: configHome,
+			HOME: home,
+		});
+
+		expect(loaded).toEqual({
+			issues: [
+				{ subject: `WORKBENCH_URL, or url in ${path}`, problem: "is required" },
+				{
+					subject: `WORKBENCH_TOKEN, or token in ${path}`,
+					problem: "is required",
+				},
+			],
+		});
+	});
+
+	test("rejects a WORKBENCH_CONFIG that names a path where no file exists", async () => {
+		const directory = await emptyDirectory();
+
+		const loaded = await loadedFromEnvironment({
+			WORKBENCH_CONFIG: join(directory, "cli.json"),
+			WORKBENCH_TOKEN: TOKEN,
+		});
+
+		expect(loaded).toEqual({
+			issues: [
+				{
+					subject: "WORKBENCH_CONFIG",
+					problem: "names a file that does not exist",
+				},
+			],
+		});
+	});
+
+	test("rejects a WORKBENCH_CONFIG that names a directory as a file that cannot be read", async () => {
+		const directory = await emptyDirectory();
+
+		const loaded = await loadedFromEnvironment({
+			WORKBENCH_CONFIG: directory,
+			WORKBENCH_TOKEN: TOKEN,
+		});
+
+		expect(loaded).toEqual({
+			issues: [{ subject: directory, problem: "cannot be read" }],
+		});
 	});
 });

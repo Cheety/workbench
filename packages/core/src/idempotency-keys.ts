@@ -37,7 +37,7 @@ export type IdempotentCall = {
 	readonly actor: Actor;
 	readonly key: IdempotencyKey;
 	readonly operation: string;
-	readonly workspace: string;
+	readonly workspace: string | null;
 	readonly input: unknown;
 	readonly calledAt: Date;
 };
@@ -113,7 +113,7 @@ async function findStoredCall(
 	const [row]: unknown[] = await transaction`
 		SELECT
 			output::text AS output,
-			(operation = ${call.operation} AND workspace_id = ${call.workspace} AND input_hash = ${inputHash}) AS matches
+			(operation = ${call.operation} AND workspace_id IS NOT DISTINCT FROM ${call.workspace} AND input_hash = ${inputHash}) AS matches
 		FROM core.idempotency_keys
 		WHERE actor_kind = ${call.actor.kind} AND actor_id = ${call.actor.id} AND key = ${call.key}`;
 	return row === undefined ? undefined : storedCall.parse(row);

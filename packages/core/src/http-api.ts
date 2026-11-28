@@ -21,6 +21,10 @@ export const OPERATION_PATH_TEMPLATE =
 const OPERATION_PATH_PATTERN =
 	/^\/api\/workspaces\/([^/]+)\/operations\/([^/]+)$/;
 
+export const INSTANCE_OPERATION_PATH_TEMPLATE = "/api/operations/{operation}";
+
+const INSTANCE_OPERATION_PATH_PATTERN = /^\/api\/operations\/([^/]+)$/;
+
 const OPERATION_METHOD = "POST";
 
 export const OPERATION_LIST_PATH = "/api/operations";
@@ -88,7 +92,7 @@ export async function answerApiRequest(
 ): Promise<Response> {
 	if (path === OPERATION_LIST_PATH)
 		return listOperations(api, { request, correlationId, logger });
-	const route = OPERATION_PATH_PATTERN.exec(path);
+	const route = routeOf(path);
 	if (route !== null && request.method !== OPERATION_METHOD) {
 		const response = problemResponse(
 			REQUEST_PROBLEMS.method_not_allowed,
@@ -105,12 +109,12 @@ export async function answerApiRequest(
 	if (!authentication.authenticated) return authentication.response;
 	if (route === null)
 		return problemResponse(REQUEST_PROBLEMS.route_not_found, correlationId);
-	const [, encodedWorkspace = "", encodedOperation = ""] = route;
-	const workspace = decodedSegment(encodedWorkspace);
-	const operation = decodedSegment(encodedOperation);
+	const workspace =
+		route.workspace === null ? null : decodedSegment(route.workspace);
+	const operation = decodedSegment(route.operation);
 	if (workspace === undefined || operation === undefined)
 		return problemResponse(REQUEST_PROBLEMS.malformed_path, correlationId);
-	if (!isWorkspaceId(workspace))
+	if (workspace !== null && !isWorkspaceId(workspace))
 		return problemResponse(
 			REQUEST_PROBLEMS.invalid_workspace_id,
 			correlationId,
@@ -133,6 +137,23 @@ export async function answerApiRequest(
 	return result.ok
 		? Response.json(result.output)
 		: problemResponse(result.failure, correlationId);
+}
+
+type OperationRoute = {
+	readonly workspace: string | null;
+	readonly operation: string;
+};
+
+function routeOf(path: string): OperationRoute | null {
+	const onWorkspace = OPERATION_PATH_PATTERN.exec(path);
+	if (onWorkspace !== null) {
+		const [, workspace = "", operation = ""] = onWorkspace;
+		return { workspace, operation };
+	}
+	const onInstance = INSTANCE_OPERATION_PATH_PATTERN.exec(path);
+	if (onInstance === null) return null;
+	const [, operation = ""] = onInstance;
+	return { workspace: null, operation };
 }
 
 async function listOperations(

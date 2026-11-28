@@ -20,6 +20,7 @@ import {
 	createOperationPipeline,
 	type OperationResult,
 } from "./operation-pipeline.ts";
+import { roleName } from "./role-name.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
 	type MigrationRunner,
@@ -324,7 +325,7 @@ async function startBillingPipeline(jobsCommitted: () => void) {
 	await grantMembership(database.sql, {
 		workspace: WORKSPACE,
 		actor: ALICE,
-		role: "owner",
+		role: roleName("owner"),
 		createdAt: new Date("2026-11-27T09:00:00.000Z"),
 	});
 	return createOperationPipeline({
@@ -340,6 +341,7 @@ async function startBillingPipeline(jobsCommitted: () => void) {
 		eventsCommitted: () => {},
 		jobsCommitted,
 		random: () => 0.5,
+		isInstanceAdmin: () => false,
 		logger,
 	});
 }

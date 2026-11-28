@@ -1,11 +1,16 @@
 import {
+	type Actor,
 	OPERATION_KINDS,
 	OPERATION_TARGETS,
 	type OperationContext,
+	type OperationDefinition,
 	type OperationKind,
 	type OperationTarget,
+	type Schema,
+	type Sql,
 	type StartRole,
 } from "@workbench/sdk";
+import { type AuditSubject, NO_AUDIT_SUBJECT } from "./audit-subject.ts";
 import { isRecord } from "./is-record.ts";
 import { type JsonSchema, jsonSchemaReaderOf } from "./json-schema.ts";
 import { describeOwner, type Owner, ownerName } from "./owner.ts";
@@ -14,27 +19,172 @@ import { quote } from "./quote.ts";
 import { type DeclaredRights, isRightOf } from "./rights.ts";
 import { type Validator, validatorOf } from "./schema-validation.ts";
 
-export type RegisteredOperation = {
+export type RoleGrant = {
+	readonly by: "role";
+	readonly grantedTo: ReadonlySet<StartRole>;
+};
+
+export type InstanceAdminGrant = { readonly by: "instance_admin" };
+
+export type EveryActorGrant = { readonly by: "every_actor" };
+
+export type InstanceContext = {
+	readonly actor: Actor;
+	readonly sql: Sql;
+	readonly grantableRights: ReadonlySet<string>;
+	now(): Date;
+	newId(): string;
+};
+
+type DescribedOperation = {
 	readonly name: string;
 	readonly owner: Owner;
 	readonly kind: OperationKind;
-	readonly target: OperationTarget;
 	readonly right: string;
-	readonly grantedTo: ReadonlySet<StartRole>;
 	readonly validateInput: Validator;
 	readonly validateOutput: Validator;
 	describeInput(): JsonSchema;
 	describeOutput(): JsonSchema;
+	auditSubjectOf(input: unknown, output: unknown): AuditSubject;
+};
+
+export type WorkspaceOperation = DescribedOperation & {
+	readonly scope: "workspace";
+	readonly target: OperationTarget;
+	readonly grant: RoleGrant | InstanceAdminGrant;
 	execute(input: unknown, ctx: OperationContext): Promise<unknown>;
 };
+
+export type InstanceOperation = DescribedOperation & {
+	readonly scope: "instance";
+	readonly grant: InstanceAdminGrant | EveryActorGrant;
+	execute(input: unknown, ctx: InstanceContext): Promise<unknown>;
+};
+
+export type RegisteredOperation = WorkspaceOperation | InstanceOperation;
+
+export type OperationScope = RegisteredOperation["scope"];
+
+export type AuditedBy<Input, Output> =
+	| { readonly kind: "query" }
+	| {
+			readonly kind: "mutation";
+			auditSubject(input: Input, output: Output): AuditSubject;
+	  };
+
+export type InstanceOperationDefinition<Input, Output> = {
+	readonly name: string;
+	readonly right: string;
+	readonly input: Schema<Input>;
+	readonly output: Schema<Output>;
+	execute(input: Input, ctx: InstanceContext): Promise<Output>;
+} & AuditedBy<Input, Output>;
+
+export function defineInstanceOperation<Input, Output>(
+	definition: InstanceOperationDefinition<Input, Output>,
+): InstanceOperationDefinition<Input, Output> {
+	return definition;
+}
+
+export type InstanceAdminWorkspaceOperationDefinition<Input, Output> =
+	OperationDefinition<Input, Output> & AuditedBy<Input, Output>;
+
+export function defineInstanceAdminWorkspaceOperation<Input, Output>(
+	definition: InstanceAdminWorkspaceOperationDefinition<Input, Output>,
+): InstanceAdminWorkspaceOperationDefinition<Input, Output> {
+	return definition;
+}
+
+export class InvalidCoreOperationError extends Error {
+	constructor(name: string) {
+		super(
+			`the core operation ${quote(name)} must be named in camelCase, name a right of its owner and declare its input and output as schemas`,
+		);
+		this.name = "InvalidCoreOperationError";
+	}
+}
+
+type CoreOperationDeclaration = {
+	readonly name: string;
+	readonly right: string;
+	readonly input: unknown;
+	readonly output: unknown;
+} & AuditedBy<unknown, unknown>;
+
+function describedCoreOperationOf(
+	owner: Owner,
+	definition: CoreOperationDeclaration,
+): DescribedOperation {
+	const validateInput = validatorOf(definition.input);
+	const validateOutput = validatorOf(definition.output);
+	if (
+		!OPERATION_NAME.test(definition.name) ||
+		!isRightOf(owner, definition.right) ||
+		validateInput === undefined ||
+		validateOutput === undefined
+	)
+		throw new InvalidCoreOperationError(definition.name);
+	return {
+		name: qualifiedOperationName({
+			plugin: ownerName(owner),
+			name: definition.name,
+		}),
+		owner,
+		kind: definition.kind,
+		right: definition.right,
+		validateInput,
+		validateOutput,
+		describeInput: jsonSchemaReaderOf(definition.input, "input"),
+		describeOutput: jsonSchemaReaderOf(definition.output, "output"),
+		auditSubjectOf: auditSubjectOf(definition),
+	};
+}
+
+function auditSubjectOf(
+	definition: AuditedBy<unknown, unknown>,
+): DescribedOperation["auditSubjectOf"] {
+	switch (definition.kind) {
+		case "query":
+			return () => NO_AUDIT_SUBJECT;
+		case "mutation":
+			return (input, output) => definition.auditSubject(input, output);
+	}
+}
+
+export function instanceOperationOf(
+	owner: Owner,
+	definition: InstanceOperationDefinition<unknown, unknown>,
+	grant: InstanceAdminGrant | EveryActorGrant,
+): InstanceOperation {
+	return {
+		...describedCoreOperationOf(owner, definition),
+		scope: "instance",
+		grant,
+		execute: (value, ctx) => definition.execute(value, ctx),
+	};
+}
+
+export function instanceAdminWorkspaceOperationOf(
+	owner: Owner,
+	definition: InstanceAdminWorkspaceOperationDefinition<unknown, unknown>,
+): WorkspaceOperation {
+	return {
+		...describedCoreOperationOf(owner, definition),
+		scope: "workspace",
+		target: definition.target,
+		grant: { by: "instance_admin" },
+		execute: (value, ctx) => definition.execute(value, ctx),
+	};
+}
 
 export type OperationRegistry = {
 	find(name: string): RegisteredOperation | undefined;
 	list(): readonly RegisteredOperation[];
+	grantableRights(): ReadonlySet<string>;
 };
 
 export type OperationsRead = {
-	readonly value: readonly RegisteredOperation[];
+	readonly value: readonly WorkspaceOperation[];
 	readonly problems: readonly string[];
 };
 
@@ -73,7 +223,7 @@ export function readOperations(
 	if (declared === undefined) return { value: [], problems: [] };
 	if (!Array.isArray(declared))
 		return { value: [], problems: ["operations must be a list of operations"] };
-	const value: RegisteredOperation[] = [];
+	const value: WorkspaceOperation[] = [];
 	const problems: string[] = [];
 	const seen = new Set<string>();
 	for (const [position, candidate] of declared.entries()) {
@@ -95,7 +245,7 @@ export function readOperations(
 }
 
 type OperationRead =
-	| { readonly valid: true; readonly operation: RegisteredOperation }
+	| { readonly valid: true; readonly operation: WorkspaceOperation }
 	| { readonly valid: false; readonly problems: readonly string[] };
 
 function readOperation(
@@ -174,13 +324,15 @@ function readOperation(
 			name: fullName,
 			owner,
 			kind: validKind,
+			scope: "workspace",
 			target: validTarget,
 			right: validRight,
-			grantedTo,
+			grant: { by: "role", grantedTo },
 			validateInput,
 			validateOutput,
 			describeInput: jsonSchemaReaderOf(input, "input"),
 			describeOutput: jsonSchemaReaderOf(output, "output"),
+			auditSubjectOf: () => NO_AUDIT_SUBJECT,
 			execute: async (value, ctx) => {
 				const result: unknown = await validExecute.call(candidate, value, ctx);
 				return result;
@@ -206,8 +358,22 @@ export function registerOperations(
 	const byName = new Map(
 		operations.map((operation) => [operation.name, operation]),
 	);
+	const grantableRights = grantableRightsOf([...byName.values()]);
 	return {
 		find: (name) => byName.get(name),
 		list: () => [...byName.values()],
+		grantableRights: () => grantableRights,
 	};
+}
+
+function grantableRightsOf(
+	operations: readonly RegisteredOperation[],
+): ReadonlySet<string> {
+	return new Set(
+		operations.flatMap((operation) =>
+			operation.scope === "workspace" && operation.grant.by === "role"
+				? [operation.right]
+				: [],
+		),
+	);
 }

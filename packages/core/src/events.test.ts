@@ -19,6 +19,7 @@ import { type PluginPackage, startPlugins } from "./kernel.ts";
 import { grantMembership } from "./memberships.ts";
 import { createOperationPipeline } from "./operation-pipeline.ts";
 import { startPollLoop } from "./poll-loop.ts";
+import { roleName } from "./role-name.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
 	type MigrationRunner,
@@ -341,6 +342,7 @@ async function startLedgerWokenByItsPipeline() {
 		jobs: plugins.jobs,
 		newJobId: () => crypto.randomUUID(),
 		jobsCommitted: () => {},
+		isInstanceAdmin: () => false,
 	});
 	return {
 		call: (operation: string, amount: number) =>
@@ -377,7 +379,7 @@ async function migratedDatabase(): Promise<FreshDatabase> {
 	await grantMembership(database.sql, {
 		workspace: WORKSPACE,
 		actor: ALICE,
-		role: "owner",
+		role: roleName("owner"),
 		createdAt: new Date("2026-11-27T09:00:00.000Z"),
 	});
 	return database;
@@ -425,6 +427,7 @@ async function startInstanceOn(
 		jobs: plugins.jobs,
 		newJobId: () => crypto.randomUUID(),
 		jobsCommitted: () => {},
+		isInstanceAdmin: () => false,
 	});
 	const delivery = createEventDelivery({
 		...sources,

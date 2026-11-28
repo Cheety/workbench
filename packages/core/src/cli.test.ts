@@ -282,17 +282,62 @@ describe("the command line listing the operations", () => {
 
 		const run = await runCli(["operations"], await accessTo(api));
 
-		expect(run).toEqual({
-			exitCode: 0,
-			stdout: [
-				"core list-audit-entries\tcore.listAuditEntries\tquery",
-				"reference create-note\treference.createNote\tmutation",
-				"reference list-notes\treference.listNotes\tquery",
-				"reference rename-note\treference.renameNote\tmutation",
-				"",
-			].join("\n"),
-			stderr: "",
+		const lines = run.stdout.split("\n");
+		expect(run.exitCode).toBe(0);
+		expect(run.stderr).toBe("");
+		expect(lines.at(-1)).toBe("");
+		expect(lines.slice(0, -1).map((line) => line.split("\t").slice(1))).toEqual(
+			api.registeredOperations
+				.toSorted((a, b) => a.name.localeCompare(b.name))
+				.map(({ name, kind }) => [name, kind]),
+		);
+		expect(lines).toContain(
+			"reference create-note\treference.createNote\tmutation",
+		);
+		expect(lines).toContain(
+			"core list-instance-audit-entries\tcore.listInstanceAuditEntries\tquery",
+		);
+	});
+});
+
+describe("an operation on the instance on the command line", () => {
+	test("is called without a workspace and lists the workspaces of the actor", async () => {
+		const api = await startReferenceInstance();
+
+		const run = await runCli(
+			[
+				"core",
+				"list-workspaces",
+				"--input",
+				JSON.stringify({ limit: 10, cursor: null }),
+			],
+			await accessTo(api),
+		);
+
+		expect(run.exitCode).toBe(0);
+		expect(JSON.parse(run.stdout)).toEqual({
+			workspaces: [
+				{ id: API_INSTANCE_WORKSPACE, name: "Accounts", role: "owner" },
+			],
+			nextCursor: null,
 		});
+	});
+
+	test("answers workspace_required with exit code 1 for an operation on a workspace called without one", async () => {
+		const api = await startReferenceInstance();
+
+		const run = await runCli(
+			[
+				"reference",
+				"create-note",
+				"--input",
+				JSON.stringify({ title: "Plan" }),
+			],
+			await accessTo(api),
+		);
+
+		expect(run.exitCode).toBe(1);
+		expect(run.stderr).toStartWith("workspace_required: ");
 	});
 });
 
@@ -651,10 +696,6 @@ describe("an input on the command line", () => {
 			],
 		},
 		{
-			case: "no workspace",
-			args: ["reference", "create-note", "--input", "{}"],
-		},
-		{
 			case: "no input",
 			args: ["reference", "create-note", "--workspace", API_INSTANCE_WORKSPACE],
 		},
@@ -889,18 +930,25 @@ describe("an instance the command line cannot reach", () => {
 });
 
 describe("a request that fetch refuses to send", () => {
-	test("is thrown on as it came instead of being reported as an instance that cannot be reached", async () => {
-		const refused = new TypeError("Header 'Authorization' has invalid value");
-		const refusingFetch: Fetch = () => Promise.reject(refused);
+	test("is thrown on as it came, writing nothing, instead of being reported as an instance that cannot be reached", async () => {
+		const written: string[] = [];
 
-		const running = runCliInProcess(
-			["operations"],
-			"http://127.0.0.1:1",
-			manualTimer(),
-			refusingFetch,
-		);
+		const running = runCommandLine({
+			args: ["operations"],
+			loadConfig: () => ({
+				instanceUrl: new URL("http://127.0.0.1:1"),
+				token: new Secret("wbt_refused\r\nX-Forged: yes"),
+			}),
+			output: {
+				writeOutput: (text) => written.push(text),
+				writeError: (text) => written.push(text),
+			},
+			deadline: { ms: REQUEST_DEADLINE_MS, setTimer: manualTimer().setTimer },
+			fetch,
+		});
 
-		await expect(running).rejects.toBe(refused);
+		await expect(running).rejects.toBeInstanceOf(TypeError);
+		expect(written).toEqual([]);
 	});
 });
 

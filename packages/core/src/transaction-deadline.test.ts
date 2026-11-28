@@ -123,6 +123,8 @@ async function connectionSecurityOf(
 
 const HOOK_LOCK = 4712;
 
+const CANCEL_AGAIN_AFTER_MS = 100;
+
 class TimeIsUpError extends Error {
 	constructor() {
 		super("the time of the hook is up");
@@ -241,6 +243,7 @@ describe("a hook whose time is up while a statement of it is running", () => {
 		expect(givenUp).toBeInstanceOf(TimeIsUpError);
 		expect(refusal).toMatchObject({ name: "StatementRefusedError" });
 		expect(await notesIn(database.sql)).toEqual([]);
+		expect(timer.delaysMs).toEqual([250, CANCEL_AGAIN_AFTER_MS]);
 	});
 
 	test("is given up while a statement of another connection goes on undisturbed", async () => {
@@ -278,6 +281,7 @@ describe("a hook whose time is up while a statement of it is running", () => {
 
 		expect(givenUp).toBeInstanceOf(TimeIsUpError);
 		expect(await undisturbed).toBe("finished");
+		expect(timer.delaysMs).toEqual([250, CANCEL_AGAIN_AFTER_MS]);
 	});
 });
 
@@ -343,6 +347,7 @@ describe("a hook whose time is up while a statement of it cannot be cancelled", 
 			expect.objectContaining({ message: "statement not cancelled" }),
 		]);
 		expect([...(await pool`SELECT 1 AS served`)]).toEqual([{ served: 1 }]);
+		expect(timer.delaysMs).toEqual([50]);
 	});
 });
 
@@ -372,6 +377,7 @@ describe("the statement_timeout around a hook", () => {
 	test("is again that of the connection for the statements after a hook that finished in time", async () => {
 		const database = await databaseWithNotes();
 		const pool = poolWithTheStatementTimeoutOfAnInstance(database);
+		const timer = manualTimer();
 
 		const after = await pool.begin(async (transaction) => {
 			await runInTransactionWithin(
@@ -380,7 +386,7 @@ describe("the statement_timeout around a hook", () => {
 					await sql`INSERT INTO notes (note) VALUES ('written in time')`;
 				},
 				{
-					timeout: { ms: 50, setTimer: manualTimer().setTimer },
+					timeout: { ms: 50, setTimer: timer.setTimer },
 					cancellation: database.cancellation,
 					logger: recordingLogger().logger,
 				},
@@ -391,6 +397,8 @@ describe("the statement_timeout around a hook", () => {
 		});
 
 		expect(after).toBe("1min");
+		expect(timer.delaysMs).toEqual([50]);
+		expect(timer.pendingCount()).toBe(0);
 	});
 });
 
@@ -427,5 +435,10 @@ describe("a hook whose statement reaches Postgres only after its time is up", ()
 
 		expect(givenUp).toBeInstanceOf(TimeIsUpError);
 		expect([...(await pool`SELECT 1 AS served`)]).toEqual([{ served: 1 }]);
+		expect(timer.delaysMs).toEqual([
+			250,
+			CANCEL_AGAIN_AFTER_MS,
+			CANCEL_AGAIN_AFTER_MS,
+		]);
 	});
 });

@@ -4,6 +4,7 @@ import { SQL } from "bun";
 import { z } from "zod";
 import { Secret } from "./config.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
+import { isInstanceAdminOf } from "./instance-admins.ts";
 import { type PluginPackage, startPlugins } from "./kernel.ts";
 import { grantMembership } from "./memberships.ts";
 import {
@@ -11,6 +12,7 @@ import {
 	type OperationPipeline,
 	type OperationResult,
 } from "./operation-pipeline.ts";
+import { roleName } from "./role-name.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
 	type MigrationRunner,
@@ -22,6 +24,8 @@ import { recordingLogger } from "./testing/recording-logger.ts";
 import { createWorkspace } from "./workspaces.ts";
 
 const ALICE: Actor = { kind: "user", id: "alice" };
+
+const ADMIN: Actor = { kind: "service_account", id: "admin" };
 
 const WORKSPACE = "00000000-0000-4000-8000-00000000aaaa";
 
@@ -112,7 +116,7 @@ async function startBellPipeline(
 	await grantMembership(database.sql, {
 		workspace: WORKSPACE,
 		actor: ALICE,
-		role: "owner",
+		role: roleName("owner"),
 		createdAt,
 	});
 	const pool = new SQL(database.url, { max: 2 });
@@ -130,43 +134,128 @@ async function startBellPipeline(
 		eventsCommitted: () => {},
 		jobsCommitted: () => {},
 		random: () => 0.5,
+		isInstanceAdmin: isInstanceAdminOf([ADMIN]),
 		logger,
 	});
 }
 
-function lockingTheMembership(database: FreshDatabase): Promise<unknown> {
-	return database.sql.begin(
-		(transaction) => transaction`
-			SELECT role FROM core.memberships
-			WHERE workspace_id = ${WORKSPACE} AND actor_kind = ${ALICE.kind} AND actor_id = ${ALICE.id}
-			FOR UPDATE NOWAIT`,
-	);
+type Invoke = (
+	actor: Actor,
+	operation: string,
+	workspace: string | null,
+	input: unknown,
+) => Promise<OperationResult>;
+
+function invokerOf(pipeline: OperationPipeline): Invoke {
+	return (actor, operation, workspace, input) =>
+		pipeline.invoke({
+			operation,
+			actor,
+			apiTokenId: null,
+			idempotencyKey: null,
+			workspace,
+			input,
+			correlationId: operation,
+		});
 }
 
 describe("the membership checked for a mutation", () => {
-	test("cannot be revoked while the mutation runs", async () => {
+	test("cannot be revoked through core.revokeMembership while the mutation runs", async () => {
 		const database = await createFreshDatabase();
 		cleanups.push(() => database.drop());
 		const behind = gate();
-		const pipeline = await startBellPipeline(database, bellRungBehind(behind));
-		const ringing: Promise<OperationResult> = pipeline.invoke({
-			operation: "bell.ringBell",
-			actor: ALICE,
-			apiTokenId: null,
-			idempotencyKey: null,
-			workspace: WORKSPACE,
-			input: {},
-			correlationId: "call-1",
-		});
-		await behind.entered;
-
-		const revoked = await lockingTheMembership(database).then(
-			() => "revoked",
-			(error: unknown) => (error instanceof Error ? error.message : error),
+		const invoke = invokerOf(
+			await startBellPipeline(database, bellRungBehind(behind)),
 		);
+		const ringing = invoke(ALICE, "bell.ringBell", WORKSPACE, {});
+		await behind.entered;
+		const revoking = invoke(ADMIN, "core.revokeMembership", WORKSPACE, {
+			actor: ALICE,
+		});
+
+		const first = await lockWaitOrEnd(database, revoking);
 		behind.open();
 
-		expect(revoked).toStartWith("could not obtain lock on row");
+		expect(first).toBe("waiting for a lock");
 		expect(await ringing).toEqual({ ok: true, output: { rung: true } });
+		expect(await revoking).toEqual({
+			ok: true,
+			output: { revoked: true, role: "owner" },
+		});
+	});
+
+	test("keeps its role from being changed through core.grantMembership while the mutation runs", async () => {
+		const database = await createFreshDatabase();
+		cleanups.push(() => database.drop());
+		const behind = gate();
+		const invoke = invokerOf(
+			await startBellPipeline(database, bellRungBehind(behind)),
+		);
+		const ringing = invoke(ALICE, "bell.ringBell", WORKSPACE, {});
+		await behind.entered;
+		const changing = invoke(ADMIN, "core.grantMembership", WORKSPACE, {
+			actor: ALICE,
+			role: "viewer",
+		});
+
+		const first = await lockWaitOrEnd(database, changing);
+		behind.open();
+
+		expect(first).toBe("waiting for a lock");
+		expect(await ringing).toEqual({ ok: true, output: { rung: true } });
+		expect(await changing).toEqual({
+			ok: true,
+			output: { workspace: WORKSPACE, actor: ALICE, role: "viewer" },
+		});
+	});
+
+	test("keeps its custom role from being redefined through core.defineRole while the mutation runs", async () => {
+		const database = await createFreshDatabase();
+		cleanups.push(() => database.drop());
+		const behind = gate();
+		const invoke = invokerOf(
+			await startBellPipeline(database, bellRungBehind(behind)),
+		);
+		await invoke(ADMIN, "core.defineRole", null, {
+			name: "ringer",
+			rights: ["bell.bell.ring"],
+		});
+		await invoke(ADMIN, "core.grantMembership", WORKSPACE, {
+			actor: ALICE,
+			role: "ringer",
+		});
+		const ringing = invoke(ALICE, "bell.ringBell", WORKSPACE, {});
+		await behind.entered;
+		const redefining = invoke(ADMIN, "core.defineRole", null, {
+			name: "ringer",
+			rights: [],
+		});
+
+		const first = await lockWaitOrEnd(database, redefining);
+		behind.open();
+
+		expect(first).toBe("waiting for a lock");
+		expect(await ringing).toEqual({ ok: true, output: { rung: true } });
+		expect(await redefining).toEqual({
+			ok: true,
+			output: { name: "ringer", rights: [] },
+		});
 	});
 });
+
+async function lockWaitOrEnd(
+	database: FreshDatabase,
+	call: Promise<OperationResult>,
+): Promise<"waiting for a lock" | "ended"> {
+	let hasEnded = false;
+	void call.then(() => {
+		hasEnded = true;
+	});
+	while (!hasEnded) {
+		const waiting = await database.sql`
+			SELECT pid FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'`;
+		if (waiting.length > 0) return "waiting for a lock";
+	}
+	return "ended";
+}

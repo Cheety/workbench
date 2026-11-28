@@ -131,7 +131,7 @@ _Avoid_: Geteiltes Layout, Layout-Vorlage
 ## Interaktion
 
 **Operation**:
-Eine fachliche Aktion auf dem Server mit Eingabe-Schema, Autorisierung und Ergebnis; jede Operation ist über UI, HTTP-API, MCP und CLI erreichbar.
+Eine fachliche Aktion auf dem Server mit Eingabe-Schema, Autorisierung und Ergebnis; jede Operation ist über UI, HTTP-API, MCP und CLI erreichbar. Sie läuft auf einem Workspace oder, nur beim Core, auf der Instanz, etwa das Anlegen eines Workspace.
 _Avoid_: Action, Endpoint, Use Case (in der Plugin-Sprache)
 
 **MCP-Tool**:
@@ -177,11 +177,11 @@ Die Zugehörigkeit eines Akteurs zu einem Workspace mit einer Rolle; ohne Mitgli
 _Avoid_: Zugriff, Freigabe
 
 **Rolle**:
-Eine frei definierbare, benannte Zusammenstellung von Rechten, die über eine Mitgliedschaft vergeben wird.
+Eine frei definierbare, benannte Zusammenstellung von Rechten, die über eine Mitgliedschaft vergeben wird; eine eigene Rolle definiert der Instanz-Admin, die Startrollen bringt jede Instanz mit.
 _Avoid_: Gruppe, Berechtigungsstufe
 
 **Startrolle**:
-Eine der Rollen Owner, Editor und Viewer, die jede Instanz kennt und denen ein Plugin seine Rechte per Default zuordnet; ein Recht ohne Zuordnung steht niemandem zu.
+Eine der Rollen Owner, Editor und Viewer, die jede Instanz kennt und denen ein Plugin seine Rechte per Default zuordnet; ein Recht ohne Zuordnung steht niemandem zu. Ihre Rechte kommen nur aus dieser Zuordnung, der Instanz-Admin definiert sie nicht neu.
 _Avoid_: Standardrolle, Basisrolle, Default-Rolle
 
 **Recht**:
@@ -193,7 +193,7 @@ Der Akteur, dem ein Objekt gehört, etwa weil er es angelegt hat; die Pipeline l
 _Avoid_: Owner (das ist die Startrolle), Ersteller, Autor
 
 **Instanz-Admin**:
-Ein Nutzer, der Plugins, Nutzer und Instanz-Einstellungen verwaltet, unabhängig von Mitgliedschaften.
+Ein Akteur, der Workspaces, Mitgliedschaften, eigene Rollen, Plugins, Nutzer und Instanz-Einstellungen verwaltet, unabhängig von Mitgliedschaften; die Inhalte eines Workspace sieht auch er nur mit Mitgliedschaft. Bis es Nutzer mit Login gibt, ist er ein Service-Account, den die Instanz-Config nennt.
 _Avoid_: Superuser, Root
 
 **Einladung**:

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { NO_AUDIT_SUBJECT } from "./audit-subject.ts";
 import type { DatabaseWaitOutcome } from "./database-wait.ts";
 import {
 	type RegisteredEvent,
@@ -287,13 +288,15 @@ const renameLabel: RegisteredOperation = {
 	name: "board.renameLabel",
 	owner: { kind: "plugin", name: "board" },
 	kind: "mutation",
+	scope: "workspace",
 	target: "workspace",
 	right: "board.label.edit",
-	grantedTo: new Set(["owner"]),
+	grant: { by: "role", grantedTo: new Set(["owner"]) },
 	validateInput: async (value) => ({ valid: true, value }),
 	validateOutput: async (value) => ({ valid: true, value }),
 	describeInput: () => ({}),
 	describeOutput: () => ({}),
+	auditSubjectOf: () => NO_AUDIT_SUBJECT,
 	execute: async () => ({}),
 };
 

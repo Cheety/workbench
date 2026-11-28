@@ -139,7 +139,9 @@ describe("plugin discovery", () => {
 	test("loads the default export of the plugin entry on demand", async () => {
 		const { packages } = await discoverPluginPackages(packagesDirectory)();
 
-		const definition = await packages[1]?.loadDefinition();
+		const definition = await packages
+			.find(({ pluginName }) => pluginName === "notes")
+			?.loadDefinition();
 
 		expect(definition).toEqual({ manifest: { name: "notes" } });
 	});
@@ -147,7 +149,9 @@ describe("plugin discovery", () => {
 	test("leaves a plugin entry that fails on import to the caller", async () => {
 		const { packages } = await discoverPluginPackages(packagesDirectory)();
 
-		const loading = packages[0]?.loadDefinition();
+		const loading = packages
+			.find(({ pluginName }) => pluginName === "broken")
+			?.loadDefinition();
 
 		await expect(loading).rejects.toThrow(TypeError);
 	});

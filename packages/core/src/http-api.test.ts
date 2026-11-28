@@ -149,6 +149,85 @@ describe("an operation called over HTTP", () => {
 	});
 });
 
+describe("an operation on the instance called over HTTP", () => {
+	test("lets an instance admin create a workspace without naming a workspace in the path", async () => {
+		const api = await startLedgerInstance();
+		const admin = await api.issueInstanceAdminToken();
+
+		const response = await api.post(
+			"/api/operations/core.createWorkspace",
+			JSON.stringify({ name: "Finance" }),
+			bearer(admin.token),
+		);
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			id: expect.any(String),
+			name: "Finance",
+		});
+	});
+
+	test("answers 403 not_instance_admin to a token of an actor who is no instance admin", async () => {
+		const api = await startLedgerInstance();
+		const token = await api.issueToken("owner");
+
+		const response = await api.post(
+			"/api/operations/core.createWorkspace",
+			JSON.stringify({ name: "Finance" }),
+			bearer(token),
+		);
+
+		expect(response.status).toBe(403);
+		expect(await response.json()).toMatchObject({
+			code: "not_instance_admin",
+		});
+	});
+
+	test("answers 400 workspace_required to an operation on a workspace called on the instance", async () => {
+		const api = await startLedgerInstance();
+		const token = await api.issueToken("owner");
+
+		const response = await api.post(
+			"/api/operations/ledger.listEntries",
+			JSON.stringify({}),
+			bearer(token),
+		);
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toMatchObject({
+			code: "workspace_required",
+		});
+	});
+
+	test("answers 400 workspace_not_expected to an operation on the instance called on a workspace", async () => {
+		const api = await startLedgerInstance();
+		const token = await api.issueToken("owner");
+
+		const response = await api.post(
+			operationPath("core.listWorkspaces"),
+			JSON.stringify({ limit: 10, cursor: null }),
+			bearer(token),
+		);
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toMatchObject({
+			code: "workspace_not_expected",
+		});
+	});
+
+	test("answers 405 to another method than POST", async () => {
+		const api = await startLedgerInstance();
+
+		const response = await api.send(
+			"GET",
+			"/api/operations/core.listWorkspaces",
+		);
+
+		expect(response.status).toBe(405);
+		expect(response.headers.get("Allow")).toBe("POST");
+	});
+});
+
 describe("a mutation called over HTTP with an Idempotency-Key", () => {
 	test("is run once, and a repeated call receives the same body", async () => {
 		const api = await startLedgerInstance();
@@ -399,6 +478,8 @@ describe("the audit read over HTTP", () => {
 					operation: "ledger.addEntry",
 					workspace: WORKSPACE,
 					result: "succeeded",
+					member: null,
+					role: null,
 				},
 			],
 			nextCursor: null,
@@ -682,7 +763,13 @@ describe("the operations listed over HTTP", () => {
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({
 			operations: [
+				{ name: "core.createWorkspace", kind: "mutation" },
+				{ name: "core.defineRole", kind: "mutation" },
+				{ name: "core.grantMembership", kind: "mutation" },
 				{ name: "core.listAuditEntries", kind: "query" },
+				{ name: "core.listInstanceAuditEntries", kind: "query" },
+				{ name: "core.listWorkspaces", kind: "query" },
+				{ name: "core.revokeMembership", kind: "mutation" },
 				{ name: "ledger.addEntry", kind: "mutation" },
 				{ name: "ledger.listEntries", kind: "query" },
 			],
@@ -705,9 +792,18 @@ describe("the operations listed over HTTP", () => {
 			headers: bearer(token),
 		});
 
+		const listed = z
+			.object({ operations: z.array(z.looseObject({})) })
+			.parse(await response.json());
+		expect(documentedList.safeParse(listed).error?.issues).toBeUndefined();
 		expect(
-			documentedList.safeParse(await response.json()).error?.issues,
-		).toBeUndefined();
+			documentedList.safeParse({
+				operations: listed.operations.map((operation) => ({
+					...operation,
+					kind: "command",
+				})),
+			}).success,
+		).toBe(false);
 	});
 
 	test("are not listed without a valid token", async () => {
