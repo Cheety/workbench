@@ -1024,12 +1024,13 @@ describe("the payload of an event", () => {
 		const database = await migratedDatabase();
 		const cardDue = boardEvent(z.date());
 		const events = registryOfBoardPublishing(cardDue);
+		const storedFormRejection = z.date().safeParse(NOW.toISOString()).error;
 
 		const publishing = publish({ sql: database.sql, events }, cardDue, NOW);
 
 		expect(await publishing.catch((error: unknown) => error)).toMatchObject({
 			name: "InvalidEventPayloadError",
-			issues: [{ path: [], message: expect.stringContaining("date") }],
+			issues: [{ path: [], message: storedFormRejection?.issues[0]?.message }],
 		});
 	});
 

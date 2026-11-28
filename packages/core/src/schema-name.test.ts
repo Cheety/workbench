@@ -11,7 +11,7 @@ describe("schema names", () => {
 		["not a plain lowercase identifier", 'plugin_x"; DROP SCHEMA core; --'],
 		["starting with a digit", "1plugin"],
 	])("reject a name %s", (_, value) => {
-		expect(() => schemaName(value)).toThrow(new InvalidSchemaNameError(value));
+		expect(() => schemaName(value)).toThrow(InvalidSchemaNameError);
 	});
 
 	test("accept a name of 63 characters", () => {
