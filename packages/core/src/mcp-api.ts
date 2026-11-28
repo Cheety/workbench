@@ -25,6 +25,7 @@ import {
 	REQUEST_PROBLEMS,
 	toProblemDetails,
 } from "./problem-details.ts";
+import { quote } from "./quote.ts";
 import { isWorkspaceId } from "./workspaces.ts";
 
 export const MCP_PATH = "/api/mcp";
@@ -100,8 +101,13 @@ function toolNameOf(operationName: string): string {
 	return operationName.replace(OPERATION_NAME_SEPARATOR, TOOL_NAME_SEPARATOR);
 }
 
-function operationNameOf(toolName: string): string {
-	return toolName.replace(TOOL_NAME_SEPARATOR, OPERATION_NAME_SEPARATOR);
+function findOperationOfTool(
+	operations: Pick<OperationRegistry, "list">,
+	toolName: string,
+): RegisteredOperation | undefined {
+	return operations
+		.list()
+		.find((operation) => toolNameOf(operation.name) === toolName);
 }
 
 function toolOf(operation: RegisteredOperation): Tool {
@@ -132,8 +138,11 @@ async function callTool(
 	const workspace = params.arguments?.workspace;
 	if (typeof workspace !== "string" || !isWorkspaceId(workspace))
 		return toolError(INVALID_WORKSPACE_ARGUMENT, correlationId);
+	const operation = findOperationOfTool(api.operations, params.name);
+	if (operation === undefined)
+		return toolError(unknownTool(params.name), correlationId);
 	const result = await api.pipeline.invoke({
-		operation: operationNameOf(params.name),
+		operation: operation.name,
 		actor: authentication.actor,
 		apiTokenId: authentication.apiTokenId,
 		idempotencyKey: null,
@@ -143,6 +152,15 @@ async function callTool(
 	});
 	if (!result.ok) return toolError(result.failure, correlationId);
 	return { content: [{ type: "text", text: JSON.stringify(result.output) }] };
+}
+
+function unknownTool(toolName: string): Problem {
+	return {
+		code: "unknown_operation",
+		kind: "not_found",
+		detail: `no tool is named ${quote(toolName)}`,
+		issues: [],
+	};
 }
 
 function toolError(problem: Problem, correlationId: string): CallToolResult {

@@ -306,12 +306,18 @@ describe("a failing MCP tool call", () => {
 		},
 	);
 
-	test("answers unknown_operation for a tool no plugin registered", async () => {
+	test.each([
+		{ case: "a tool no plugin registered", name: "ledger_closeBook" },
+		{
+			case: "the name of an operation instead of its tool",
+			name: "ledger.listEntries",
+		},
+	])("answers unknown_operation for $case", async ({ name }) => {
 		const api = await startLedgerInstance();
 		const client = await connectedClient(api, await api.issueToken());
 
 		const result = await client.callTool({
-			name: "ledger_closeBook",
+			name,
 			arguments: { workspace: WORKSPACE, input: {} },
 		});
 
