@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
 	DATABASE_CAPABILITY,
 	defineOperation,
@@ -13,8 +11,8 @@ import type { PluginPackage } from "./kernel.ts";
 import {
 	API_INSTANCE_WORKSPACE,
 	type ApiInstance,
-	startApiInstance,
 } from "./testing/api-instance.ts";
+import { mcpTestbed } from "./testing/mcp-testbed.ts";
 import { pluginPackageAt } from "./testing/operation-harness.ts";
 
 const REFERENCE_DIRECTORY = join(
@@ -24,14 +22,9 @@ const REFERENCE_DIRECTORY = join(
 
 const UNKNOWN_WORKSPACE = "00000000-0000-4000-8000-00000000bbbb";
 
-const instances: ApiInstance[] = [];
+const mcp = mcpTestbed();
 
-const clients: Client[] = [];
-
-afterEach(async () => {
-	for (const client of clients.splice(0)) await client.close();
-	for (const instance of instances.splice(0)) await instance.stop();
-});
+afterEach(() => mcp.tearDown());
 
 const closeBook = defineOperation({
 	name: "closeBook",
@@ -62,30 +55,8 @@ const ledger: PluginPackage = {
 	loadMigrations: async () => [],
 };
 
-async function startInstanceOf(
-	plugins: readonly PluginPackage[],
-): Promise<ApiInstance> {
-	const instance = await startApiInstance(plugins);
-	instances.push(instance);
-	return instance;
-}
-
 async function startReferenceInstance(): Promise<ApiInstance> {
-	return startInstanceOf([await pluginPackageAt(REFERENCE_DIRECTORY)]);
-}
-
-async function connectedClient(
-	api: ApiInstance,
-	token: string,
-): Promise<Client> {
-	const client = new Client({ name: "reference-agent", version: "1.0.0" });
-	clients.push(client);
-	await client.connect(
-		new StreamableHTTPClientTransport(new URL(`${api.url}/api/mcp`), {
-			requestInit: { headers: { Authorization: `Bearer ${token}` } },
-		}),
-	);
-	return client;
+	return mcp.startInstance([await pluginPackageAt(REFERENCE_DIRECTORY)]);
 }
 
 type Call = {
@@ -112,7 +83,7 @@ async function overMcp(
 	token: string,
 	{ operation, workspace, input }: Call,
 ): Promise<string> {
-	const client = await connectedClient(api, token);
+	const client = await mcp.connectedClient(api.url, token);
 	const result = await client.callTool({
 		name: operation.replace(".", "_"),
 		arguments: { workspace, input },
@@ -130,7 +101,7 @@ async function overMcp(
 describe("the reference operations listed as MCP tools", () => {
 	test("name createNote and listNotes with the input schema of the HTTP API contract under input", async () => {
 		const api = await startReferenceInstance();
-		const client = await connectedClient(api, await api.issueToken());
+		const client = await mcp.connectedClient(api.url, await api.issueToken());
 
 		const { tools } = await client.listTools();
 
@@ -258,7 +229,7 @@ describe("an operation of the reference plugin over MCP and over HTTP", () => {
 
 describe("a domain error of a plugin over MCP and over HTTP", () => {
 	test("comes with the same problem details, status and stable code of the plugin", async () => {
-		const api = await startInstanceOf([ledger]);
+		const api = await mcp.startInstance([ledger]);
 		const token = await api.issueToken();
 		const call = {
 			operation: "ledger.closeBook",
