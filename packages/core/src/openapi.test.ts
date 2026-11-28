@@ -70,15 +70,6 @@ describe("the OpenAPI document of the HTTP API", () => {
 				"/api/workspaces/{workspace}/operations/board.renameLabel": {
 					post: {
 						operationId: "board.renameLabel",
-						parameters: [
-							{
-								name: "workspace",
-								in: "path",
-								required: true,
-								schema: { type: "string", format: "uuid" },
-							},
-							{ name: "Idempotency-Key", in: "header", required: false },
-						],
 						requestBody: {
 							required: true,
 							content: {
