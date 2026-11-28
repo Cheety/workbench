@@ -18,6 +18,14 @@ docker compose -f compose.dev.yaml exec -T postgres psql -U workbench -d workben
 
 Ein zweites `CREATE DATABASE` scheitert mit `already exists`; dann ist sie schon da.
 
+Postgres bietet TLS an, mit einem selbst signierten Zertifikat, das nur `localhost` nennt, nicht `127.0.0.1`. Der Container erzeugt Zertifikat und Schlüssel bei jedem Start neu und behält beide für sich; auf dem Rechner liegt nichts davon. Die Tests in `packages/core/src/transaction-deadline.test.ts` lesen das Zertifikat per `pg_read_file(current_setting('ssl_cert_file'))` vom Server, schreiben es in eine temporäre Datei, übergeben sie als `sslrootcert` und prüfen so jeden `sslmode` gegen einen echten TLS-Server. Bietet der Server kein TLS an, scheitern sie mit `TestDatabaseWithoutTlsError`. Ein Container, der vor dieser Einstellung in `compose.dev.yaml` gestartet wurde, muss einmal neu erzeugt werden:
+
+```sh
+docker compose -f compose.dev.yaml up --detach --wait --force-recreate
+```
+
+Die übrigen Tests verbinden sich ohne `sslmode` und damit ohne TLS.
+
 ## Prüfen
 
 ```sh

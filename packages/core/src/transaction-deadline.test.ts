@@ -6,6 +6,7 @@ import { manualTimer } from "./testing/manual-timer.ts";
 import {
 	createFreshDatabase,
 	type FreshDatabase,
+	getTestDatabaseCertificate,
 	PostgresGate,
 	TEST_DATABASE_URL,
 } from "./testing/postgres.ts";
@@ -22,41 +23,103 @@ afterEach(async () => {
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
+const BY_ADDRESS = "127.0.0.1";
+
+const BY_NAME = "localhost";
+
 describe("the connection that cancels statements", () => {
-	test.each(["disable", "prefer"])(
-		"limits its statements to the statement_timeout it is opened with, with sslmode=%s",
-		async (mode) => {
-			const cancellation = openStatementCancellation(
-				`${TEST_DATABASE_URL}?sslmode=${mode}`,
-				60_000,
-			);
-			cleanups.push(() => cancellation.close());
+	test.each([
+		{ sslmode: "disable", encrypted: false },
+		{ sslmode: "prefer", encrypted: true },
+		{ sslmode: "require", encrypted: true },
+	])(
+		"connects with sslmode=$sslmode, encrypted: $encrypted, and limits its statements to the statement_timeout it is opened with",
+		async ({ sslmode, encrypted }) => {
+			const cancellation = cancellationTo(BY_ADDRESS, { sslmode });
 
-			const limit = await statementTimeoutIn((strings, ...values) =>
-				cancellation(strings, ...values),
-			);
+			const connection = await connectionSecurityOf(cancellation);
 
-			expect(limit).toBe("1min");
+			expect(connection).toEqual({ ssl: encrypted, statement_timeout: "1min" });
 		},
 	);
 
-	test.each(["require", "verify-ca", "verify-full"])(
-		"connects only over the TLS that sslmode=%s demands, refusing the test server that offers none",
-		async (mode) => {
-			const cancellation = openStatementCancellation(
-				`${TEST_DATABASE_URL}?sslmode=${mode}`,
-				60_000,
-			);
-			cleanups.push(() => cancellation.close());
+	test.each(["verify-ca", "verify-full"])(
+		"refuses with sslmode=%s a server whose certificate it is not given to trust",
+		async (sslmode) => {
+			const cancellation = cancellationTo(BY_NAME, { sslmode });
 
 			const refused = cancellation`SELECT 1`;
 
 			await expect(refused).rejects.toMatchObject({
-				code: "ERR_POSTGRES_TLS_NOT_AVAILABLE",
+				code: "DEPTH_ZERO_SELF_SIGNED_CERT",
 			});
 		},
 	);
+
+	test.each([
+		{ sslmode: "verify-ca", host: BY_ADDRESS },
+		{ sslmode: "verify-full", host: BY_NAME },
+	])(
+		"connects encrypted with sslmode=$sslmode to $host, trusting the certificate given as sslrootcert",
+		async ({ sslmode, host }) => {
+			const cancellation = cancellationTo(host, {
+				sslmode,
+				sslrootcert: await trustedCertificatePath(),
+			});
+
+			const connection = await connectionSecurityOf(cancellation);
+
+			expect(connection).toEqual({ ssl: true, statement_timeout: "1min" });
+		},
+	);
+
+	test("refuses with sslmode=verify-full a trusted certificate that does not name the host it connects to", async () => {
+		const cancellation = cancellationTo(BY_ADDRESS, {
+			sslmode: "verify-full",
+			sslrootcert: await trustedCertificatePath(),
+		});
+
+		const refused = cancellation`SELECT 1`;
+
+		await expect(refused).rejects.toMatchObject({
+			code: "ERR_TLS_CERT_ALTNAME_INVALID",
+		});
+	});
 });
+
+const connectionSecurity = z.tuple([
+	z.object({ ssl: z.boolean(), statement_timeout: z.string() }),
+]);
+
+function cancellationTo(
+	host: string,
+	parameters: Readonly<Record<string, string>>,
+): SQL {
+	const url = new URL(TEST_DATABASE_URL);
+	url.hostname = host;
+	for (const [key, value] of Object.entries(parameters))
+		url.searchParams.set(key, value);
+	const cancellation = openStatementCancellation(url.href, 60_000);
+	cleanups.push(() => cancellation.close());
+	return cancellation;
+}
+
+async function trustedCertificatePath(): Promise<string> {
+	const certificate = await getTestDatabaseCertificate();
+	cleanups.push(() => certificate.remove());
+	return certificate.path;
+}
+
+async function connectionSecurityOf(
+	cancellation: SQL,
+): Promise<z.infer<typeof connectionSecurity>[0]> {
+	const [row] = connectionSecurity.parse(
+		await cancellation`
+			SELECT ssl, current_setting('statement_timeout') AS statement_timeout
+			FROM pg_stat_ssl WHERE pid = pg_backend_pid()`,
+	);
+	return row;
+}
 
 const HOOK_LOCK = 4712;
 

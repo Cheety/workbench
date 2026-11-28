@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { type Socket, SQL, type TCPSocketListener } from "bun";
 import { z } from "zod";
 import { openStatementCancellation } from "../transaction-deadline.ts";
@@ -52,6 +55,45 @@ function oncePerProcess(run: () => Promise<void>): () => Promise<void> {
 }
 
 const testDatabaseIsSupported = oncePerProcess(assertTestDatabaseIsSupported);
+
+export class TestDatabaseWithoutTlsError extends Error {
+	constructor() {
+		super(
+			"test database has ssl off, recreate it with: docker compose -f compose.dev.yaml up --detach --wait --force-recreate",
+		);
+		this.name = "TestDatabaseWithoutTlsError";
+	}
+}
+
+export type TestDatabaseCertificate = {
+	readonly path: string;
+	remove(): Promise<void>;
+};
+
+const serverCertificateRows = z.tuple([
+	z.object({ ssl: z.string(), certificate: z.string().nullable() }),
+]);
+
+export async function getTestDatabaseCertificate(): Promise<TestDatabaseCertificate> {
+	const sql = new SQL(TEST_DATABASE_URL, { max: 1 });
+	try {
+		const rows = await sql`
+			SELECT current_setting('ssl') AS ssl,
+				CASE WHEN current_setting('ssl') = 'on'
+					THEN pg_read_file(current_setting('ssl_cert_file')) END AS certificate`;
+		const [{ certificate }] = serverCertificateRows.parse([...rows]);
+		if (certificate === null) throw new TestDatabaseWithoutTlsError();
+		const directory = await mkdtemp(join(tmpdir(), "workbench-test-tls-"));
+		const path = join(directory, "server.crt");
+		await writeFile(path, certificate);
+		return {
+			path,
+			remove: () => rm(directory, { recursive: true, force: true }),
+		};
+	} finally {
+		await sql.close();
+	}
+}
 
 const CANCELLATION_STATEMENT_TIMEOUT_MS = 60_000;
 

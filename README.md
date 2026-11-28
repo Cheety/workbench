@@ -21,7 +21,7 @@ Die Integrationstests laufen gegen ein echtes Postgres 17. Lokal startet es so:
 docker compose -f compose.dev.yaml up --detach --wait
 ```
 
-Die Datenbank lauscht auf `127.0.0.1:54329`, hält ihre Daten nur im Arbeitsspeicher und wird mit `docker compose -f compose.dev.yaml down` wieder entfernt. Eine andere Datenbank lässt sich über `TEST_DATABASE_URL` angeben. `compose.dev.yaml` dient nur der Entwicklung und ist keine Deployment-Datei.
+Die Datenbank lauscht auf `127.0.0.1:54329`, hält ihre Daten nur im Arbeitsspeicher und wird mit `docker compose -f compose.dev.yaml down` wieder entfernt. Sie bietet TLS mit einem selbst signierten Zertifikat für `localhost` an, das der Container bei jedem Start neu erzeugt und für sich behält; die Tests der Verbindung, die Anweisungen abbricht, lesen es per `pg_read_file` vom Server und scheitern mit `TestDatabaseWithoutTlsError`, wenn der Server kein TLS anbietet. Ein Container, der vor dieser Einstellung gestartet wurde, muss einmal mit `docker compose -f compose.dev.yaml up --detach --wait --force-recreate` neu erzeugt werden. Eine andere Datenbank lässt sich über `TEST_DATABASE_URL` angeben. `compose.dev.yaml` dient nur der Entwicklung und ist keine Deployment-Datei.
 
 ## Prüfbefehl
 
