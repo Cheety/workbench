@@ -291,18 +291,6 @@ export function createOperationPipeline(
 	return { invoke: (call) => invoke(call, options) };
 }
 
-function grantableRightsOf(registry: OperationRegistry): ReadonlySet<string> {
-	return new Set(
-		registry
-			.list()
-			.flatMap((operation) =>
-				operation.scope === "workspace" && operation.grant.by === "role"
-					? [operation.right]
-					: [],
-			),
-	);
-}
-
 type ScopedCall =
 	| {
 			readonly scope: "workspace";
@@ -432,7 +420,7 @@ async function executeScoped(
 			return executeOnInstance(scoped.operation, input, {
 				actor,
 				sql: statementsIn(transaction),
-				grantableRights: grantableRightsOf(options.registry),
+				grantableRights: options.registry.grantableRights(),
 				now: options.now,
 				newId: options.newId,
 			});

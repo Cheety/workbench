@@ -152,6 +152,7 @@ export function instanceAdminWorkspaceOperationOf(
 export type OperationRegistry = {
 	find(name: string): RegisteredOperation | undefined;
 	list(): readonly RegisteredOperation[];
+	grantableRights(): ReadonlySet<string>;
 };
 
 export type OperationsRead = {
@@ -328,8 +329,22 @@ export function registerOperations(
 	const byName = new Map(
 		operations.map((operation) => [operation.name, operation]),
 	);
+	const grantableRights = grantableRightsOf([...byName.values()]);
 	return {
 		find: (name) => byName.get(name),
 		list: () => [...byName.values()],
+		grantableRights: () => grantableRights,
 	};
+}
+
+function grantableRightsOf(
+	operations: readonly RegisteredOperation[],
+): ReadonlySet<string> {
+	return new Set(
+		operations.flatMap((operation) =>
+			operation.scope === "workspace" && operation.grant.by === "role"
+				? [operation.right]
+				: [],
+		),
+	);
 }
