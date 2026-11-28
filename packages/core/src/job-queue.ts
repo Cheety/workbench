@@ -23,9 +23,9 @@ import { storedPayloadOf } from "./stored-payload.ts";
 import { runInTransactionWithin } from "./transaction-deadline.ts";
 
 export class UndeclaredJobError extends Error {
-	constructor(owner: string, job: string) {
+	constructor(enqueuer: string, job: string) {
 		super(
-			`${quote(owner)} enqueued the job ${quote(job)}, which it does not declare among its jobs`,
+			`${quote(enqueuer)} enqueued the job ${quote(job)}, which it does not declare among its jobs`,
 		);
 		this.name = "UndeclaredJobError";
 	}
@@ -57,11 +57,11 @@ export async function enqueueJob(
 	jobs: JobRegistry,
 	enqueueing: JobEnqueueing,
 ): Promise<void> {
-	const owner = ownerName(enqueueing.owner);
-	const name = jobName(owner, enqueueing.definition);
+	const enqueuer = ownerName(enqueueing.owner);
+	const name = jobName(enqueuer, enqueueing.definition);
 	const job = jobs.find(name);
 	if (job === undefined || job.kind !== "enqueued")
-		throw new UndeclaredJobError(owner, name);
+		throw new UndeclaredJobError(enqueuer, name);
 	const payload = await storedPayloadOf(
 		enqueueing.payload,
 		job.validatePayload,
