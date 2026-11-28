@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { authenticateToken, newApiToken } from "./api-tokens.ts";
+import {
+	authenticateToken,
+	newApiToken,
+	UNLIMITED_TOKEN_SCOPE,
+} from "./api-tokens.ts";
 import { Secret } from "./config.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import {
@@ -74,7 +78,7 @@ describe("creating a service account", () => {
 			apiToken: {
 				id: expect.any(String),
 				expiresAt: THIRTY_DAYS_LATER,
-				scope: { operations: null, workspaces: null },
+				scope: UNLIMITED_TOKEN_SCOPE,
 			},
 		});
 		expect(

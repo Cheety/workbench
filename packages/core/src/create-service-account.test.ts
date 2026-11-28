@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { z } from "zod";
-import { authenticateToken } from "./api-tokens.ts";
+import { authenticateToken, UNLIMITED_TOKEN_SCOPE } from "./api-tokens.ts";
 import { createFreshDatabase, type FreshDatabase } from "./testing/postgres.ts";
 
 const COMMAND = new URL("./create-service-account.ts", import.meta.url)
@@ -83,7 +83,7 @@ describe("creating a service account by command", () => {
 			apiToken: {
 				id: expect.any(String),
 				expiresAt: new Date(expiresAt),
-				scope: { operations: null, workspaces: null },
+				scope: UNLIMITED_TOKEN_SCOPE,
 			},
 		});
 	});

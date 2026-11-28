@@ -9,7 +9,11 @@ import {
 } from "@workbench/sdk";
 import type { SQL } from "bun";
 import { isSameActor } from "./actor.ts";
-import { type CallingToken, isInScope, type TokenScope } from "./api-tokens.ts";
+import {
+	type CallingToken,
+	type TokenScope,
+	UNLIMITED_TOKEN_SCOPE,
+} from "./api-tokens.ts";
 import {
 	type AuditOutcome,
 	type DenialReason,
@@ -191,8 +195,6 @@ const DENIALS: Record<DenialReason, OperationFailure> = {
 	workspace_outside_token_scope: WORKSPACE_NOT_FOUND,
 	instance_outside_token_scope: INSTANCE_OUTSIDE_TOKEN_SCOPE,
 };
-
-const UNLIMITED_SCOPE: TokenScope = { operations: null, workspaces: null };
 
 const INSTANCE_DENIALS: Record<
 	InstanceOperation["grant"]["by"],
@@ -597,7 +599,7 @@ async function authorize(
 ): Promise<void> {
 	const caller: AuthorizedCaller = {
 		actor: call.actor,
-		scope: call.apiToken?.scope ?? UNLIMITED_SCOPE,
+		scope: call.apiToken?.scope ?? UNLIMITED_TOKEN_SCOPE,
 	};
 	switch (scoped.scope) {
 		case "instance":
@@ -611,7 +613,7 @@ function requireOperationInScope(
 	scope: TokenScope,
 	operation: RegisteredOperation,
 ): void {
-	if (!isInScope(scope.operations, operation.name))
+	if (!scope.operations.includes(operation.name))
 		throw deniedCall("operation_outside_token_scope");
 }
 
@@ -620,7 +622,7 @@ function authorizeOnInstance(
 	operation: InstanceOperation,
 	isInstanceAdmin: (actor: Actor) => boolean,
 ): void {
-	if (scope.workspaces !== null)
+	if (!scope.workspaces.isUnlimited())
 		throw deniedCall("instance_outside_token_scope");
 	requireOperationInScope(scope, operation);
 	switch (operation.grant.by) {
@@ -647,7 +649,7 @@ async function authorizeOnWorkspace(
 		MEMBERSHIP_LOCK[operation.kind],
 	);
 	if (membership.kind === "no_workspace") throw failedCall(WORKSPACE_NOT_FOUND);
-	if (!isInScope(scope.workspaces, workspace))
+	if (!scope.workspaces.includes(workspace))
 		throw deniedCall("workspace_outside_token_scope");
 	const { grant } = operation;
 	switch (grant.by) {

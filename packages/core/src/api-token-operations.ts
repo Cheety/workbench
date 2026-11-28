@@ -4,9 +4,9 @@ import {
 	apiTokenHash,
 	type CallingToken,
 	isLineageRevoked,
-	scopeList,
+	ScopeList,
+	storedScopeList,
 	type TokenScope,
-	tokenScopeOf,
 } from "./api-tokens.ts";
 import { NO_AUDIT_SUBJECT } from "./audit-subject.ts";
 import { type Keyset, pageOf, pageRequestSchema } from "./keyset-pages.ts";
@@ -39,7 +39,9 @@ function nullableUniqueList<Item extends z.ZodType<string>>(item: Item) {
 		.nullable();
 }
 
-const listedScope = { operations: scopeList, workspaces: scopeList };
+const listedNames = z.array(z.string()).nullable();
+
+const listedScope = { operations: listedNames, workspaces: listedNames };
 
 function holderOf(ctx: InstanceContext): string {
 	if (ctx.actor.kind !== "service_account")
@@ -51,20 +53,11 @@ function holderOf(ctx: InstanceContext): string {
 	return ctx.actor.id;
 }
 
-function exceedsOperations(allowed: TokenScope, wanted: TokenScope): boolean {
-	const allowedOperations = allowed.operations;
-	if (allowedOperations === null) return false;
-	if (wanted.operations === null) return true;
-	return [...wanted.operations].some(
-		(operation) => !allowedOperations.has(operation),
-	);
-}
-
 function checkWithinCallingToken(
 	calling: CallingToken,
 	wanted: { readonly scope: TokenScope; readonly expiresAt: Date },
 ): void {
-	if (exceedsOperations(calling.scope, wanted.scope))
+	if (!calling.scope.operations.covers(wanted.scope.operations))
 		throw new OperationError(
 			"rejected",
 			"token_scope_exceeded",
@@ -93,14 +86,6 @@ async function holdCallingToken(
 			"calling_token_invalid",
 			"the token of the call was revoked or expired while the call ran",
 		);
-}
-
-function sortedOrNull(listed: readonly string[] | null): string[] | null {
-	return listed === null ? null : listed.toSorted();
-}
-
-function jsonOrNull(listed: readonly string[] | null): string | null {
-	return listed === null ? null : JSON.stringify(listed);
 }
 
 export const createApiTokenOperation = defineInstanceOperation({
@@ -133,27 +118,26 @@ export const createApiTokenOperation = defineInstanceOperation({
 			);
 		const createdAt = ctx.now();
 		const expiresAt = expiryAfter(createdAt, validDays);
+		const scope: TokenScope = {
+			operations: ScopeList.of(operations),
+			workspaces: ScopeList.of(workspaces),
+		};
 		const calling = ctx.apiToken;
 		if (calling !== null) {
-			checkWithinCallingToken(calling, {
-				scope: tokenScopeOf({ operations, workspaces }),
-				expiresAt,
-			});
+			checkWithinCallingToken(calling, { scope, expiresAt });
 			await holdCallingToken(ctx, calling, createdAt);
 		}
 		const id = ctx.newId();
 		const token = ctx.newApiToken();
-		const sortedOperations = sortedOrNull(operations);
-		const sortedWorkspaces = sortedOrNull(workspaces);
 		await ctx.sql`
 			INSERT INTO core.api_tokens (id, service_account_id, token_hash, created_at, expires_at, operations, workspaces, created_by_api_token_id)
-			VALUES (${id}, ${holder}, ${apiTokenHash(token.reveal())}, ${createdAt}, ${expiresAt}, ${jsonOrNull(sortedOperations)}::text::jsonb, ${jsonOrNull(sortedWorkspaces)}::text::jsonb, ${calling?.id ?? null})`;
+			VALUES (${id}, ${holder}, ${apiTokenHash(token.reveal())}, ${createdAt}, ${expiresAt}, ${scope.operations.toJson()}::text::jsonb, ${scope.workspaces.toJson()}::text::jsonb, ${calling?.id ?? null})`;
 		return {
 			id,
 			token: token.reveal(),
 			expiresAt: expiresAt.toISOString(),
-			operations: sortedOperations,
-			workspaces: sortedWorkspaces,
+			operations: scope.operations.toList(),
+			workspaces: scope.workspaces.toList(),
 		};
 	},
 	auditSubject: () => NO_AUDIT_SUBJECT,
@@ -164,8 +148,8 @@ const listedTokenRow = z.object({
 	created_at: z.date(),
 	expires_at: z.date(),
 	revoked_at: z.date().nullable(),
-	operations: scopeList,
-	workspaces: scopeList,
+	operations: storedScopeList,
+	workspaces: storedScopeList,
 });
 
 type TokenPosition = {
@@ -224,8 +208,8 @@ export const listApiTokensOperation = defineInstanceOperation({
 				createdAt: row.created_at.toISOString(),
 				expiresAt: row.expires_at.toISOString(),
 				revokedAt: row.revoked_at?.toISOString() ?? null,
-				operations: row.operations,
-				workspaces: row.workspaces,
+				operations: row.operations.toList(),
+				workspaces: row.workspaces.toList(),
 			})),
 			nextCursor: page.nextCursor,
 		};

@@ -11,9 +11,53 @@ export type RejectedTokenReason =
 	| "expired_token"
 	| "revoked_token";
 
+export class ScopeList {
+	static readonly UNLIMITED = new ScopeList(null);
+
+	private readonly names: ReadonlySet<string> | null;
+
+	private constructor(names: ReadonlySet<string> | null) {
+		this.names = names;
+	}
+
+	static of(listed: readonly string[] | null): ScopeList {
+		return listed === null
+			? ScopeList.UNLIMITED
+			: new ScopeList(new Set(listed));
+	}
+
+	isUnlimited(): boolean {
+		return this.names === null;
+	}
+
+	includes(name: string): boolean {
+		return this.names === null || this.names.has(name);
+	}
+
+	covers(other: ScopeList): boolean {
+		if (this.names === null) return true;
+		if (other.names === null) return false;
+		return [...other.names].every((name) => this.includes(name));
+	}
+
+	toList(): string[] | null {
+		return this.names === null ? null : [...this.names].toSorted();
+	}
+
+	toJson(): string | null {
+		const listed = this.toList();
+		return listed === null ? null : JSON.stringify(listed);
+	}
+}
+
 export type TokenScope = {
-	readonly operations: ReadonlySet<string> | null;
-	readonly workspaces: ReadonlySet<string> | null;
+	readonly operations: ScopeList;
+	readonly workspaces: ScopeList;
+};
+
+export const UNLIMITED_TOKEN_SCOPE: TokenScope = {
+	operations: ScopeList.UNLIMITED,
+	workspaces: ScopeList.UNLIMITED,
 };
 
 export type CallingToken = {
@@ -35,7 +79,10 @@ export type AuthenticatedToken = Extract<
 	{ readonly authenticated: true }
 >;
 
-export const scopeList = z.array(z.string()).nullable();
+export const storedScopeList = z
+	.array(z.string())
+	.nullable()
+	.transform(ScopeList.of);
 
 const tokenRow = z.object({
 	id: z.string(),
@@ -43,8 +90,8 @@ const tokenRow = z.object({
 	expires_at: z.date(),
 	revoked_at: z.date().nullable(),
 	created_by_api_token_id: z.string().nullable(),
-	operations: scopeList,
-	workspaces: scopeList,
+	operations: storedScopeList,
+	workspaces: storedScopeList,
 });
 
 const lineageRow = z.object({ revoked: z.boolean() });
@@ -87,7 +134,7 @@ export async function authenticateToken(
 		apiToken: {
 			id: found.id,
 			expiresAt: found.expires_at,
-			scope: tokenScopeOf(found),
+			scope: { operations: found.operations, workspaces: found.workspaces },
 		},
 	};
 }
@@ -106,27 +153,4 @@ export async function isLineageRevoked(
 		)
 		SELECT EXISTS (SELECT 1 FROM lineage WHERE revoked_at IS NOT NULL) AS revoked`;
 	return lineageRow.parse(row).revoked;
-}
-
-export type ListedScope = {
-	readonly operations: readonly string[] | null;
-	readonly workspaces: readonly string[] | null;
-};
-
-export function tokenScopeOf(listed: ListedScope): TokenScope {
-	return {
-		operations: setOf(listed.operations),
-		workspaces: setOf(listed.workspaces),
-	};
-}
-
-function setOf(listed: readonly string[] | null): ReadonlySet<string> | null {
-	return listed === null ? null : new Set(listed);
-}
-
-export function isInScope(
-	listed: ReadonlySet<string> | null,
-	name: string,
-): boolean {
-	return listed === null || listed.has(name);
 }

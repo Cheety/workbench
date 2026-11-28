@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { defineOperation, definePlugin } from "@workbench/sdk";
 import { z } from "zod";
+import { UNLIMITED_TOKEN_SCOPE } from "./api-tokens.ts";
 import type { PluginPackage } from "./kernel.ts";
 import { grantMembership } from "./memberships.ts";
 import { roleName } from "./role-name.ts";
@@ -586,7 +587,7 @@ describe("an API token that is revoked or expired", () => {
 			apiToken: {
 				id: calling.id,
 				expiresAt: IN_A_WEEK,
-				scope: { operations: null, workspaces: null },
+				scope: UNLIMITED_TOKEN_SCOPE,
 			},
 			idempotencyKey: null,
 			workspace: null,
@@ -653,7 +654,7 @@ describe("an API token that is revoked or expired", () => {
 			apiToken: {
 				id: child.id,
 				expiresAt: IN_A_WEEK,
-				scope: { operations: null, workspaces: null },
+				scope: UNLIMITED_TOKEN_SCOPE,
 			},
 			idempotencyKey: null,
 			workspace: null,
