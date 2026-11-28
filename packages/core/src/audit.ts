@@ -150,11 +150,15 @@ export async function recordAuditEntry(
 	entry: NewAuditEntry,
 ): Promise<void> {
 	switch (entry.outcome.result) {
-		case "succeeded":
+		case "succeeded": {
+			const { member, role } = entry.outcome.subject;
+			const memberKind = member === null ? null : member.kind;
+			const memberId = member === null ? null : member.id;
 			await transaction`
 				INSERT INTO core.audit_entries (id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason, member_kind, member_id, role_name)
-				VALUES (${entry.id}, ${entry.occurredAt}, ${entry.actor.kind}, ${entry.actor.id}, ${entry.apiTokenId}, ${entry.operation}, ${entry.workspace}, 'succeeded', NULL, ${entry.outcome.subject.member?.kind ?? null}, ${entry.outcome.subject.member?.id ?? null}, ${entry.outcome.subject.role})`;
+				VALUES (${entry.id}, ${entry.occurredAt}, ${entry.actor.kind}, ${entry.actor.id}, ${entry.apiTokenId}, ${entry.operation}, ${entry.workspace}, 'succeeded', NULL, ${memberKind}, ${memberId}, ${role})`;
 			return;
+		}
 		case "denied":
 			await transaction`
 				INSERT INTO core.audit_entries (id, occurred_at, actor_kind, actor_id, api_token_id, operation, workspace_id, result, reason)
