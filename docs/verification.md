@@ -161,6 +161,31 @@ curl -s http://127.0.0.1:3123/api/operations -H "Authorization: Bearer $WORKBENC
 
 Die Liste nennt `core list-audit-entries`, `reference create-note` und `reference list-notes`, je mit dem Namen der Operation und ihrer Art, wie `GET /api/operations`; `exit 0`. Der erste Aufruf gibt die Notiz als JSON aus, wie der Body von `POST …/operations/reference.createNote`, mit `exit 0`; der zweite `invalid_input: …`, darunter `title: Too small: …` und die Korrelations-ID, mit `exit 1`; der dritte `--input is not JSON` und die Zeile `usage: workbench …`, mit `exit 2`, und das Log des Servers hat dafür keinen Eintrag `request completed`. Ohne `WORKBENCH_TOKEN` und ohne `~/.config/workbench/cli.json` endet jeder Aufruf mit `invalid configuration:` und `exit 2`; `grep -c "$WORKBENCH_TOKEN" /tmp/workbench-verify.log` zählt `0`.
 
+## Image und Compose prüfen
+
+```sh
+scripts/smoke-test.sh
+```
+
+Das Skript baut das Image als `workbench:smoke-test` (anderer Name über `SMOKE_TEST_IMAGE`), startet die Compose-Projekte `workbench-smoke-a` und `workbench-smoke-b` auf `127.0.0.1:38081` und `127.0.0.1:38082` mit frischen Volumes und eigenen Secrets in einem temporären Verzeichnis, prüft sie und entfernt beide samt Volumes, auch wenn es scheitert. Die letzte Zeile ist `smoke test passed`; sonst `smoke test failed: …`, davor die Logs beider Projekte. Die Ports müssen frei sein.
+
+Eine Instanz von Hand, wie unter „Betrieb mit Docker Compose“ in der README, aber als eigenes Projekt mit Secrets unter `/tmp`:
+
+```sh
+docker build --tag workbench:local .
+mkdir -p -m 700 /tmp/workbench-compose/secrets && openssl rand -hex 24 > /tmp/workbench-compose/secrets/postgres_password && printf 'postgres://workbench:%s@postgres:5432/workbench\n' "$(cat /tmp/workbench-compose/secrets/postgres_password)" > /tmp/workbench-compose/secrets/database_url && chmod 644 /tmp/workbench-compose/secrets/*
+sed -e 's/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=workbench-verify/' -e 's/^WORKBENCH_PORT=.*/WORKBENCH_PORT=38080/' -e 's|^SECRETS_DIRECTORY=.*|SECRETS_DIRECTORY=/tmp/workbench-compose/secrets|' .env.example > /tmp/workbench-compose/.env
+docker compose --env-file /tmp/workbench-compose/.env up --detach --wait
+curl -si http://127.0.0.1:38080/health/ready
+docker compose --env-file /tmp/workbench-compose/.env logs workbench
+```
+
+`up --wait` kehrt zurück, wenn beide Container `healthy` sind; `ready` antwortet `200 {"status":"ready"}`, und das Log endet mit `instance started`, wie unter [Server starten](#server-starten). Abräumen samt Volume:
+
+```sh
+docker compose --env-file /tmp/workbench-compose/.env down --volumes && rm -rf /tmp/workbench-compose
+```
+
 ## Einen Ladefehler auslösen
 
 Ein Plugin in `PLUGINS`, das kein Plugin-Paket bereitstellt, ist der schnellste Ladefehler. Den Server wie oben starten, aber mit `PLUGINS=reference,missing`, dann:
