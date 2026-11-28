@@ -85,6 +85,17 @@ describe("the poll loop", () => {
 		expect(new Set(timer.delaysMs)).toEqual(new Set([POLL_INTERVAL_MS]));
 	});
 
+	test("drops its pending poll when it is woken, so that only the next interval is pending once it is done", async () => {
+		const { loop, timer, deliveries } = startLoop();
+
+		loop.wake();
+		const waitingForNextInterval = timer.set();
+		deliveries.current().finish();
+		await waitingForNextInterval;
+
+		expect(timer.pendingCount()).toBe(1);
+	});
+
 	test("delivers once more after wakes that arrive while it delivers, never twice at once", async () => {
 		const { loop, timer, deliveries } = startLoop();
 

@@ -4,35 +4,38 @@ export type ManualTimer = {
 	readonly setTimer: SetTimer;
 	readonly delaysMs: readonly number[];
 	isPending(): boolean;
+	pendingCount(): number;
 	set(): Promise<void>;
 	expire(): void;
 };
 
 export function manualTimer(): ManualTimer {
 	const delaysMs: number[] = [];
-	let pending: (() => void) | undefined;
+	const pending: { readonly expire: () => void }[] = [];
 	let announce: (() => void) | undefined;
 	return {
 		setTimer: (expire, delayMs) => {
 			delaysMs.push(delayMs);
-			pending = expire;
+			const timer = { expire };
+			pending.push(timer);
 			announce?.();
 			announce = undefined;
 			return () => {
-				if (pending === expire) pending = undefined;
+				const index = pending.indexOf(timer);
+				if (index !== -1) pending.splice(index, 1);
 			};
 		},
 		delaysMs,
-		isPending: () => pending !== undefined,
+		isPending: () => pending.length > 0,
+		pendingCount: () => pending.length,
 		set: () =>
 			new Promise<void>((resolve) => {
 				announce = resolve;
 			}),
 		expire: () => {
-			if (pending === undefined) throw new Error("no timer is pending");
-			const expire = pending;
-			pending = undefined;
-			expire();
+			const latest = pending.pop();
+			if (latest === undefined) throw new Error("no timer is pending");
+			latest.expire();
 		},
 	};
 }
