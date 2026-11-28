@@ -182,7 +182,28 @@ const answer = z.record(z.string(), z.unknown());
 
 type Answer = z.infer<typeof answer>;
 
-const problem = z.object({ code: z.string(), detail: z.string() });
+const problem = z.object({
+	code: z.string(),
+	detail: z.string(),
+	issues: z.array(
+		z.object({
+			path: z.array(z.union([z.string(), z.number()])),
+			message: z.string(),
+		}),
+	),
+});
+
+const completedRequest = z.object({
+	message: z.literal("request completed"),
+	correlationId: z.string(),
+});
+
+function lastCorrelationIdIn(api: ApiInstance): string {
+	const completed = api.logEntries.filter(
+		(entry) => completedRequest.safeParse(entry).success,
+	);
+	return completedRequest.parse(completed.at(-1)).correlationId;
+}
 
 async function overHttp(
 	api: ApiInstance,
@@ -272,6 +293,7 @@ describe("an operation of the reference plugin on the command line and over HTTP
 	test.each([
 		{
 			case: "an empty title",
+			input: { title: " " },
 			code: "invalid_input",
 			command: ["reference", "create-note"] as const,
 			operation: "reference.createNote",
@@ -279,6 +301,7 @@ describe("an operation of the reference plugin on the command line and over HTTP
 		},
 		{
 			case: "a workspace that does not exist",
+			input: { title: "Plan" },
 			code: "workspace_not_found",
 			command: ["reference", "create-note"] as const,
 			operation: "reference.createNote",
@@ -286,6 +309,7 @@ describe("an operation of the reference plugin on the command line and over HTTP
 		},
 		{
 			case: "a workspace that is not a UUID",
+			input: { title: "Plan" },
 			code: "invalid_workspace_id",
 			command: ["reference", "create-note"] as const,
 			operation: "reference.createNote",
@@ -293,6 +317,7 @@ describe("an operation of the reference plugin on the command line and over HTTP
 		},
 		{
 			case: "an operation the plugin does not have",
+			input: { title: "Plan" },
 			code: "unknown_operation",
 			command: ["reference", "rename-note"] as const,
 			operation: "reference.renameNote",
@@ -300,10 +325,9 @@ describe("an operation of the reference plugin on the command line and over HTTP
 		},
 	])(
 		"fails for $case with exit code 1 and the stable code $code of the HTTP API",
-		async ({ case: failure, code, command, operation, workspace }) => {
+		async ({ input, code, command, operation, workspace }) => {
 			const api = await startReferenceInstance();
 			const access = await accessTo(api);
-			const input = { title: failure === "an empty title" ? " " : "Plan" };
 			const failedOverHttp = problem.parse(
 				await overHttp(api, access.WORKBENCH_TOKEN, {
 					operation,
@@ -345,13 +369,14 @@ describe("a domain error of a plugin on the command line and over HTTP", () => {
 		expect(failedOverHttp).toEqual({
 			code: "ledger.book_already_closed",
 			detail: "the book of 2025 is already closed",
+			issues: [],
 		});
 		expect(run).toEqual({
 			exitCode: 1,
 			stdout: "",
 			stderr: [
 				"ledger.book_already_closed: the book of 2025 is already closed",
-				"correlation id: request-2",
+				`correlation id: ${lastCorrelationIdIn(api)}`,
 				"",
 			].join("\n"),
 		});
@@ -395,23 +420,35 @@ describe("an idempotency key on the command line and over HTTP", () => {
 });
 
 describe("an input on the command line", () => {
-	test("that does not match the input schema is reported with each issue and exit code 1", async () => {
+	test("that does not match the input schema is reported with the code, detail and each issue of the HTTP API and exit code 1", async () => {
 		const api = await startReferenceInstance();
-
-		const run = await runCli(
-			callArgs(["reference", "create-note"], API_INSTANCE_WORKSPACE, {
-				title: "",
-			}),
-			await accessTo(api),
+		const access = await accessTo(api);
+		const call = {
+			operation: "reference.createNote",
+			workspace: API_INSTANCE_WORKSPACE,
+			input: { title: "" },
+		};
+		const failedOverHttp = problem.parse(
+			await overHttp(api, access.WORKBENCH_TOKEN, call),
 		);
 
+		const run = await runCli(
+			callArgs(["reference", "create-note"], call.workspace, call.input),
+			access,
+		);
+
+		expect(failedOverHttp).toEqual({
+			code: "invalid_input",
+			detail: "the input does not match the input schema of the operation",
+			issues: [{ path: ["title"], message: expect.any(String) }],
+		});
 		expect(run).toEqual({
 			exitCode: 1,
 			stdout: "",
 			stderr: [
-				"invalid_input: the input does not match the input schema of the operation",
-				"  title: Too small: expected string to have >=1 characters",
-				"correlation id: request-1",
+				`${failedOverHttp.code}: ${failedOverHttp.detail}`,
+				`  title: ${failedOverHttp.issues[0]?.message}`,
+				`correlation id: ${lastCorrelationIdIn(api)}`,
 				"",
 			].join("\n"),
 		});
@@ -599,11 +636,13 @@ describe("the API token of the command line", () => {
 		"is refused as an option with $case, with exit code 2 and without repeating it",
 		async ({ args }) => {
 			const api = await startReferenceInstance();
+			const access = await accessTo(api);
 			const token = await api.issueToken();
 
-			const run = await runCli(args(token), { WORKBENCH_URL: api.url });
+			const run = await runCli(args(token), access);
 
 			expect(run.exitCode).toBe(2);
+			expect(run.stderr).toContain("usage: workbench operations\n");
 			expect(run.stderr).not.toContain(token);
 			expect(api.logEntries).not.toContainEqual(
 				expect.objectContaining({ message: "request completed" }),
@@ -649,18 +688,32 @@ describe("the API token of the command line", () => {
 		});
 	});
 
-	test("that the instance does not know is rejected as unauthenticated with exit code 1", async () => {
+	test("that the instance does not know is rejected as unauthenticated with the code and detail of the HTTP API and exit code 1", async () => {
 		const api = await startReferenceInstance();
+		const response = await fetch(`${api.url}/api/operations`, {
+			headers: { Authorization: "Bearer wbt_never-issued" },
+		});
+		const failedOverHttp = problem.parse(await response.json());
 
 		const run = await runCli(["operations"], {
 			WORKBENCH_URL: api.url,
 			WORKBENCH_TOKEN: "wbt_never-issued",
 		});
 
-		expect(run.exitCode).toBe(1);
-		expect(run.stderr).toStartWith(
-			"unauthenticated: the request needs a valid API token as a bearer token\n",
-		);
+		expect(failedOverHttp).toEqual({
+			code: "unauthenticated",
+			detail: "the request needs a valid API token as a bearer token",
+			issues: [],
+		});
+		expect(run).toEqual({
+			exitCode: 1,
+			stdout: "",
+			stderr: [
+				`${failedOverHttp.code}: ${failedOverHttp.detail}`,
+				`correlation id: ${lastCorrelationIdIn(api)}`,
+				"",
+			].join("\n"),
+		});
 	});
 });
 
