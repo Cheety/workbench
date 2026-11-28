@@ -930,18 +930,25 @@ describe("an instance the command line cannot reach", () => {
 });
 
 describe("a request that fetch refuses to send", () => {
-	test("is thrown on as it came instead of being reported as an instance that cannot be reached", async () => {
-		const refused = new TypeError("Header 'Authorization' has invalid value");
-		const refusingFetch: Fetch = () => Promise.reject(refused);
+	test("is thrown on as it came, writing nothing, instead of being reported as an instance that cannot be reached", async () => {
+		const written: string[] = [];
 
-		const running = runCliInProcess(
-			["operations"],
-			"http://127.0.0.1:1",
-			manualTimer(),
-			refusingFetch,
-		);
+		const running = runCommandLine({
+			args: ["operations"],
+			loadConfig: () => ({
+				instanceUrl: new URL("http://127.0.0.1:1"),
+				token: new Secret("wbt_refused\r\nX-Forged: yes"),
+			}),
+			output: {
+				writeOutput: (text) => written.push(text),
+				writeError: (text) => written.push(text),
+			},
+			deadline: { ms: REQUEST_DEADLINE_MS, setTimer: manualTimer().setTimer },
+			fetch,
+		});
 
-		await expect(running).rejects.toBe(refused);
+		await expect(running).rejects.toBeInstanceOf(TypeError);
+		expect(written).toEqual([]);
 	});
 });
 
