@@ -7,9 +7,16 @@ const documentedPaths = z.object({
 	paths: z.record(z.string(), z.unknown()),
 });
 
-const documentedMutation = z.object({
+const documentedOperation = z.object({
 	post: z.object({
 		parameters: z.array(z.looseObject({ name: z.string() })),
+		requestBody: z.object({
+			content: z.object({
+				"application/json": z.object({
+					schema: z.record(z.string(), z.unknown()),
+				}),
+			}),
+		}),
 	}),
 });
 
@@ -26,19 +33,30 @@ class UndocumentedIdempotencyKeyError extends Error {
 	}
 }
 
-export async function documentedIdempotencyKeyPattern(
-	operation: string,
-): Promise<string> {
+async function documentedPost(operation: string) {
 	const { paths } = documentedPaths.parse(
 		await Bun.file(OPENAPI_DOCUMENT_PATH).json(),
 	);
-	const { post } = documentedMutation.parse(
+	return documentedOperation.parse(
 		paths[`/api/workspaces/{workspace}/operations/${operation}`],
-	);
-	const parameter = post.parameters.find(
+	).post;
+}
+
+export async function documentedIdempotencyKeyPattern(
+	operation: string,
+): Promise<string> {
+	const { parameters } = await documentedPost(operation);
+	const parameter = parameters.find(
 		({ name }) => name === IDEMPOTENCY_KEY_HEADER,
 	);
 	if (parameter === undefined)
 		throw new UndocumentedIdempotencyKeyError(operation);
 	return documentedIdempotencyKey.parse(parameter).schema.pattern;
+}
+
+export async function documentedRequestSchema(
+	operation: string,
+): Promise<Readonly<Record<string, unknown>>> {
+	const { requestBody } = await documentedPost(operation);
+	return requestBody.content["application/json"].schema;
 }

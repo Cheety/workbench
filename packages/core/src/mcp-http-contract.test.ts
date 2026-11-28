@@ -12,7 +12,10 @@ import {
 	API_INSTANCE_WORKSPACE,
 	type ApiInstance,
 } from "./testing/api-instance.ts";
-import { documentedIdempotencyKeyPattern } from "./testing/documented-idempotency-key.ts";
+import {
+	documentedIdempotencyKeyPattern,
+	documentedRequestSchema,
+} from "./testing/documented-operation.ts";
 import { mcpTestbed } from "./testing/mcp-testbed.ts";
 import { pluginPackageAt } from "./testing/operation-harness.ts";
 
@@ -113,6 +116,12 @@ describe("the reference operations listed as MCP tools", () => {
 		const idempotencyKeyPattern = await documentedIdempotencyKeyPattern(
 			"reference.createNote",
 		);
+		const createNoteRequest = await documentedRequestSchema(
+			"reference.createNote",
+		);
+		const listNotesRequest = await documentedRequestSchema(
+			"reference.listNotes",
+		);
 		const api = await startReferenceInstance();
 		const client = await mcp.connectedClient(
 			api.url,
@@ -132,13 +141,7 @@ describe("the reference operations listed as MCP tools", () => {
 					type: "object",
 					properties: {
 						workspace: { type: "string", format: "uuid" },
-						input: {
-							type: "object",
-							properties: {
-								title: { type: "string", minLength: 1, maxLength: 200 },
-							},
-							required: ["title"],
-						},
+						input: createNoteRequest,
 						idempotencyKey: {
 							type: "string",
 							pattern: idempotencyKeyPattern,
@@ -155,13 +158,7 @@ describe("the reference operations listed as MCP tools", () => {
 					type: "object",
 					properties: {
 						workspace: { type: "string", format: "uuid" },
-						input: {
-							type: "object",
-							properties: {
-								limit: { type: "integer", minimum: 1, maximum: 100 },
-							},
-							required: ["limit"],
-						},
+						input: listNotesRequest,
 					},
 					required: ["workspace", "input"],
 					additionalProperties: false,
