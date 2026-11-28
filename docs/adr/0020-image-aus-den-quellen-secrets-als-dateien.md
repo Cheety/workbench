@@ -9,7 +9,8 @@ Docker kennt je Container einen Healthcheck. Der der Instanz fragt `GET /health/
 ## Consequences
 
 - Das Image enthält die Quellen statt eines Bündels; es ist größer, als ein kompiliertes Binary wäre, und Bun transpiliert beim Start.
-- Compose bindet Secret-Dateien mit den Rechten des Hosts ein; der Betreiber macht sie für den Nutzer `1000` lesbar (`644`) und schützt das Verzeichnis (`700`). Mit rootless Podman gelten die Nutzer-Namensräume des Betreibers.
+- Compose bindet Secret-Dateien mit den Rechten des Hosts ein; der Betreiber macht sie für den Nutzer `1000` lesbar (`644`) und schützt das Verzeichnis (`700`). Mit rootless Podman gelten die Nutzer-Namensräume des Betreibers; geprüft ist das nicht.
+- `1000:1000` ist der Nutzer im Container, nicht der Linux-User des Mandanten, den das Glossar verlangt. Die Trennung der Mandanten auf dem Host leistet der Linux-User, unter dem der Betreiber das Compose-Projekt des Mandanten startet: Mit rootless Docker oder Podman bildet dessen Nutzer-Namensraum die Container-UID `1000` auf eine untergeordnete UID dieses Users ab, sodass Container zweier Mandanten auf dem Host verschiedene UIDs haben. Mit einem gemeinsamen Docker-Daemon als root ist die UID `1000` in allen Containern dieselbe UID des Hosts, und die Mandanten trennen dann nur Compose-Projekte, Volumes, Netze und Secrets; die Container laufen dort nicht unter dem Linux-User des Mandanten.
 - Steht das Passwort in `postgres_password` und `database_url` verschieden, meldet die Instanz `database unreachable, retrying` und wird nie bereit.
 - Postgres liest `POSTGRES_PASSWORD_FILE` nur beim ersten Start auf leerem Volume; ein neues Passwort setzt der Betreiber zusätzlich per `ALTER ROLE`.
 - Der Healthcheck startet alle 10 s einen kurzen Bun-Prozess im Container.

@@ -3,10 +3,12 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 image="${SMOKE_TEST_IMAGE:-workbench:smoke-test}"
-work="$(mktemp -d)"
 projects=(workbench-smoke-a workbench-smoke-b)
-ports=(38081 38082)
+ports=("${SMOKE_TEST_PORT_A:-38081}" "${SMOKE_TEST_PORT_B:-38082}")
 workspace=00000000-0000-4000-8000-00000000aaaa
+work=""
+container=""
+curl_limits=(--connect-timeout 5 --max-time 30)
 
 fail() {
 	echo "smoke test failed: $*" >&2
@@ -21,15 +23,40 @@ compose() {
 
 cleanup() {
 	local status=$?
-	for project in "${projects[@]}"; do
-		[ -f "$work/$project/.env" ] || continue
-		if [ "$status" -ne 0 ]; then compose "$project" logs --no-color >&2 || true; fi
-		compose "$project" down --volumes --remove-orphans >/dev/null 2>&1 || true
-	done
-	rm -rf "$work"
+	if [ -n "$work" ]; then
+		for project in "${projects[@]}"; do
+			[ -f "$work/$project/.env" ] || continue
+			if [ "$status" -ne 0 ]; then compose "$project" logs --no-color >&2 || true; fi
+			compose "$project" down --volumes --remove-orphans >/dev/null 2>&1 || true
+		done
+		rm -rf "$work"
+	fi
+	if [ -n "$container" ]; then docker rm --force "$container" >/dev/null 2>&1 || true; fi
+	docker image rm --force "$image" >/dev/null 2>&1 || true
 	exit "$status"
 }
 trap cleanup EXIT
+
+for tool in docker curl jq openssl; do
+	command -v "$tool" >/dev/null || fail "$tool is not installed"
+done
+work="$(mktemp -d)"
+
+plugins=()
+expected_migrations="$(for file in "$root"/packages/core/migrations/*.sql; do echo "core/$(basename "$file")"; done)"
+for manifest in "$root"/packages/*/package.json; do
+	plugin="$(jq --raw-output '.workbench.plugin.name // empty' "$manifest")"
+	[ -n "$plugin" ] || continue
+	plugins+=("$plugin")
+	migrations="$(jq --raw-output '.workbench.plugin.migrations // empty' "$manifest")"
+	[ -n "$migrations" ] || continue
+	for file in "$(dirname "$manifest")/$migrations"/*.sql; do
+		if [ -f "$file" ]; then expected_migrations+=$'\n'"plugin_${plugin//-/_}/$(basename "$file")"; fi
+	done
+done
+expected_migrations="$(sort <<<"$expected_migrations")"
+[[ " ${plugins[*]} " == *" reference "* ]] || fail "no plugin package provides the plugin reference"
+enabled_plugins="$(IFS=,; echo "${plugins[*]}")"
 
 prepare() {
 	local project=$1 port=$2 password
@@ -44,7 +71,7 @@ prepare() {
 		WORKBENCH_IMAGE=$image
 		WORKBENCH_PORT=$port
 		SECRETS_DIRECTORY=$work/$project/secrets
-		PLUGINS=reference
+		PLUGINS=$enabled_plugins
 	EOF
 }
 
@@ -53,12 +80,15 @@ psql_in() {
 }
 
 create_token() {
-	compose "$1" exec -T workbench bun run --silent create-service-account --name smoke --valid-days 1 |
-		sed -E 's/.*"token":"([^"]+)".*/\1/'
+	local output token
+	output="$(compose "$1" exec -T workbench bun run --silent create-service-account --name smoke --valid-days 1)"
+	token="$(jq --raw-output '.token // empty' <<<"$output" 2>/dev/null)" || token=""
+	[ -n "$token" ] || fail "$1 printed no token field in the JSON output of create-service-account"
+	echo "$token"
 }
 
 create_note() {
-	curl --silent --output "$work/$1.note" --write-out '%{http_code}' \
+	curl "${curl_limits[@]}" --silent --output "$work/$1.note" --write-out '%{http_code}' \
 		--request POST "http://127.0.0.1:$2/api/workspaces/$workspace/operations/reference.createNote" \
 		--header "Authorization: Bearer $3" --data '{"title":"Smoke"}'
 }
@@ -74,7 +104,6 @@ if docker image inspect --format '{{json .Config.Env}}' "$image" | grep -Eq 'DAT
 fi
 container="$(docker create "$image")"
 files="$(docker export "$container" | tar -t)"
-docker rm "$container" >/dev/null
 if grep -Eq '(^|/)\.env$|(^|/)secrets/' <<<"$files"; then fail "image contains an env file or secrets"; fi
 if grep -Eq '^app/packages/.*\.test\.ts$' <<<"$files"; then fail "image contains tests"; fi
 
@@ -83,19 +112,12 @@ for index in "${!projects[@]}"; do
 	compose "${projects[$index]}" up --detach --wait --wait-timeout 180
 done
 
-expected_migrations="$(
-	{
-		for file in "$root"/packages/core/migrations/*.sql; do echo "core/$(basename "$file")"; done
-		for file in "$root"/packages/plugin-reference/migrations/*.sql; do echo "plugin_reference/$(basename "$file")"; done
-	} | sort
-)"
-
 declare -A tokens
 for index in "${!projects[@]}"; do
 	project="${projects[$index]}"
 	port="${ports[$index]}"
 
-	ready="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$port/health/ready")"
+	ready="$(curl "${curl_limits[@]}" --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$port/health/ready")"
 	[ "$ready" = 200 ] || fail "$project answers /health/ready with $ready"
 
 	uid="$(compose "$project" exec -T workbench id -u)"

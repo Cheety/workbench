@@ -1,6 +1,9 @@
+name: ${COMPOSE_PROJECT_NAME:?COMPOSE_PROJECT_NAME is required}
+
 services:
   workbench:
     image: ${WORKBENCH_IMAGE:?WORKBENCH_IMAGE is required}
+    build: .
     restart: unless-stopped
     depends_on:
       postgres:
@@ -39,8 +42,10 @@ services:
       start_interval: 1s
 
   postgres:
-    image: postgres:17
+    image: postgres:17@sha256:97fb53376be3e4fb1a8a61421daa69dcc3bf2fa39bda3259f5245f9a455af1a9
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
       POSTGRES_USER: workbench
       POSTGRES_DB: workbench
@@ -56,6 +61,8 @@ services:
         [
           "CMD",
           "pg_isready",
+          "--host",
+          "127.0.0.1",
           "--username",
           "workbench",
           "--dbname",

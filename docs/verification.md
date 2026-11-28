@@ -167,7 +167,7 @@ Die Liste nennt `core list-audit-entries`, `reference create-note` und `referenc
 scripts/smoke-test.sh
 ```
 
-Das Skript baut das Image als `workbench:smoke-test` (anderer Name über `SMOKE_TEST_IMAGE`), startet die Compose-Projekte `workbench-smoke-a` und `workbench-smoke-b` auf `127.0.0.1:38081` und `127.0.0.1:38082` mit frischen Volumes und eigenen Secrets in einem temporären Verzeichnis, prüft sie und entfernt beide samt Volumes, auch wenn es scheitert. Die letzte Zeile ist `smoke test passed`; sonst `smoke test failed: …`, davor die Logs beider Projekte. Die Ports müssen frei sein.
+Das Skript baut das Image als `workbench:smoke-test` (anderer Name über `SMOKE_TEST_IMAGE`), startet die Compose-Projekte `workbench-smoke-a` und `workbench-smoke-b` auf `127.0.0.1:38081` und `127.0.0.1:38082` (andere Ports über `SMOKE_TEST_PORT_A` und `SMOKE_TEST_PORT_B`) mit frischen Volumes und eigenen Secrets in einem temporären Verzeichnis, prüft sie und entfernt beide samt Volumes, das temporäre Verzeichnis und das Image, auch wenn es scheitert. Es braucht `docker`, `curl`, `jq` und `openssl`. Die letzte Zeile ist `smoke test passed`; sonst `smoke test failed: …`, davor die Logs beider Projekte. Die Ports müssen frei sein.
 
 Eine Instanz von Hand, wie unter „Betrieb mit Docker Compose“ in der README, aber als eigenes Projekt mit Secrets unter `/tmp`:
 

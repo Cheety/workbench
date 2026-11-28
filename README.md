@@ -50,9 +50,9 @@ Logs sind JSON-Zeilen auf der Standardausgabe. Jede Anfrage trägt eine Korrelat
 
 ## Betrieb mit Docker Compose
 
-Unterstützt ist ein Weg (ADR-0006): das Image aus dem `Dockerfile` und `compose.yaml` mit Workbench und Postgres 17, je Mandant ein eigenes Compose-Projekt. Die Datei läuft unverändert mit Docker und Podman; Image und Compose-Datei begründet ADR-0020.
+Unterstützt ist ein Weg (ADR-0006): das Image aus dem `Dockerfile` und `compose.yaml` mit Workbench und Postgres 17, je Mandant ein eigenes Compose-Projekt. Geprüft ist sie mit Docker Compose (`scripts/smoke-test.sh`); mit Podman ist sie nicht geprüft. Image und Compose-Datei begründet ADR-0020.
 
-Das Image enthält Core, SDK und alle Plugin-Pakete unter `packages/` mit ihren Abhängigkeiten ohne Entwicklungsabhängigkeiten, Tests und Architekturtests. Es läuft als Nutzer `1000:1000`, enthält keine Secrets und liest seine Konfiguration nur aus der Umgebung. Bis der Workflow `release` Images veröffentlicht, baut der Betreiber es selbst:
+Das Image enthält Core, SDK und alle Plugin-Pakete unter `packages/` mit ihren Abhängigkeiten ohne Entwicklungsabhängigkeiten, Tests und Architekturtests. Es läuft als Nutzer `1000:1000`, enthält keine Secrets und liest seine Konfiguration nur aus der Umgebung. Bis der Workflow `release` Images veröffentlicht, baut der Betreiber es selbst. Fehlt das Image `WORKBENCH_IMAGE`, baut `docker compose up` es aus dem `Dockerfile` des Repositorys; ausdrücklich geht das mit:
 
 ```sh
 docker build --tag workbench:local .
@@ -69,11 +69,11 @@ chmod 644 secrets/*
 docker compose up --detach --wait
 ```
 
-- `.env` nennt jede Variable mit Pflicht und Bedeutung; Pflicht sind `COMPOSE_PROJECT_NAME`, `WORKBENCH_IMAGE` und `WORKBENCH_PORT`. Fehlt `WORKBENCH_IMAGE` oder `WORKBENCH_PORT`, bricht Compose mit `WORKBENCH_IMAGE is required` oder `WORKBENCH_PORT is required` ab. `LOG_LEVEL`, `PLUGINS`, `READINESS_TIMEOUT_MS` und `PLUGIN_HOOK_TIMEOUT_MS` gehen unverändert an die Instanz (siehe [Umgebungsvariablen](#umgebungsvariablen)); leer gelten sie als nicht gesetzt.
+- `.env` nennt jede Variable mit Pflicht und Bedeutung; Pflicht sind `COMPOSE_PROJECT_NAME`, `WORKBENCH_IMAGE` und `WORKBENCH_PORT`. Fehlt eine davon, bricht Compose mit `COMPOSE_PROJECT_NAME is required`, `WORKBENCH_IMAGE is required` oder `WORKBENCH_PORT is required` ab; `COMPOSE_PROJECT_NAME` ist zugleich der Name des Projekts (`name` in `compose.yaml`), ein `--project-name` geht ihm vor. `LOG_LEVEL`, `PLUGINS`, `READINESS_TIMEOUT_MS` und `PLUGIN_HOOK_TIMEOUT_MS` gehen unverändert an die Instanz (siehe [Umgebungsvariablen](#umgebungsvariablen)); leer gelten sie als nicht gesetzt.
 - Secrets kommen als Docker-Secrets aus `SECRETS_DIRECTORY` (Standard `./secrets`): `database_url` liest die Instanz über `DATABASE_URL_FILE`, `postgres_password` Postgres über `POSTGRES_PASSWORD_FILE`. Beide müssen dasselbe Passwort tragen. Compose bindet die Dateien mit den Rechten des Hosts ein, deshalb ist jede für den Nutzer `1000` im Container lesbar (`644`) und das Verzeichnis nur für den Betreiber (`700`). Einen Schlüssel für Secrets kennt die Instanz noch nicht; er kommt mit den Secrets (#38) als weiteres Docker-Secret in dasselbe Verzeichnis.
 - Die Instanz lauscht auf `127.0.0.1:WORKBENCH_PORT` des Hosts, für einen Reverse Proxy wie Caddy oder Traefik. Postgres hängt nur am internen Netz `database` ohne Verbindung nach außen und veröffentlicht keinen Port; seine Daten liegen im Volume `postgres-data`.
-- Der Healthcheck der Instanz fragt `GET /health/ready` ab, der von Postgres `pg_isready`. `docker compose up --wait` kehrt zurück, wenn beide `healthy` sind, die Instanz also migriert hat und `instance started` meldete; die Instanz startet erst, wenn Postgres `healthy` ist. `GET /health/live` bleibt für externe Überwachung; endet der Prozess, startet Compose ihn neu (`restart: unless-stopped`).
-- Der Container der Instanz läuft mit schreibgeschütztem Dateisystem (nur `/tmp` beschreibbar), ohne Capabilities und mit `no-new-privileges`.
+- Der Healthcheck der Instanz fragt `GET /health/ready` ab, der von Postgres `pg_isready` über TCP auf `127.0.0.1`, damit der Server, den das Postgres-Image beim ersten Start nur über den Unix-Socket für die Initialisierung startet, nicht als `healthy` gilt. `docker compose up --wait` kehrt zurück, wenn beide `healthy` sind, die Instanz also migriert hat und `instance started` meldete; die Instanz startet erst, wenn Postgres `healthy` ist. `GET /health/live` bleibt für externe Überwachung; endet der Prozess, startet Compose ihn neu (`restart: unless-stopped`).
+- Der Container der Instanz läuft mit schreibgeschütztem Dateisystem (nur `/tmp` beschreibbar), ohne Capabilities und mit `no-new-privileges`; Postgres läuft ebenfalls mit `no-new-privileges`, sein Image ist per Digest gepinnt.
 
 Je Mandant ein Compose-Projekt: eine eigene `.env` mit eigenem `COMPOSE_PROJECT_NAME`, `WORKBENCH_PORT` und `SECRETS_DIRECTORY`, etwa `docker compose --env-file mandant-a.env up --detach --wait`. Volumes und Netze tragen den Projektnamen als Präfix und sind getrennt.
 
@@ -83,7 +83,7 @@ Den ersten Service-Account legt der Betreiber im Container an (siehe [Service-Ac
 docker compose exec workbench bun run --silent create-service-account --name "deploy agent" --valid-days 90
 ```
 
-`scripts/smoke-test.sh` baut das Image, prüft Nutzer, Umgebung und Dateien des Images, startet zwei Compose-Projekte nebeneinander auf frischen Volumes, wartet auf ihre Readiness, prüft, dass jede Migration genau einmal angewandt ist, ruft in beiden `reference.createNote` per HTTP auf, prüft, dass das Token des einen Projekts im anderen mit 401 abgelehnt wird und dass beide eigene Volumes und Netze haben, und räumt beide Projekte samt Volumes ab. Scheitert eine Prüfung, endet es mit `smoke test failed: …` und den Logs beider Projekte.
+`scripts/smoke-test.sh` baut das Image, prüft Nutzer, Umgebung und Dateien des Images, startet zwei Compose-Projekte nebeneinander auf frischen Volumes mit allen Plugins, die die Plugin-Pakete unter `packages/` nennen, wartet auf ihre Readiness, prüft, dass jede Migration des Cores und dieser Plugin-Pakete genau einmal angewandt ist, ruft in beiden `reference.createNote` per HTTP auf, prüft, dass das Token des einen Projekts im anderen mit 401 abgelehnt wird und dass beide eigene Volumes und Netze haben, und räumt beide Projekte samt Volumes, den Container der Dateiprüfung und das Image ab. Scheitert eine Prüfung, endet es mit `smoke test failed: …` und den Logs beider Projekte.
 
 ## Plugins
 
