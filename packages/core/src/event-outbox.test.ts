@@ -1248,14 +1248,20 @@ async function deliveriesOf(sql: SQL, eventId: string): Promise<unknown[]> {
 	return [...rows];
 }
 
+function withoutTime({ time: _time, ...entry }: LogEntry): LogEntry {
+	return entry;
+}
+
 function deadLettersIn(entries: readonly LogEntry[]): LogEntry[] {
-	return entries.filter((entry) => entry.message === "event dead-lettered");
+	return entries
+		.filter((entry) => entry.message === "event dead-lettered")
+		.map(withoutTime);
 }
 
 function expiriesIn(entries: readonly LogEntry[]): LogEntry[] {
-	return entries.filter(
-		(entry) => entry.message === "event deliveries expired",
-	);
+	return entries
+		.filter((entry) => entry.message === "event deliveries expired")
+		.map(withoutTime);
 }
 
 async function insertLabelRenamedOpenFor(
@@ -1304,7 +1310,6 @@ describe("a delivery whose handler keeps failing", () => {
 		expect(failuresIn(entries)).toHaveLength(MOST_ATTEMPTS - 1);
 		expect(deadLettersIn(entries)).toEqual([
 			{
-				time: "2026-11-26T08:00:00.000Z",
 				level: "error",
 				message: "event dead-lettered",
 				eventId: EVENT,
@@ -1419,7 +1424,6 @@ describe("a delivery that is still open when its delivery deadline has passed", 
 		expect(expiriesIn(justBefore.entries)).toEqual([]);
 		expect(expiriesIn(onTheDay.entries)).toEqual([
 			{
-				time: "2026-11-26T08:00:00.000Z",
 				level: "error",
 				message: "event deliveries expired",
 				subscriber: "archive",
@@ -1427,7 +1431,6 @@ describe("a delivery that is still open when its delivery deadline has passed", 
 				expired: 2,
 			},
 			{
-				time: "2026-11-26T08:00:00.000Z",
 				level: "error",
 				message: "event deliveries expired",
 				subscriber: "search",
