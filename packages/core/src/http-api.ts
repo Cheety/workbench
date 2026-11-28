@@ -19,6 +19,12 @@ const OPERATION_METHOD = "POST";
 
 const BEARER = /^Bearer ([^\s]+)$/i;
 
+export const IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
+
+const STRUCTURED_FIELD_STRING = /^"((?:[^"\\]|\\["\\])*)"$/;
+
+const STRUCTURED_FIELD_ESCAPE = /\\(["\\])/g;
+
 export type HttpApi = {
 	readonly authenticate: (token: string) => Promise<Authentication>;
 	readonly pipeline: OperationPipeline;
@@ -86,7 +92,7 @@ export async function answerApiRequest(
 		operation,
 		actor: authentication.actor,
 		apiTokenId: authentication.apiTokenId,
-		idempotencyKey: null,
+		idempotencyKey: idempotencyKeyOf(request),
 		workspace,
 		input: input.value,
 		correlationId,
@@ -109,6 +115,15 @@ function bearerToken(request: Request): string | undefined {
 	const header = request.headers.get("Authorization");
 	if (header === null) return undefined;
 	return BEARER.exec(header)?.[1];
+}
+
+function idempotencyKeyOf(request: Request): string | null {
+	const header = request.headers.get(IDEMPOTENCY_KEY_HEADER);
+	if (header === null) return null;
+	const quoted = STRUCTURED_FIELD_STRING.exec(header);
+	if (quoted === null) return header;
+	const [, inside = ""] = quoted;
+	return inside.replace(STRUCTURED_FIELD_ESCAPE, "$1");
 }
 
 type JsonBody =

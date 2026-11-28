@@ -14,9 +14,12 @@ Die Antwort steht als JSON-Text in einer Spalte vom Typ `json`, nicht `jsonb`: `
 
 Eine Wiederholung schreibt keinen Audit-Eintrag, publiziert kein Event und reiht keinen Job ein: Sie ist kein weiterer Vorgang, nur die Antwort auf den ersten. Eine Query beachtet den Key nicht, weil sie nichts verändert, was eine Wiederholung verdoppeln könnte; so kann ein Aufrufer jeden Aufruf gleich behandeln. Der Key selbst muss aber auch dort 1 bis 255 sichtbare ASCII-Zeichen oder Leerzeichen lang sein, sonst `invalid_idempotency_key` (HTTP 400); das entspricht einem String der Structured Fields (RFC 9651), den der Entwurf für den Header vorsieht. Erwogen wurde, einen Key auf einer Query abzulehnen; dann müsste ein Aufrufer mit allgemeiner Wiederholungslogik jede Operation nach ihrer Art unterscheiden.
 
+Über HTTP kommt der Key im Header `Idempotency-Key`. Der Entwurf der IETF beschreibt ihn als String der Structured Fields, also in Anführungszeichen; verbreitete Clients schicken ihn ohne. Die API nimmt beides an: Ein Wert in Anführungszeichen, der ein gültiger String der Structured Fields ist, nennt den Key in den Anführungszeichen, jeder andere Wert ist selbst der Key. Erwogen wurde, nur die Form des Entwurfs anzunehmen; dann scheiterten die Clients, die den Key so schicken, wie ihn Zahlungsanbieter seit Jahren verlangen. Erwogen wurde auch, nur den rohen Wert zu nehmen; dann wären `"a"` und `a` zwei Keys, und ein Client nach dem Entwurf, der zwischen beiden Formen wechselt, führte doppelt aus.
+
 ## Consequences
 
 - Die Pipeline prüft den Key vor der Eingabe und beansprucht ihn nach der Prüfung des Workspace. Kommt die Rechteprüfung dazu, muss sie vor der Wiederholung liegen, sonst erhielte ein Akteur nach dem Entzug eines Rechts noch die Antwort eines früheren Aufrufs.
 - Ein Aufruf, der auf einen laufenden mit demselben Key wartet, hält solange eine Verbindung des Pools.
 - Eine Ausgabe, die keine JSON-Form hat (etwa ein `BigInt`), lässt eine Mutation mit Key scheitern (`internal_error`), auch wenn sie ohne Key gelänge.
+- Ein Key, der selbst mit einem Anführungszeichen beginnt und endet und dazwischen nur gültig maskiert ist, lässt sich über HTTP nur in der Form des Entwurfs schicken: `"\"a\""` für den Key `"a"`.
 - `core.idempotency_keys` verweist per Fremdschlüssel auf `core.workspaces`; ein Workspace, auf den ein Key verweist, lässt sich nicht löschen, solange der Key besteht.

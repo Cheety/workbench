@@ -259,6 +259,93 @@ describe("an operation called over HTTP", () => {
 	});
 });
 
+describe("a mutation called over HTTP with an Idempotency-Key", () => {
+	test("is run once, and a repeated call receives the same body", async () => {
+		const api = await startApiInstance();
+		const token = await api.issueToken();
+		const headers = { ...bearer(token), "Idempotency-Key": "retry-1" };
+		const first = await api.post(
+			operationPath("ledger.addEntry"),
+			JSON.stringify({ amount: 42 }),
+			headers,
+		);
+
+		const repeated = await api.post(
+			operationPath("ledger.addEntry"),
+			JSON.stringify({ amount: 42 }),
+			headers,
+		);
+
+		expect(repeated.status).toBe(200);
+		expect(await repeated.text()).toBe(await first.text());
+		expect(
+			await api.database.sql`SELECT amount FROM plugin_ledger.entries`,
+		).toEqual([{ amount: 42 }]);
+	});
+
+	test("reads a key quoted as a structured field string as the key inside the quotes", async () => {
+		const api = await startApiInstance();
+		const token = await api.issueToken();
+		const first = await api.post(
+			operationPath("ledger.addEntry"),
+			JSON.stringify({ amount: 42 }),
+			{ ...bearer(token), "Idempotency-Key": 'retry "1"' },
+		);
+
+		const repeated = await api.post(
+			operationPath("ledger.addEntry"),
+			JSON.stringify({ amount: 42 }),
+			{ ...bearer(token), "Idempotency-Key": '"retry \\"1\\""' },
+		);
+
+		expect(await repeated.text()).toBe(await first.text());
+		expect(
+			await api.database.sql`SELECT amount FROM plugin_ledger.entries`,
+		).toEqual([{ amount: 42 }]);
+	});
+
+	test("answers 422 idempotency_key_reused when the key comes again with another body", async () => {
+		const api = await startApiInstance();
+		const token = await api.issueToken();
+		const headers = { ...bearer(token), "Idempotency-Key": "retry-1" };
+		await api.post(
+			operationPath("ledger.addEntry"),
+			JSON.stringify({ amount: 42 }),
+			headers,
+		);
+
+		const repeated = await api.post(
+			operationPath("ledger.addEntry"),
+			JSON.stringify({ amount: 43 }),
+			headers,
+		);
+
+		expect(repeated.status).toBe(422);
+		expect(await repeated.json()).toEqual(
+			expect.objectContaining({ code: "idempotency_key_reused" }),
+		);
+	});
+
+	test("answers 400 invalid_idempotency_key when the key is empty, and runs nothing", async () => {
+		const api = await startApiInstance();
+		const token = await api.issueToken();
+
+		const response = await api.post(
+			operationPath("ledger.addEntry"),
+			JSON.stringify({ amount: 42 }),
+			{ ...bearer(token), "Idempotency-Key": "" },
+		);
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual(
+			expect.objectContaining({ code: "invalid_idempotency_key" }),
+		);
+		expect(
+			await api.database.sql`SELECT amount FROM plugin_ledger.entries`,
+		).toEqual([]);
+	});
+});
+
 describe("a call without a valid token", () => {
 	test.each([
 		{ case: "no token", reason: "missing_token", headers: async () => ({}) },

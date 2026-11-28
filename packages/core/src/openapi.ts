@@ -1,8 +1,8 @@
 import { fileURLToPath } from "node:url";
-import { DATABASE_CAPABILITY } from "@workbench/sdk";
+import { DATABASE_CAPABILITY, type OperationKind } from "@workbench/sdk";
 import { CORE_OPERATIONS } from "./core-operations.ts";
 import type { SetTimer } from "./hook-timeout.ts";
-import { OPERATION_PATH_TEMPLATE } from "./http-api.ts";
+import { IDEMPOTENCY_KEY_HEADER, OPERATION_PATH_TEMPLATE } from "./http-api.ts";
 import type { JsonSchema } from "./json-schema.ts";
 import type { PluginPackage } from "./kernel.ts";
 import type { RegisteredOperation } from "./operation-registry.ts";
@@ -101,6 +101,27 @@ const CORRELATION_ID_HEADER_SCHEMA: JsonSchema = {
 	schema: { type: "string", pattern: VALID_CORRELATION_ID.source },
 };
 
+const WORKSPACE_PARAMETER: JsonSchema = {
+	name: "workspace",
+	in: "path",
+	required: true,
+	schema: { type: "string", format: "uuid" },
+};
+
+const IDEMPOTENCY_KEY_PARAMETER: JsonSchema = {
+	name: IDEMPOTENCY_KEY_HEADER,
+	in: "header",
+	required: false,
+	description:
+		"a key of the caller under which a repeated call receives the answer of the first instead of running the mutation again",
+	schema: { type: "string", minLength: 1, maxLength: 255 },
+};
+
+const HEADER_PARAMETERS: Record<OperationKind, readonly JsonSchema[]> = {
+	query: [],
+	mutation: [IDEMPOTENCY_KEY_PARAMETER],
+};
+
 const RESPONSE_HEADERS = {
 	[CORRELATION_ID_HEADER]: { $ref: CORRELATION_ID_REF },
 };
@@ -154,14 +175,7 @@ async function operationsOf(
 function describeOperation(operation: RegisteredOperation): OpenApiOperation {
 	return {
 		operationId: operation.name,
-		parameters: [
-			{
-				name: "workspace",
-				in: "path",
-				required: true,
-				schema: { type: "string", format: "uuid" },
-			},
-		],
+		parameters: [WORKSPACE_PARAMETER, ...HEADER_PARAMETERS[operation.kind]],
 		requestBody: {
 			required: true,
 			content: { [JSON_CONTENT_TYPE]: { schema: operation.describeInput() } },
