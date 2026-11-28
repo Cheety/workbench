@@ -12,18 +12,24 @@ export const setSystemTimer: SetTimer = (expire, delayMs) => {
 	return () => clearTimeout(timer);
 };
 
+export type Hook = (expired: AbortSignal) => Promise<void>;
+
 export function runWithin(
-	hook: () => Promise<void>,
+	hook: Hook,
 	timeout: HookTimeout,
 ): Promise<HookOutcome> {
 	return new Promise((resolve, reject) => {
-		const cancel = timeout.setTimer(() => resolve("timed_out"), timeout.ms);
+		const expiry = new AbortController();
+		const cancel = timeout.setTimer(() => {
+			expiry.abort();
+			resolve("timed_out");
+		}, timeout.ms);
 		const fail = (error: unknown) => {
 			cancel();
 			reject(error);
 		};
 		try {
-			hook().then(() => {
+			hook(expiry.signal).then(() => {
 				cancel();
 				resolve("finished");
 			}, fail);

@@ -179,6 +179,21 @@ async function addEntries(
 		});
 }
 
+function issuing(...ids: readonly string[]): () => string {
+	const remaining = ids.values();
+	return () => {
+		const next = remaining.next();
+		if (next.done) throw new Error("no id left to issue");
+		return next.value;
+	};
+}
+
+const LOWEST_ID = "00000000-0000-4000-a000-000000000001";
+
+const MIDDLE_ID = "00000000-0000-4000-a000-000000000005";
+
+const HIGHEST_ID = "00000000-0000-4000-a000-000000000009";
+
 function cursorOf(position: unknown): string {
 	return Buffer.from(JSON.stringify(position)).toString("base64url");
 }
@@ -217,9 +232,12 @@ describe("the audit of a workspace", () => {
 		});
 	});
 
-	test("holds one entry for each mutation that succeeded, the newest first", async () => {
+	test("holds one entry for each mutation that succeeded, the newest first, whatever order their ids have", async () => {
 		const clock = clockAt("2026-11-27T08:00:00.000Z");
-		const harness = await startLedger({ now: clock.now });
+		const harness = await startLedger({
+			now: clock.now,
+			newAuditEntryId: issuing(HIGHEST_ID, LOWEST_ID),
+		});
 		const workspace = await harness.createWorkspace("Accounts");
 		clock.set("2026-11-27T08:01:00.000Z");
 		await harness.call({
@@ -326,9 +344,12 @@ describe("the audit of a workspace", () => {
 });
 
 describe("a page of the audit", () => {
-	test("holds at most the limit and continues after the cursor of the page before", async () => {
+	test("holds at most the limit and continues after the cursor of the page before, whatever order the ids have", async () => {
 		const clock = clockAt("2026-11-27T08:00:00.000Z");
-		const harness = await startLedger({ now: clock.now });
+		const harness = await startLedger({
+			now: clock.now,
+			newAuditEntryId: issuing(HIGHEST_ID, LOWEST_ID, MIDDLE_ID),
+		});
 		const workspace = await harness.createWorkspace("Accounts");
 		clock.set("2026-11-27T08:01:00.000Z");
 		await addEntries(harness, workspace, 1);
@@ -360,9 +381,12 @@ describe("a page of the audit", () => {
 		});
 	});
 
-	test("continues after its cursor when a newer entry was written since the page before", async () => {
+	test("continues after its cursor when a newer entry was written since the page before, whatever order the ids have", async () => {
 		const clock = clockAt("2026-11-27T08:00:00.000Z");
-		const harness = await startLedger({ now: clock.now });
+		const harness = await startLedger({
+			now: clock.now,
+			newAuditEntryId: issuing(MIDDLE_ID, HIGHEST_ID, LOWEST_ID),
+		});
 		const workspace = await harness.createWorkspace("Accounts");
 		clock.set("2026-11-27T08:01:00.000Z");
 		await addEntries(harness, workspace, 1);
@@ -405,8 +429,10 @@ describe("a page of the audit", () => {
 		expect(page.nextCursor).toBeNull();
 	});
 
-	test("neither repeats nor skips an entry among entries of the same time", async () => {
-		const harness = await startLedger();
+	test("orders entries of the same time by their id, so that none is repeated or skipped", async () => {
+		const harness = await startLedger({
+			newAuditEntryId: issuing(MIDDLE_ID, HIGHEST_ID, LOWEST_ID),
+		});
 		const workspace = await harness.createWorkspace("Accounts");
 		await addEntries(harness, workspace, 3);
 
@@ -430,11 +456,7 @@ describe("a page of the audit", () => {
 			[first, second, third].map((page) =>
 				page.entries.map((listed) => listed.id),
 			),
-		).toEqual([
-			["00000000-0000-4000-a000-000000000003"],
-			["00000000-0000-4000-a000-000000000002"],
-			["00000000-0000-4000-a000-000000000001"],
-		]);
+		).toEqual([[HIGHEST_ID], [MIDDLE_ID], [LOWEST_ID]]);
 		expect(third.nextCursor).toBeNull();
 	});
 

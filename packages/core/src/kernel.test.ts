@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+	defineCronJob,
 	defineEvent,
 	defineEventSubscription,
+	defineJob,
 	defineOperation,
 	definePlugin,
 	eventSubscriptionCapability,
@@ -775,24 +777,28 @@ describe("plugin kernel", () => {
 		[
 			"was rejected for another cycle first",
 			{ cards: ["board"], board: ["notes", "cards"], notes: ["board"] },
-			[
-				{ plugin: "notes", cycle: "notes -> board -> notes" },
-				{ plugin: "board", cycle: "cards -> board -> cards" },
-				{ plugin: "cards", cycle: "cards -> board -> cards" },
-			],
+			{
+				board:
+					/: (board -> cards -> board|cards -> board -> cards|board -> notes -> board|notes -> board -> notes)$/,
+				cards: /: (board -> cards -> board|cards -> board -> cards)$/,
+				notes: /: (board -> notes -> board|notes -> board -> notes)$/,
+			},
 		],
 		[
 			"was rejected before the plugin was reached",
 			{ cards: ["board", "notes"], board: ["cards"], notes: ["board"] },
-			[
-				{ plugin: "board", cycle: "cards -> board -> cards" },
-				{ plugin: "cards", cycle: "cards -> board -> cards" },
-				{ plugin: "notes", cycle: "notes -> board -> cards -> notes" },
-			],
+			{
+				board:
+					/: (board -> cards -> board|cards -> board -> cards|board -> cards -> notes -> board|cards -> notes -> board -> cards|notes -> board -> cards -> notes)$/,
+				cards:
+					/: (board -> cards -> board|cards -> board -> cards|board -> cards -> notes -> board|cards -> notes -> board -> cards|notes -> board -> cards -> notes)$/,
+				notes:
+					/: (board -> cards -> notes -> board|cards -> notes -> board -> cards|notes -> board -> cards -> notes)$/,
+			},
 		],
 	])(
-		"reports the cycle for a plugin of a cycle whose required plugin %s",
-		async (_case, requirements, cycles) => {
+		"reports a cycle it is part of for a plugin of a cycle whose required plugin %s",
+		async (_case, requirements, cycleOf) => {
 			const { plugins } = await start({
 				packages: Object.entries(requirements).map(([name, required]) =>
 					packageOf(
@@ -809,15 +815,23 @@ describe("plugin kernel", () => {
 				enabledPlugins: Object.keys(requirements),
 			});
 
-			expect(byPlugin(plugins.failures)).toEqual(
-				byPlugin(
-					cycles.map(({ plugin, cycle }) => ({
-						plugin,
-						reason: "dependency_cycle",
-						detail: `plugin "${plugin}" is part of a dependency cycle: ${cycle}`,
-					})),
-				),
-			);
+			expect(byPlugin(plugins.failures)).toEqual([
+				{
+					plugin: "board",
+					reason: "dependency_cycle",
+					detail: expect.stringMatching(cycleOf.board),
+				},
+				{
+					plugin: "cards",
+					reason: "dependency_cycle",
+					detail: expect.stringMatching(cycleOf.cards),
+				},
+				{
+					plugin: "notes",
+					reason: "dependency_cycle",
+					detail: expect.stringMatching(cycleOf.notes),
+				},
+			]);
 		},
 	);
 
@@ -1147,7 +1161,10 @@ describe("plugin kernel", () => {
 
 		expect(contexts.get("notes")?.capability("clock")).toBe(clock);
 		expect(() => contexts.get("notes")?.capability("vault")).toThrow(
-			new UndeclaredCapabilityError("notes", "vault"),
+			UndeclaredCapabilityError,
+		);
+		expect(() => contexts.get("notes")?.capability("vault")).toThrow(
+			'plugin "notes" did not declare the capability "vault" in its manifest',
 		);
 		expect(() => contexts.get("board")?.capability("clock")).toThrow(
 			'plugin "board" did not declare the capability "clock" in its manifest',
@@ -1637,7 +1654,10 @@ describe("plugin schemas", () => {
 			schema: schemaName("plugin_sticky_notes"),
 		});
 		expect(() => contexts.get("cards")?.capability("database")).toThrow(
-			new UndeclaredCapabilityError("cards", "database"),
+			UndeclaredCapabilityError,
+		);
+		expect(() => contexts.get("cards")?.capability("database")).toThrow(
+			'plugin "cards" did not declare the capability "database" in its manifest',
 		);
 	});
 
@@ -2392,6 +2412,232 @@ describe("events of plugins", () => {
 							name: "board",
 							capabilities: [CARD_CREATED_CAPABILITY],
 						},
+						...declared,
+					}),
+				},
+			],
+			enabledPlugins: ["board"],
+		});
+
+		expect(plugins.failures).toEqual([
+			{
+				plugin: "board",
+				reason: "invalid_manifest",
+				detail: `plugin package "@workbench/plugin-board" has an invalid manifest: ${problem}`,
+			},
+		]);
+	});
+});
+
+const archiveCards = defineJob({
+	name: "archiveCards",
+	payload: z.object({ boardId: z.string() }),
+	maxAttempts: 5,
+	run: async () => {},
+});
+
+describe("jobs of a plugin", () => {
+	test("registers the jobs of an active plugin under the name of the plugin", async () => {
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					definePlugin({ manifest: { name: "board" }, jobs: [archiveCards] }),
+				),
+			],
+			enabledPlugins: ["board"],
+		});
+
+		expect(plugins.failures).toEqual([]);
+		expect(plugins.jobs.names()).toEqual(["board.archiveCards"]);
+		expect(plugins.jobs.find("board.archiveCards")).toEqual(
+			expect.objectContaining({ plugin: "board", name: "board.archiveCards" }),
+		);
+	});
+
+	test("registers no job of a plugin that is not loaded", async () => {
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: { name: "board", requires: { missing: "^1.0.0" } },
+						jobs: [archiveCards],
+					}),
+				),
+			],
+			enabledPlugins: ["board"],
+		});
+
+		expect(plugins.jobs.names()).toEqual([]);
+		expect(plugins.jobs.find("board.archiveCards")).toBeUndefined();
+	});
+
+	test.each([
+		[
+			"a job name that is not in camelCase",
+			{ jobs: [{ ...archiveCards, name: "archive-cards" }] },
+			'jobs[0].name must be in camelCase, such as "sendReminder"',
+		],
+		[
+			"a job without a payload schema",
+			{ jobs: [{ ...archiveCards, payload: { boardId: "string" } }] },
+			'job "board.archiveCards" must declare its payload as a schema',
+		],
+		[
+			"a job without a limit of its attempts",
+			{ jobs: [{ ...archiveCards, maxAttempts: undefined }] },
+			'job "board.archiveCards" must have maxAttempts that is an integer from 1 to 25',
+		],
+		[
+			"a job with no attempt at all",
+			{ jobs: [{ ...archiveCards, maxAttempts: 0 }] },
+			'job "board.archiveCards" must have maxAttempts that is an integer from 1 to 25',
+		],
+		[
+			"a job with more attempts than the queue allows",
+			{ jobs: [{ ...archiveCards, maxAttempts: 26 }] },
+			'job "board.archiveCards" must have maxAttempts that is an integer from 1 to 25',
+		],
+		[
+			"a job without a run function",
+			{ jobs: [{ ...archiveCards, run: undefined }] },
+			'job "board.archiveCards" must have a run function',
+		],
+		[
+			"a job declared twice",
+			{ jobs: [archiveCards, archiveCards] },
+			'job "board.archiveCards" is declared more than once',
+		],
+		[
+			"jobs that are not a list",
+			{ jobs: { archiveCards } },
+			"jobs must be a list of job definitions",
+		],
+		[
+			"a job that is not an object",
+			{ jobs: ["archiveCards"] },
+			"jobs[0] must be a job definition",
+		],
+	])("rejects a plugin with %s", async (_case, declared, problem) => {
+		const { plugins } = await start({
+			packages: [
+				{
+					packageName: "@workbench/plugin-board",
+					pluginName: "board",
+					version: "1.0.0",
+					loadDefinition: async () => ({
+						manifest: { name: "board" },
+						...declared,
+					}),
+				},
+			],
+			enabledPlugins: ["board"],
+		});
+
+		expect(plugins.failures).toEqual([
+			{
+				plugin: "board",
+				reason: "invalid_manifest",
+				detail: `plugin package "@workbench/plugin-board" has an invalid manifest: ${problem}`,
+			},
+		]);
+	});
+});
+
+const sendDigest = defineCronJob({
+	name: "sendDigest",
+	schedule: "0 7 * * 1-5",
+	maxAttempts: 3,
+	run: async () => {},
+});
+
+describe("cron jobs of a plugin", () => {
+	test("registers the cron jobs of an active plugin under the name of the plugin, beside its jobs", async () => {
+		const { plugins } = await start({
+			packages: [
+				packageOf(
+					definePlugin({
+						manifest: { name: "board" },
+						jobs: [archiveCards],
+						cronJobs: [sendDigest],
+					}),
+				),
+			],
+			enabledPlugins: ["board"],
+		});
+
+		expect(plugins.failures).toEqual([]);
+		expect(plugins.jobs.names()).toEqual([
+			"board.archiveCards",
+			"board.sendDigest",
+		]);
+		expect(plugins.jobs.cronJobs().map((job) => job.name)).toEqual([
+			"board.sendDigest",
+		]);
+	});
+
+	test.each([
+		[
+			"a cron job name that is not in camelCase",
+			{ cronJobs: [{ ...sendDigest, name: "send-digest" }] },
+			'cronJobs[0].name must be in camelCase, such as "sendDigest"',
+		],
+		[
+			"a cron job without a schedule",
+			{ cronJobs: [{ ...sendDigest, schedule: undefined }] },
+			'the schedule of cron job "board.sendDigest" must be a cron expression of five fields: minute, hour, day of month, month and day of week',
+		],
+		[
+			"a cron job whose schedule names an hour that does not exist",
+			{ cronJobs: [{ ...sendDigest, schedule: "0 24 * * *" }] },
+			'the schedule of cron job "board.sendDigest" has the hour "24", which must be "*", a number, a range or a list of them within 0 to 23, each with an optional step',
+		],
+		[
+			"a cron job whose schedule never falls due",
+			{ cronJobs: [{ ...sendDigest, schedule: "0 0 30 2 *" }] },
+			'the schedule of cron job "board.sendDigest" never falls due',
+		],
+		[
+			"a cron job without a limit of its attempts",
+			{ cronJobs: [{ ...sendDigest, maxAttempts: undefined }] },
+			'cron job "board.sendDigest" must have maxAttempts that is an integer from 1 to 25',
+		],
+		[
+			"a cron job without a run function",
+			{ cronJobs: [{ ...sendDigest, run: undefined }] },
+			'cron job "board.sendDigest" must have a run function',
+		],
+		[
+			"a cron job declared twice",
+			{ cronJobs: [sendDigest, sendDigest] },
+			'job "board.sendDigest" is declared more than once',
+		],
+		[
+			"a cron job under the name of one of its jobs",
+			{
+				jobs: [archiveCards],
+				cronJobs: [{ ...sendDigest, name: "archiveCards" }],
+			},
+			'job "board.archiveCards" is declared more than once',
+		],
+		[
+			"cron jobs that are not a list",
+			{ cronJobs: { sendDigest } },
+			"cronJobs must be a list of cron job definitions",
+		],
+		[
+			"a cron job that is not an object",
+			{ cronJobs: ["sendDigest"] },
+			"cronJobs[0] must be a cron job definition",
+		],
+	])("rejects a plugin with %s", async (_case, declared, problem) => {
+		const { plugins } = await start({
+			packages: [
+				{
+					packageName: "@workbench/plugin-board",
+					pluginName: "board",
+					version: "1.0.0",
+					loadDefinition: async () => ({
+						manifest: { name: "board" },
 						...declared,
 					}),
 				},

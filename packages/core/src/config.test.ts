@@ -63,29 +63,52 @@ describe("loadConfig", () => {
 	test.each([
 		["PORT", "70000"],
 		["PORT", "http"],
-		["PORT", " "],
 		["PORT", "0x1F90"],
 		["PORT", "1e3"],
 		["PORT", "80.0"],
 		["PORT", "+80"],
 		["PORT", "080"],
 		["PORT", " 80"],
-		["READINESS_TIMEOUT_MS", " "],
 		["READINESS_TIMEOUT_MS", "0x10"],
 		["READINESS_TIMEOUT_MS", "1e3"],
+		["READINESS_TIMEOUT_MS", "70000"],
 		["LOG_LEVEL", "verbose"],
-		["READINESS_TIMEOUT_MS", "0"],
-		["DATABASE_URL", "mysql://workbench:s3cr3t-pass@db.internal/workbench"],
-		["DATABASE_URL", "s3cr3t-pass"],
-		["DATABASE_URL", "postgres:s3cr3t-pass"],
-		["DATABASE_URL", "postgres:///s3cr3t-pass"],
 	])(
-		"rejects invalid %s and names it without echoing the value",
+		"rejects %s set to %j and names it without echoing the value",
 		(variable, value) => {
 			const error = captureInvalidConfig({ DATABASE_URL, [variable]: value });
 
 			expect(error.issues.map((issue) => issue.variable)).toEqual([variable]);
 			expect(error.message).toContain(variable);
+			expect(JSON.stringify(error.issues) + error.message).not.toContain(value);
+		},
+	);
+
+	test.each([
+		["PORT", " "],
+		["READINESS_TIMEOUT_MS", " "],
+		["READINESS_TIMEOUT_MS", "0"],
+	])("rejects %s set to %j and names it", (variable, value) => {
+		const error = captureInvalidConfig({ DATABASE_URL, [variable]: value });
+
+		expect(error.issues.map((issue) => issue.variable)).toEqual([variable]);
+		expect(error.message).toContain(variable);
+	});
+
+	test.each([
+		"mysql://workbench:s3cr3t-pass@db.internal/workbench",
+		"s3cr3t-pass",
+		"postgres:s3cr3t-pass",
+		"postgres:///s3cr3t-pass",
+	])(
+		"rejects DATABASE_URL set to %j and names it without echoing its password",
+		(value) => {
+			const error = captureInvalidConfig({ DATABASE_URL: value });
+
+			expect(error.issues.map((issue) => issue.variable)).toEqual([
+				"DATABASE_URL",
+			]);
+			expect(error.message).toContain("DATABASE_URL");
 			expect(JSON.stringify(error.issues) + error.message).not.toContain(
 				"s3cr3t-pass",
 			);

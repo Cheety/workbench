@@ -7,14 +7,15 @@ import {
 	loadConfigFromEnvironment,
 } from "./config.ts";
 import { fullJitterBackoff, untilDatabaseReachable } from "./database-wait.ts";
-import { startEventDeliveryLoop } from "./event-delivery-loop.ts";
 import { createEventDelivery } from "./event-outbox.ts";
 import { setSystemTimer } from "./hook-timeout.ts";
 import { createInstanceStart } from "./instance-start.ts";
+import { createJobQueue } from "./job-queue.ts";
 import { startPlugins } from "./kernel.ts";
 import { createLogger } from "./logger.ts";
 import { createOperationPipeline } from "./operation-pipeline.ts";
 import { discoverPluginPackages } from "./plugin-discovery.ts";
+import { startPollLoop } from "./poll-loop.ts";
 import { createPostgresCheck } from "./postgres.ts";
 import {
 	CORE_MIGRATIONS_DIRECTORY,
@@ -29,6 +30,7 @@ import {
 } from "./server.ts";
 import { reportFailedStart, shutDownInstance } from "./shutdown.ts";
 import { systemFailureReason } from "./system-error.ts";
+import { openStatementCancellation } from "./transaction-deadline.ts";
 
 const PACKAGES_DIRECTORY = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -49,6 +51,8 @@ const DATABASE_CLOSE_TIMEOUT_S = 5;
 const MIGRATION_LOCK_RETRY = { baseMs: 250, capMs: 2_000 } as const;
 
 const EVENT_DELIVERY_POLL_INTERVAL_MS = 1_000;
+
+const JOB_QUEUE_POLL_INTERVAL_MS = 1_000;
 
 const now = (): Date => new Date();
 
@@ -142,20 +146,50 @@ const sql = new SQL(config.databaseUrl.reveal(), {
 	connectionTimeout: OPERATION_CONNECTION_TIMEOUT_S,
 	connection: { statement_timeout: OPERATION_STATEMENT_TIMEOUT_MS },
 });
-const eventDelivery = startEventDeliveryLoop({
-	delivery: createEventDelivery({
-		sql,
-		events: instance.events,
-		now,
-		newId: () => crypto.randomUUID(),
-		random: Math.random,
-		handlerTimeout: {
-			ms: config.pluginHookTimeoutMs,
-			setTimer: setSystemTimer,
-		},
-		logger,
-	}),
+const cancellation = openStatementCancellation(
+	config.databaseUrl.reveal(),
+	OPERATION_STATEMENT_TIMEOUT_MS,
+);
+const dueDeliveries = createEventDelivery({
+	sql,
+	cancellation,
+	events: instance.events,
+	hasCoreSchema: instance.hasCoreSchema,
+	now,
+	newId: () => crypto.randomUUID(),
+	random: Math.random,
+	handlerTimeout: {
+		ms: config.pluginHookTimeoutMs,
+		setTimer: setSystemTimer,
+	},
+	logger,
+});
+const eventDelivery = startPollLoop({
+	run: (stopSignal) => dueDeliveries.deliverDue(stopSignal),
+	failureMessage: "event delivery failed",
 	pollIntervalMs: EVENT_DELIVERY_POLL_INTERVAL_MS,
+	setTimer: setSystemTimer,
+	logger,
+});
+const dueJobs = createJobQueue({
+	sql,
+	cancellation,
+	jobs: instance.jobs,
+	hasCoreSchema: instance.hasCoreSchema,
+	now,
+	newId: () => crypto.randomUUID(),
+	newJobId: () => crypto.randomUUID(),
+	random: Math.random,
+	runTimeout: {
+		ms: config.pluginHookTimeoutMs,
+		setTimer: setSystemTimer,
+	},
+	logger,
+});
+const jobQueue = startPollLoop({
+	run: (stopSignal) => dueJobs.runDue(stopSignal),
+	failureMessage: "job queue failed",
+	pollIntervalMs: JOB_QUEUE_POLL_INTERVAL_MS,
 	setTimer: setSystemTimer,
 	logger,
 });
@@ -176,6 +210,9 @@ const server = startServerOrExit({
 			newAuditEntryId: () => crypto.randomUUID(),
 			newEventId: () => crypto.randomUUID(),
 			eventsCommitted: eventDelivery.wake,
+			jobs: instance.jobs,
+			newJobId: () => crypto.randomUUID(),
+			jobsCommitted: jobQueue.wake,
 			random: Math.random,
 			logger,
 		}),
@@ -193,9 +230,13 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 				stopStartingPlugins: instance.stop,
 				server,
 				eventDelivery,
+				jobQueue,
 				plugins,
 				database: {
-					close: () => sql.close({ timeout: DATABASE_CLOSE_TIMEOUT_S }),
+					close: async () => {
+						await cancellation.close({ timeout: DATABASE_CLOSE_TIMEOUT_S });
+						await sql.close({ timeout: DATABASE_CLOSE_TIMEOUT_S });
+					},
 				},
 			},
 			logger,

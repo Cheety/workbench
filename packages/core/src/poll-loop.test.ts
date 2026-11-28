@@ -1,39 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { startEventDeliveryLoop } from "./event-delivery-loop.ts";
-import type { SetTimer } from "./hook-timeout.ts";
+import { startPollLoop } from "./poll-loop.ts";
+import { manualTimer } from "./testing/manual-timer.ts";
 import { recordingLogger } from "./testing/recording-logger.ts";
 
 const POLL_INTERVAL_MS = 1_000;
-
-function manualTimer() {
-	const delaysMs: number[] = [];
-	let pending: (() => void) | undefined;
-	let announce: (() => void) | undefined;
-	const setTimer: SetTimer = (expire, delayMs) => {
-		delaysMs.push(delayMs);
-		pending = expire;
-		announce?.();
-		announce = undefined;
-		return () => {
-			if (pending === expire) pending = undefined;
-		};
-	};
-	return {
-		setTimer,
-		delaysMs,
-		isPending: () => pending !== undefined,
-		nextSet: () =>
-			new Promise<void>((resolve) => {
-				announce = resolve;
-			}),
-		expire: () => {
-			if (pending === undefined) throw new Error("no timer is pending");
-			const expire = pending;
-			pending = undefined;
-			expire();
-		},
-	};
-}
 
 function controlledDelivery() {
 	const running: {
@@ -84,8 +54,9 @@ function startLoop() {
 	const timer = manualTimer();
 	const deliveries = controlledDelivery();
 	const { logger, entries } = recordingLogger();
-	const loop = startEventDeliveryLoop({
-		delivery: deliveries.delivery,
+	const loop = startPollLoop({
+		run: () => deliveries.delivery.deliverDue(),
+		failureMessage: "event delivery failed",
 		pollIntervalMs: POLL_INTERVAL_MS,
 		setTimer: timer.setTimer,
 		logger,
@@ -93,7 +64,7 @@ function startLoop() {
 	return { loop, timer, deliveries, entries };
 }
 
-describe("the event delivery loop", () => {
+describe("the poll loop", () => {
 	test("delivers nothing until it is woken or its poll interval expires", () => {
 		const { timer, deliveries } = startLoop();
 
@@ -105,7 +76,7 @@ describe("the event delivery loop", () => {
 		const { timer, deliveries } = startLoop();
 
 		timer.expire();
-		const waitingForNextInterval = timer.nextSet();
+		const waitingForNextInterval = timer.set();
 		deliveries.current().finish();
 		await waitingForNextInterval;
 		timer.expire();
@@ -124,7 +95,7 @@ describe("the event delivery loop", () => {
 		const secondStart = deliveries.nextStart();
 		deliveries.current().finish();
 		await secondStart;
-		const waitingForNextInterval = timer.nextSet();
+		const waitingForNextInterval = timer.set();
 		deliveries.current().finish();
 		await waitingForNextInterval;
 
@@ -137,7 +108,7 @@ describe("the event delivery loop", () => {
 		const { loop, timer, deliveries, entries } = startLoop();
 
 		loop.wake();
-		const waitingForNextInterval = timer.nextSet();
+		const waitingForNextInterval = timer.set();
 		deliveries.current().fail(new Error("connection refused"));
 		await waitingForNextInterval;
 		timer.expire();
@@ -157,18 +128,17 @@ describe("the event delivery loop", () => {
 		const journal: string[] = [];
 		const woundDown = Promise.withResolvers<void>();
 		let started = 0;
-		const loop = startEventDeliveryLoop({
-			delivery: {
-				deliverDue: (stopSignal) => {
-					started += 1;
-					stopSignal.addEventListener("abort", () => {
-						setImmediate(() => {
-							journal.push("delivery wound down");
-							woundDown.resolve();
-						});
+		const loop = startPollLoop({
+			failureMessage: "event delivery failed",
+			run: (stopSignal) => {
+				started += 1;
+				stopSignal.addEventListener("abort", () => {
+					setImmediate(() => {
+						journal.push("delivery wound down");
+						woundDown.resolve();
 					});
-					return woundDown.promise;
-				},
+				});
+				return woundDown.promise;
 			},
 			pollIntervalMs: POLL_INTERVAL_MS,
 			setTimer: timer.setTimer,

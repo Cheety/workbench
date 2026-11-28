@@ -2,6 +2,7 @@ import type { Actor } from "@workbench/sdk";
 import { Secret } from "../config.ts";
 import { createEventDelivery } from "../event-outbox.ts";
 import { setSystemTimer } from "../hook-timeout.ts";
+import { createJobQueue } from "../job-queue.ts";
 import {
 	type PluginPackage,
 	type RunningPlugins,
@@ -36,6 +37,7 @@ export type OperationHarnessOptions = {
 	readonly plugins: readonly PluginPackage[];
 	readonly now?: () => Date;
 	readonly newId?: () => string;
+	readonly newAuditEntryId?: () => string;
 	readonly random?: () => number;
 	readonly newCorrelationId?: () => string;
 };
@@ -52,6 +54,7 @@ export type OperationHarness = {
 	createWorkspace(name: string): Promise<string>;
 	call(call: HarnessCall): Promise<OperationResult>;
 	deliverEvents(): Promise<void>;
+	runJobs(): Promise<void>;
 	stop(): Promise<void>;
 };
 
@@ -71,6 +74,8 @@ const OPERATION_ID_GROUP = "8000";
 const AUDIT_ENTRY_ID_GROUP = "a000";
 
 const EVENT_ID_GROUP = "e000";
+
+const JOB_ID_GROUP = "b000";
 
 const NOT_STOPPED = new AbortController().signal;
 
@@ -144,25 +149,44 @@ function harnessOf(
 	const now = options.now ?? (() => FIXED_NOW);
 	const newId = options.newId ?? sequentialIds(OPERATION_ID_GROUP);
 	const random = options.random ?? (() => FIXED_RANDOM);
+	const newJobId = sequentialIds(JOB_ID_GROUP);
 	const pipeline: OperationPipeline = createOperationPipeline({
 		sql: database.sql,
 		registry: plugins.operations,
 		events: plugins.events,
 		now,
 		newId,
-		newAuditEntryId: sequentialIds(AUDIT_ENTRY_ID_GROUP),
+		newAuditEntryId:
+			options.newAuditEntryId ?? sequentialIds(AUDIT_ENTRY_ID_GROUP),
 		newEventId: sequentialIds(EVENT_ID_GROUP),
 		eventsCommitted: () => {},
+		jobs: plugins.jobs,
+		newJobId,
+		jobsCommitted: () => {},
 		random,
 		logger,
 	});
 	const delivery = createEventDelivery({
 		sql: database.sql,
+		cancellation: database.cancellation,
 		events: plugins.events,
+		hasCoreSchema: () => true,
 		now,
 		newId,
 		random,
 		handlerTimeout: { ms: HOOK_TIMEOUT_MS, setTimer: setSystemTimer },
+		logger,
+	});
+	const jobQueue = createJobQueue({
+		sql: database.sql,
+		cancellation: database.cancellation,
+		jobs: plugins.jobs,
+		hasCoreSchema: () => true,
+		now,
+		newId,
+		newJobId,
+		random,
+		runTimeout: { ms: HOOK_TIMEOUT_MS, setTimer: setSystemTimer },
 		logger,
 	});
 	const newCorrelationId =
@@ -181,6 +205,7 @@ function harnessOf(
 				correlationId: newCorrelationId(),
 			}),
 		deliverEvents: () => delivery.deliverDue(NOT_STOPPED),
+		runJobs: () => jobQueue.runDue(NOT_STOPPED),
 		stop: async () => {
 			try {
 				await plugins.deactivate();

@@ -68,11 +68,43 @@ _Avoid_: Listener, Callback, Consumer
 
 **Outbox**:
 Die Tabellen des Cores, in die eine Mutation ihre Events in ihrer eigenen Transaktion schreibt und aus denen der Core sie nach dem Festschreiben zustellt.
-_Avoid_: Queue, Event-Bus, Event-Store
+_Avoid_: Queue (die Job-Queue ist die der Jobs), Event-Bus, Event-Store
 
 **Zustellung**:
-Der Aufruf des Event-Handlers genau eines abonnierenden Plugins mit genau einem Event; sie gelingt mindestens einmal.
+Der Aufruf des Event-Handlers genau eines abonnierenden Plugins mit genau einem Event; sie gelingt mindestens einmal oder landet nach ihrem letzten Versuch oder ihrer Zustellfrist im Dead-Letter.
 _Avoid_: Dispatch, Auslieferung, Benachrichtigung
+
+**Zustellfrist**:
+Die Zeit ab dem Event, nach der der Core eine noch offene Zustellung nicht mehr versucht und in den Dead-Letter legt, auch an ein Plugin, das nicht aktiv ist.
+_Avoid_: TTL, Ablaufzeit, Wiederzustellungsfrist (das ist die eines begonnenen Versuchs eines Jobs)
+
+**Job**:
+Hintergrundarbeit eines Plugins, die eine Mutation oder ein Zeitplan einreiht und die der Core nach dem Festschreiben außerhalb der Anfrage ausführt, mindestens einmal.
+_Avoid_: Task, Hintergrundaufgabe, Worker
+
+**Cron-Job**:
+Ein Job, den keine Mutation einreiht, sondern ein Zeitplan, den das Plugin deklariert; er läuft für eine Fälligkeit höchstens einmal und für jede, solange nicht mehr als zehn verstreichen, ohne dass der Core sie einreiht.
+_Avoid_: Scheduled Task, Timer, Geplanter Job
+
+**Fälligkeit**:
+Ein Zeitpunkt, den der Zeitplan eines Cron-Jobs trifft.
+_Avoid_: Tick, Trigger, Ausführungszeitpunkt
+
+**Job-Queue**:
+Die Tabelle des Cores, in die eine Mutation ihre Jobs in ihrer eigenen Transaktion schreibt, in die der Core die Fälligkeiten der Cron-Jobs einreiht und aus der er Jobs ausführt, wiederholt und in den Dead-Letter legt.
+_Avoid_: Outbox (das ist die der Events), Warteschlange, Scheduler
+
+**Versuch**:
+Eine Ausführung eines Jobs oder ein Aufruf des Event-Handlers für eine Zustellung; sie gelingt, scheitert oder überschreitet ihre Frist, und ein Job wie eine Zustellung hat nur eine begrenzte Zahl davon.
+_Avoid_: Retry (das ist die Wiederholung, also jeder Versuch nach dem ersten), Run, Durchlauf
+
+**Dead-Letter**:
+Die Ablage der Jobs und Zustellungen, die der Core aufgegeben hat, nach ihrem letzten gescheiterten Versuch oder, bei einer Zustellung, nach ihrer Zustellfrist; der Core versucht sie nicht mehr, es sei denn, ein Betreiber reiht sie wieder ein, und löscht einen Job 30 Tage, eine Zustellung samt ihrem Event frühestens 7 Tage, nachdem sie dort gelandet sind.
+_Avoid_: Fehlerliste, Papierkorb, Failed Jobs
+
+**Wiederzustellungsfrist**:
+Die Zeit, nach der der Core einen begonnenen Versuch, der weder gelang noch scheiterte, verloren gibt und den Job erneut ausführt; sie ist länger als die Frist eines Versuchs.
+_Avoid_: Lease, Lock-Timeout, Visibility-Timeout
 
 ## Inhalte
 

@@ -1,4 +1,5 @@
 import type { EventDefinition } from "./event.ts";
+import type { JobDefinition } from "./job.ts";
 
 export const OPERATION_KINDS = ["query", "mutation"] as const;
 export type OperationKind = (typeof OPERATION_KINDS)[number];
@@ -48,6 +49,10 @@ export type OperationContext = {
 	random(): number;
 	publish<Payload>(
 		event: EventDefinition<Payload>,
+		payload: Payload,
+	): Promise<void>;
+	enqueue<Payload>(
+		job: JobDefinition<Payload>,
 		payload: Payload,
 	): Promise<void>;
 };

@@ -1,7 +1,9 @@
 import type { EventDefinition, EventSubscription } from "./event.ts";
+import type { CronJobDefinition, JobDefinition } from "./job.ts";
 import type { OperationDefinition } from "./operation.ts";
 
 export * from "./event.ts";
+export * from "./job.ts";
 export * from "./operation.ts";
 
 export const DATABASE_CAPABILITY = "database";
@@ -25,6 +27,8 @@ export type PluginDefinition = {
 	readonly operations?: readonly OperationDefinition<unknown, unknown>[];
 	readonly events?: readonly EventDefinition<unknown>[];
 	readonly subscriptions?: readonly EventSubscription<unknown>[];
+	readonly jobs?: readonly JobDefinition<unknown>[];
+	readonly cronJobs?: readonly CronJobDefinition[];
 	activate?(ctx: PluginContext): void | Promise<void>;
 	deactivate?(): void | Promise<void>;
 };

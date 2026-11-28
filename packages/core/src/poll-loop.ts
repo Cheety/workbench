@@ -1,23 +1,21 @@
-import type { EventDelivery } from "./event-outbox.ts";
 import { describeThrown } from "./failure-reason.ts";
 import type { SetTimer } from "./hook-timeout.ts";
 import type { Logger } from "./logger.ts";
 
-export type EventDeliveryLoopOptions = {
-	readonly delivery: EventDelivery;
+export type PollLoopOptions = {
+	readonly run: (stopSignal: AbortSignal) => Promise<void>;
+	readonly failureMessage: string;
 	readonly pollIntervalMs: number;
 	readonly setTimer: SetTimer;
 	readonly logger: Logger;
 };
 
-export type EventDeliveryLoop = {
+export type PollLoop = {
 	wake(): void;
 	stop(): Promise<void>;
 };
 
-export function startEventDeliveryLoop(
-	options: EventDeliveryLoopOptions,
-): EventDeliveryLoop {
+export function startPollLoop(options: PollLoopOptions): PollLoop {
 	const stopping = new AbortController();
 	let running: Promise<void> | undefined;
 	let isWokenWhileRunning = false;
@@ -27,11 +25,11 @@ export function startEventDeliveryLoop(
 		cancelPoll = options.setTimer(wake, options.pollIntervalMs);
 	};
 
-	const deliver = async (): Promise<void> => {
+	const runOnce = async (): Promise<void> => {
 		try {
-			await options.delivery.deliverDue(stopping.signal);
+			await options.run(stopping.signal);
 		} catch (error) {
-			options.logger.error("event delivery failed", {
+			options.logger.error(options.failureMessage, {
 				error: describeThrown(error),
 			});
 		}
@@ -40,7 +38,7 @@ export function startEventDeliveryLoop(
 	const run = async (): Promise<void> => {
 		do {
 			isWokenWhileRunning = false;
-			await deliver();
+			await runOnce();
 		} while (isWokenWhileRunning && !stopping.signal.aborted);
 		running = undefined;
 		if (!stopping.signal.aborted) waitForPoll();

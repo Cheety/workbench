@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import {
 	type OperationHarness,
+	type OperationResult,
 	type PluginPackage,
 	pluginPackageAt,
 	startOperationHarness,
@@ -13,6 +14,7 @@ import {
 	eventSubscriptionCapability,
 	type PublishedEvent,
 } from "@workbench/sdk";
+import { z } from "zod";
 import { noteCreated } from "./contract/index.ts";
 
 const ALICE: Actor = { kind: "user", id: "alice" };
@@ -40,6 +42,11 @@ async function startReference(
 		plugins: [await pluginPackageAt(join(import.meta.dir, "..")), ...others],
 	});
 	return harness;
+}
+
+function noteIdOf(created: OperationResult): string {
+	if (!created.ok) throw new Error("the note was not created");
+	return z.object({ id: z.string() }).parse(created.output).id;
 }
 
 function searchIndexing(received: PublishedEvent<{ noteId: string }>[]) {
@@ -188,7 +195,7 @@ describe("the notes of the reference plugin", () => {
 		const reference = await startReference(searchIndexing(received));
 		const workspace = await reference.createWorkspace("Alpha");
 
-		await reference.call({
+		const created = await reference.call({
 			actor: ALICE,
 			workspace,
 			operation: "reference.createNote",
@@ -198,12 +205,12 @@ describe("the notes of the reference plugin", () => {
 
 		expect(received).toEqual([
 			{
-				id: "00000000-0000-4000-e000-000000000001",
+				id: expect.any(String),
 				name: "reference.NoteCreated",
 				version: 1,
 				occurredAt: new Date("2026-11-26T08:00:00.000Z"),
 				workspace,
-				payload: { noteId: "00000000-0000-4000-8000-000000000002" },
+				payload: { noteId: noteIdOf(created) },
 			},
 		]);
 	});

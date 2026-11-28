@@ -1,6 +1,7 @@
 import type { DatabaseWaitOutcome } from "./database-wait.ts";
 import { type EventRegistry, registerEvents } from "./event-registry.ts";
 import { describeThrown } from "./failure-reason.ts";
+import { type JobRegistry, registerJobs } from "./job-registry.ts";
 import type { RunningPlugins } from "./kernel.ts";
 import type { Logger } from "./logger.ts";
 import {
@@ -12,7 +13,7 @@ import type { StartupStatus } from "./server.ts";
 
 export type StartedPlugins = Pick<
 	RunningPlugins,
-	"failures" | "operations" | "events" | "deactivate"
+	"failures" | "operations" | "events" | "jobs" | "deactivate"
 >;
 
 export type InstanceStartSteps = {
@@ -27,8 +28,10 @@ export type InstanceStartSteps = {
 
 export type InstanceStart = {
 	status(): StartupStatus;
+	hasCoreSchema(): boolean;
 	readonly operations: OperationRegistry;
 	readonly events: EventRegistry;
+	readonly jobs: JobRegistry;
 	run(): Promise<StartedPlugins>;
 	stop(): void;
 };
@@ -39,6 +42,7 @@ const NO_PLUGINS: StartedPlugins = {
 	failures: [],
 	operations: registerOperations([]),
 	events: registerEvents({ active: [], notActive: [] }),
+	jobs: registerJobs([]),
 	deactivate: async () => "clean",
 };
 
@@ -48,8 +52,10 @@ export function createInstanceStart(
 ): InstanceStart {
 	const stopping = new AbortController();
 	let status: StartupStatus = "starting";
+	let hasCoreSchema = false;
 	let operations = NO_PLUGINS.operations;
 	let events = NO_PLUGINS.events;
+	let jobs = NO_PLUGINS.jobs;
 	let running: Promise<StartedPlugins> | undefined;
 
 	const fail = (
@@ -72,9 +78,11 @@ export function createInstanceStart(
 		}
 		if (coreSchema === "stopped") return NO_PLUGINS;
 		if (coreSchema === "not_migrated") return fail("core_schema_not_migrated");
+		hasCoreSchema = true;
 		const plugins = await steps.startPlugins(signal);
 		operations = plugins.operations;
 		events = plugins.events;
+		jobs = plugins.jobs;
 		const unmigrated = plugins.failures
 			.filter((failure) => failure.reason === "migration_failed")
 			.map((failure) => failure.plugin);
@@ -89,6 +97,7 @@ export function createInstanceStart(
 
 	return {
 		status: () => status,
+		hasCoreSchema: () => hasCoreSchema,
 		operations: { find: (name) => operations.find(name) },
 		events: {
 			findEvent: (name) => events.findEvent(name),
@@ -96,6 +105,11 @@ export function createInstanceStart(
 			subscribersOf: (event) => events.subscribersOf(event),
 			findSubscription: (subscriber, event) =>
 				events.findSubscription(subscriber, event),
+		},
+		jobs: {
+			find: (name) => jobs.find(name),
+			names: () => jobs.names(),
+			cronJobs: () => jobs.cronJobs(),
 		},
 		run: () => {
 			running ??= start().catch((error: unknown) => {

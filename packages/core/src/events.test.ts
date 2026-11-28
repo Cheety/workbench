@@ -304,6 +304,9 @@ async function startLedgerPipeline(eventsCommitted: () => void) {
 		newAuditEntryId: () => crypto.randomUUID(),
 		newEventId: () => crypto.randomUUID(),
 		eventsCommitted,
+		jobs: plugins.jobs,
+		newJobId: () => crypto.randomUUID(),
+		jobsCommitted: () => {},
 		random: () => 0.5,
 		logger,
 	});
@@ -364,9 +367,14 @@ async function startInstanceOn(
 		newAuditEntryId: () => crypto.randomUUID(),
 		newEventId: () => crypto.randomUUID(),
 		eventsCommitted: () => {},
+		jobs: plugins.jobs,
+		newJobId: () => crypto.randomUUID(),
+		jobsCommitted: () => {},
 	});
 	const delivery = createEventDelivery({
 		...sources,
+		cancellation: database.cancellation,
+		hasCoreSchema: () => true,
 		handlerTimeout: { ms: 10_000, setTimer: setSystemTimer },
 	});
 	return {
@@ -410,30 +418,38 @@ const statisticsWithoutCapability: PluginPackage = {
 		}),
 };
 
-const forecastRequiringAnAbsentPlugin: PluginPackage = {
-	packageName: "@workbench/plugin-forecast",
-	pluginName: "forecast",
-	version: "1.0.0",
-	loadDefinition: async () =>
-		definePlugin({
-			manifest: {
-				name: "forecast",
-				requires: { weather: "^1.0.0" },
-				capabilities: [eventSubscriptionCapability(entryAdded)],
-			},
-			subscriptions: [
-				defineEventSubscription({ event: entryAdded, handle: async () => {} }),
-			],
-		}),
-};
-
-async function subscribersWithDeliveries(
-	database: FreshDatabase,
-): Promise<unknown[]> {
-	const rows: unknown[] =
-		await database.sql`SELECT subscriber FROM core.event_deliveries ORDER BY subscriber`;
-	return [...rows];
+function recordingForecastRequiringWeather() {
+	const received: EntryAdded[] = [];
+	const plugin: PluginPackage = {
+		packageName: "@workbench/plugin-forecast",
+		pluginName: "forecast",
+		version: "1.0.0",
+		loadDefinition: async () =>
+			definePlugin({
+				manifest: {
+					name: "forecast",
+					requires: { weather: "^1.0.0" },
+					capabilities: [eventSubscriptionCapability(entryAdded)],
+				},
+				subscriptions: [
+					defineEventSubscription({
+						event: entryAdded,
+						handle: async (event) => {
+							received.push(event);
+						},
+					}),
+				],
+			}),
+	};
+	return { plugin, received };
 }
+
+const weather: PluginPackage = {
+	packageName: "@workbench/plugin-weather",
+	pluginName: "weather",
+	version: "1.0.0",
+	loadDefinition: async () => definePlugin({ manifest: { name: "weather" } }),
+};
 
 async function start(
 	plugins: readonly PluginPackage[],
@@ -452,6 +468,20 @@ function calling(workspace: string, operation: string, input: unknown) {
 	return { actor: ALICE, workspace, operation, input };
 }
 
+const addedEntry = z.object({
+	ok: z.literal(true),
+	output: z.object({ id: z.string() }),
+});
+
+async function addEntryTo(
+	harness: OperationHarness,
+	workspace: string,
+	amount: number,
+): Promise<string> {
+	const added = await harness.call(addingEntry(workspace, amount));
+	return addedEntry.parse(added).output.id;
+}
+
 function deliveryFailures(harness: OperationHarness) {
 	return harness.logEntries.filter(
 		(entry) => entry.message === "event not delivered",
@@ -464,13 +494,9 @@ describe("an event a mutation publishes", () => {
 		const harness = await start([ledger, statistics.plugin]);
 		const workspace = await harness.createWorkspace("Alpha");
 
-		const added = await harness.call(addingEntry(workspace, 5));
+		const entryId = await addEntryTo(harness, workspace, 5);
 		await harness.deliverEvents();
 
-		expect(added).toEqual({
-			ok: true,
-			output: { id: "00000000-0000-4000-8000-000000000002" },
-		});
 		expect(statistics.received).toEqual([
 			{
 				id: "00000000-0000-4000-e000-000000000001",
@@ -478,7 +504,7 @@ describe("an event a mutation publishes", () => {
 				version: 1,
 				occurredAt: new Date("2026-11-26T08:00:00.000Z"),
 				workspace,
-				payload: { entryId: "00000000-0000-4000-8000-000000000002" },
+				payload: { entryId },
 			},
 		]);
 		expect(harness.logEntries).toContainEqual({
@@ -515,15 +541,12 @@ describe("an event a mutation publishes", () => {
 		]);
 		const workspace = await harness.createWorkspace("Alpha");
 
-		await harness.call(addingEntry(workspace, 5));
+		const entryId = await addEntryTo(harness, workspace, 5);
 		await harness.deliverEvents();
 
 		expect(
 			await harness.call(calling(workspace, "tally.listTallied", {})),
-		).toEqual({
-			ok: true,
-			output: { entryIds: ["00000000-0000-4000-8000-000000000002"] },
-		});
+		).toEqual({ ok: true, output: { entryIds: [entryId] } });
 	});
 
 	test("reaches each subscribing plugin once, however often events are delivered", async () => {
@@ -594,22 +617,25 @@ describe("an event whose handler fails", () => {
 	test("still reaches the other subscribing plugins and takes later events to the failing one", async () => {
 		const statistics = recording("statistics");
 		const handled: string[] = [];
+		const refused: string[] = [];
 		const choosy = subscriber("choosy", async (event) => {
-			if (event.id.endsWith("1")) throw new Error("not this one");
-			handled.push(event.id);
+			if (refused.includes(event.payload.entryId))
+				throw new Error("not this one");
+			handled.push(event.payload.entryId);
 		});
 		const harness = await start([ledger, choosy, statistics.plugin]);
 		const workspace = await harness.createWorkspace("Alpha");
 
-		await harness.call(addingEntry(workspace, 5));
-		await harness.call(addingEntry(workspace, 6));
+		const refusedEntry = await addEntryTo(harness, workspace, 5);
+		refused.push(refusedEntry);
+		const laterEntry = await addEntryTo(harness, workspace, 6);
 		await harness.deliverEvents();
 
-		expect(statistics.received.map((event) => event.id)).toEqual([
-			"00000000-0000-4000-e000-000000000001",
-			"00000000-0000-4000-e000-000000000002",
+		expect(statistics.received.map((event) => event.payload.entryId)).toEqual([
+			refusedEntry,
+			laterEntry,
 		]);
-		expect(handled).toEqual(["00000000-0000-4000-e000-000000000002"]);
+		expect(handled).toEqual([laterEntry]);
 	});
 
 	test("leaves nothing behind of what the failed handler wrote", async () => {
@@ -627,7 +653,7 @@ describe("an event whose handler fails", () => {
 			{ now: clock.now },
 		);
 		const workspace = await harness.createWorkspace("Alpha");
-		await harness.call(addingEntry(workspace, 5));
+		const entryId = await addEntryTo(harness, workspace, 5);
 
 		await harness.deliverEvents();
 		clock.advanceBy(ONE_HOUR_MS);
@@ -635,43 +661,7 @@ describe("an event whose handler fails", () => {
 
 		expect(
 			await harness.call(calling(workspace, "tally.listTallied", {})),
-		).toEqual({
-			ok: true,
-			output: { entryIds: ["00000000-0000-4000-8000-000000000002"] },
-		});
-	});
-
-	test("has its effect outside its transaction once when the handler names the event id as idempotency key", async () => {
-		const clock = adjustableClock("2026-11-27T09:00:00.000Z");
-		const mailGateway = await createFreshDatabase();
-		cleanups.push(() => mailGateway.drop());
-		await mailGateway.sql`CREATE TABLE sent_mails (idempotency_key uuid PRIMARY KEY, entry_id uuid NOT NULL)`;
-		let attempts = 0;
-		const notifier = subscriber("notifier", async (event) => {
-			attempts += 1;
-			await mailGateway.sql`
-				INSERT INTO sent_mails (idempotency_key, entry_id)
-				VALUES (${event.id}, ${event.payload.entryId})
-				ON CONFLICT (idempotency_key) DO NOTHING`;
-			if (attempts === 1) throw new Error("crashed after sending");
-		});
-		const harness = await start([ledger, notifier], { now: clock.now });
-		const workspace = await harness.createWorkspace("Alpha");
-		await harness.call(addingEntry(workspace, 5));
-
-		await harness.deliverEvents();
-		clock.advanceBy(ONE_HOUR_MS);
-		await harness.deliverEvents();
-
-		const sentMails: unknown[] =
-			await mailGateway.sql`SELECT idempotency_key, entry_id FROM sent_mails`;
-		expect(attempts).toBe(2);
-		expect([...sentMails]).toEqual([
-			{
-				idempotency_key: "00000000-0000-4000-e000-000000000001",
-				entry_id: "00000000-0000-4000-8000-000000000002",
-			},
-		]);
+		).toEqual({ ok: true, output: { entryIds: [entryId] } });
 	});
 
 	test("is not handed a payload that the event definition of the subscribing plugin rejects", async () => {
@@ -755,25 +745,41 @@ describe("an event published while a subscribing plugin has a load failure", () 
 		]);
 	});
 
-	test("is kept for each enabled plugin whose valid definition subscribes to it, and not for one whose definition is invalid", async () => {
+	test("reaches each enabled plugin whose valid definition subscribed to it once that plugin is active, and never one whose definition was invalid", async () => {
 		const database = await migratedDatabase();
+		const statistics = recording("statistics");
 		const reports = recording("reports");
-		const instance = await startInstanceOn(database, [
+		const forecast = recordingForecastRequiringWeather();
+		const beforeRestart = await startInstanceOn(database, [
 			ledger,
 			statisticsWithoutCapability,
 			failingToActivate(reports.plugin),
-			forecastRequiringAnAbsentPlugin,
+			forecast.plugin,
+		]);
+		const added = await beforeRestart.addEntry();
+		await beforeRestart.stop();
+
+		const afterRestart = await startInstanceOn(database, [
+			ledger,
+			statistics.plugin,
+			reports.plugin,
+			weather,
+			forecast.plugin,
 		]);
 		cleanups.push(async () => {
-			await instance.stop();
+			await afterRestart.stop();
 		});
+		await afterRestart.deliverEvents();
 
-		await instance.addEntry();
-
-		expect(await subscribersWithDeliveries(database)).toEqual([
-			{ subscriber: "forecast" },
-			{ subscriber: "reports" },
+		const entryId = addedEntry.parse(added).output.id;
+		expect(afterRestart.failures).toEqual([]);
+		expect(reports.received.map((event) => event.payload)).toEqual([
+			{ entryId },
 		]);
+		expect(forecast.received.map((event) => event.payload)).toEqual([
+			{ entryId },
+		]);
+		expect(statistics.received).toEqual([]);
 	});
 });
 

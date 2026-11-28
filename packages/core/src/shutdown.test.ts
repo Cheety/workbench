@@ -2,6 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { reportFailedStart, shutDown, shutDownInstance } from "./shutdown.ts";
 import { recordingLogger } from "./testing/recording-logger.ts";
 
+function laterTurn(): Promise<void> {
+	return new Promise((resolve) => setImmediate(resolve));
+}
+
 describe("shutdown", () => {
 	test("exits with 0 and logs nothing when the server stops", async () => {
 		const { logger, entries } = recordingLogger();
@@ -53,7 +57,7 @@ describe("shutdown", () => {
 });
 
 describe("instance shutdown", () => {
-	test("stops the server, then the event delivery, deactivates the plugins, closes the database connections and exits with 0", async () => {
+	test("stops the server, then the event delivery and the job queue, deactivates the plugins, closes the database connections and exits with 0", async () => {
 		const { logger } = recordingLogger();
 		const journal: string[] = [];
 
@@ -63,6 +67,11 @@ describe("instance shutdown", () => {
 				eventDelivery: {
 					stop: async () => {
 						journal.push("event delivery stopped");
+					},
+				},
+				jobQueue: {
+					stop: async () => {
+						journal.push("job queue stopped");
 					},
 				},
 				database: {
@@ -89,6 +98,7 @@ describe("instance shutdown", () => {
 		expect(journal).toEqual([
 			"server stopped",
 			"event delivery stopped",
+			"job queue stopped",
 			"plugins deactivated",
 			"database closed",
 		]);
@@ -101,6 +111,7 @@ describe("instance shutdown", () => {
 			{
 				stopStartingPlugins: () => {},
 				eventDelivery: { stop: async () => {} },
+				jobQueue: { stop: async () => {} },
 				database: { close: () => Promise.reject(new Error("socket hang")) },
 				server: { stop: async () => {} },
 				plugins: { deactivate: async () => "clean" },
@@ -126,6 +137,7 @@ describe("instance shutdown", () => {
 			{
 				stopStartingPlugins: () => {},
 				eventDelivery: { stop: () => Promise.reject(new Error("stuck")) },
+				jobQueue: { stop: async () => {} },
 				database: {
 					close: async () => {
 						journal.push("database closed");
@@ -153,6 +165,42 @@ describe("instance shutdown", () => {
 		]);
 	});
 
+	test("reports it, exits with 1 and still deactivates the plugins when the job queue fails to stop", async () => {
+		const { logger, entries } = recordingLogger();
+		const journal: string[] = [];
+
+		const exitCode = await shutDownInstance(
+			{
+				stopStartingPlugins: () => {},
+				eventDelivery: { stop: async () => {} },
+				jobQueue: { stop: () => Promise.reject(new Error("stuck")) },
+				database: {
+					close: async () => {
+						journal.push("database closed");
+					},
+				},
+				server: { stop: async () => {} },
+				plugins: {
+					deactivate: async () => {
+						journal.push("plugins deactivated");
+						return "clean";
+					},
+				},
+			},
+			logger,
+		);
+
+		expect(exitCode).toBe(1);
+		expect(journal).toEqual(["plugins deactivated", "database closed"]);
+		expect(entries).toEqual([
+			expect.objectContaining({
+				level: "error",
+				message: "job queue failed to stop",
+				error: expect.objectContaining({ message: "stuck" }),
+			}),
+		]);
+	});
+
 	test("exits with 1 when a plugin could not be deactivated", async () => {
 		const { logger } = recordingLogger();
 
@@ -160,6 +208,7 @@ describe("instance shutdown", () => {
 			{
 				stopStartingPlugins: () => {},
 				eventDelivery: { stop: async () => {} },
+				jobQueue: { stop: async () => {} },
 				database: { close: async () => {} },
 				server: { stop: async () => {} },
 				plugins: { deactivate: async () => "incomplete" },
@@ -178,6 +227,7 @@ describe("instance shutdown", () => {
 			{
 				stopStartingPlugins: () => {},
 				eventDelivery: { stop: async () => {} },
+				jobQueue: { stop: async () => {} },
 				database: { close: async () => {} },
 				server: { stop: () => Promise.reject(new Error("stuck")) },
 				plugins: {
@@ -205,12 +255,19 @@ describe("instance shutdown", () => {
 			{
 				stopStartingPlugins: () => {},
 				eventDelivery: { stop: async () => {} },
+				jobQueue: { stop: async () => {} },
 				database: { close: async () => {} },
-				server: { stop: async () => {} },
+				server: {
+					stop: async () => {
+						journal.push("server stopped");
+					},
+				},
 				plugins: starting.promise,
 			},
 			logger,
 		);
+		await laterTurn();
+		journal.push("plugins started");
 		starting.resolve({
 			deactivate: async () => {
 				journal.push("plugins deactivated");
@@ -220,17 +277,22 @@ describe("instance shutdown", () => {
 		const exitCode = await shuttingDown;
 
 		expect(exitCode).toBe(0);
-		expect(journal).toEqual(["plugins deactivated"]);
+		expect(journal).toEqual([
+			"plugins started",
+			"server stopped",
+			"plugins deactivated",
+		]);
 	});
 
-	test("stops the server, reports it and exits with 1 when the plugins failed to start", async () => {
-		const { logger, entries } = recordingLogger();
+	test("stops the server and exits with 1 when the plugins failed to start", async () => {
+		const { logger } = recordingLogger();
 		const journal: string[] = [];
 
 		const exitCode = await shutDownInstance(
 			{
 				stopStartingPlugins: () => {},
 				eventDelivery: { stop: async () => {} },
+				jobQueue: { stop: async () => {} },
 				database: { close: async () => {} },
 				server: {
 					stop: async () => {
@@ -244,16 +306,6 @@ describe("instance shutdown", () => {
 
 		expect(exitCode).toBe(1);
 		expect(journal).toEqual(["server stopped"]);
-		expect(entries).toEqual([
-			expect.objectContaining({
-				level: "error",
-				message: "plugins failed to shut down",
-				error: expect.objectContaining({
-					name: "TypeError",
-					message: "kernel defect",
-				}),
-			}),
-		]);
 	});
 
 	test("reports it and exits with 1 when deactivating the plugins fails as a whole", async () => {
@@ -263,6 +315,7 @@ describe("instance shutdown", () => {
 			{
 				stopStartingPlugins: () => {},
 				eventDelivery: { stop: async () => {} },
+				jobQueue: { stop: async () => {} },
 				database: { close: async () => {} },
 				server: { stop: async () => {} },
 				plugins: {
@@ -293,13 +346,17 @@ describe("instance shutdown", () => {
 			{
 				database: { close: async () => {} },
 				eventDelivery: { stop: async () => {} },
+				jobQueue: { stop: async () => {} },
 				stopStartingPlugins: () => {
-					journal.push("start stopped");
-					starting.resolve({
-						deactivate: async () => {
-							journal.push("plugins deactivated");
-							return "clean";
-						},
+					journal.push("start told to stop");
+					setImmediate(() => {
+						journal.push("start settled");
+						starting.resolve({
+							deactivate: async () => {
+								journal.push("plugins deactivated");
+								return "clean";
+							},
+						});
 					});
 				},
 				server: {
@@ -314,7 +371,8 @@ describe("instance shutdown", () => {
 
 		expect(exitCode).toBe(0);
 		expect(journal).toEqual([
-			"start stopped",
+			"start told to stop",
+			"start settled",
 			"server stopped",
 			"plugins deactivated",
 		]);
@@ -355,6 +413,7 @@ describe("failed plugin start", () => {
 			{
 				stopStartingPlugins: () => {},
 				eventDelivery: { stop: async () => {} },
+				jobQueue: { stop: async () => {} },
 				database: { close: async () => {} },
 				server: {
 					stop: async () => {

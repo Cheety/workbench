@@ -10,6 +10,7 @@ import {
 	type InstanceStartSteps,
 	type StartedPlugins,
 } from "./instance-start.ts";
+import { type RegisteredJob, registerJobs } from "./job-registry.ts";
 import type { LoadFailure } from "./kernel.ts";
 import {
 	type RegisteredOperation,
@@ -23,6 +24,7 @@ function pluginsWith(...failures: LoadFailure[]): StartedPlugins {
 		failures,
 		operations: registerOperations([]),
 		events: registerEvents({ active: [], notActive: [] }),
+		jobs: registerJobs([]),
 		deactivate: async () => "clean",
 	};
 }
@@ -45,47 +47,68 @@ function steps(
 	};
 }
 
+function pendingStep<Outcome>() {
+	const called = Promise.withResolvers<void>();
+	const outcome = Promise.withResolvers<Outcome>();
+	return {
+		called: called.promise,
+		run: (): Promise<Outcome> => {
+			called.resolve();
+			return outcome.promise;
+		},
+		finish: (value: Outcome) => outcome.resolve(value),
+	};
+}
+
 describe("instance start", () => {
-	test("is starting while it waits for the database", () => {
-		const instance = createInstanceStart(
-			steps({ waitForDatabase: () => new Promise(() => {}) }),
-			recordingLogger().logger,
-		);
-
-		void instance.run();
-
-		expect(instance.status()).toBe("starting");
-	});
-
-	test("is started once the database is reachable, core is migrated and the plugins are started", async () => {
-		const journal: string[] = [];
+	test("runs each step only once the previous one is done, is starting meanwhile and started after the last", async () => {
+		const called: string[] = [];
+		const observed: { called: string[]; status: string }[] = [];
+		const databaseWait = pendingStep<DatabaseWaitOutcome>();
+		const coreMigration = pendingStep<CoreSchemaMigration>();
+		const pluginStart = pendingStep<StartedPlugins>();
 		const { logger, entries } = recordingLogger();
 		const instance = createInstanceStart(
 			{
-				waitForDatabase: async () => {
-					journal.push("wait for database");
-					return "reachable";
+				waitForDatabase: () => {
+					called.push("wait for database");
+					return databaseWait.run();
 				},
-				migrateCoreSchema: async () => {
-					journal.push("migrate core");
-					return "migrated";
+				migrateCoreSchema: () => {
+					called.push("migrate core");
+					return coreMigration.run();
 				},
-				startPlugins: async () => {
-					journal.push("start plugins");
-					return pluginsWith();
+				startPlugins: () => {
+					called.push("start plugins");
+					return pluginStart.run();
 				},
 			},
 			logger,
 		);
+		const observe = () =>
+			observed.push({ called: [...called], status: instance.status() });
 
-		await instance.run();
+		const running = instance.run();
+		await databaseWait.called;
+		observe();
+		databaseWait.finish("reachable");
+		await coreMigration.called;
+		observe();
+		coreMigration.finish("migrated");
+		await pluginStart.called;
+		observe();
+		pluginStart.finish(pluginsWith());
+		await running;
 
-		expect(instance.status()).toBe("started");
-		expect(journal).toEqual([
-			"wait for database",
-			"migrate core",
-			"start plugins",
+		expect(observed).toEqual([
+			{ called: ["wait for database"], status: "starting" },
+			{ called: ["wait for database", "migrate core"], status: "starting" },
+			{
+				called: ["wait for database", "migrate core", "start plugins"],
+				status: "starting",
+			},
 		]);
+		expect(instance.status()).toBe("started");
 		expect(entries).toContainEqual(
 			expect.objectContaining({ level: "info", message: "instance started" }),
 		);
@@ -147,6 +170,41 @@ describe("instance start", () => {
 		await instance.run();
 
 		expect(started).toBe(false);
+	});
+
+	test("has no core schema while it is being migrated or when it is not migrated", async () => {
+		const migrating = createInstanceStart(
+			steps({ migrateCoreSchema: () => new Promise(() => {}) }),
+			recordingLogger().logger,
+		);
+		const notMigrated = createInstanceStart(
+			steps({ migrateCoreSchema: async () => "not_migrated" }),
+			recordingLogger().logger,
+		);
+
+		void migrating.run();
+		await notMigrated.run();
+
+		expect(migrating.hasCoreSchema()).toBe(false);
+		expect(notMigrated.hasCoreSchema()).toBe(false);
+	});
+
+	test("has the core schema once it is migrated, while the plugins are still starting", async () => {
+		const pluginsStarting = Promise.withResolvers<void>();
+		const instance = createInstanceStart(
+			steps({
+				startPlugins: () => {
+					pluginsStarting.resolve();
+					return new Promise(() => {});
+				},
+			}),
+			recordingLogger().logger,
+		);
+
+		void instance.run();
+		await pluginsStarting.promise;
+
+		expect(instance.hasCoreSchema()).toBe(true);
 	});
 
 	test("has failed when a step throws unexpectedly, and passes the error on", async () => {
@@ -301,5 +359,45 @@ describe("events of an instance", () => {
 
 		expect(instance.events.findEvent("board.LabelRenamed")).toBe(labelRenamed);
 		expect(instance.events.subscriptions()).toEqual([indexLabel]);
+	});
+});
+
+describe("jobs of an instance", () => {
+	const archiveLabels: RegisteredJob = {
+		kind: "enqueued",
+		plugin: "board",
+		name: "board.archiveLabels",
+		maxAttempts: 3,
+		validatePayload: async (value) => ({ valid: true, value }),
+		run: async () => {},
+	};
+
+	test("are none while the plugins are still starting", () => {
+		const instance = createInstanceStart(
+			steps({ startPlugins: () => new Promise(() => {}) }),
+			recordingLogger().logger,
+		);
+
+		void instance.run();
+
+		expect(instance.jobs.find("board.archiveLabels")).toBeUndefined();
+		expect(instance.jobs.names()).toEqual([]);
+	});
+
+	test("are those of the started plugins once they started", async () => {
+		const instance = createInstanceStart(
+			steps({
+				startPlugins: async () => ({
+					...pluginsWith(),
+					jobs: registerJobs([archiveLabels]),
+				}),
+			}),
+			recordingLogger().logger,
+		);
+
+		await instance.run();
+
+		expect(instance.jobs.find("board.archiveLabels")).toBe(archiveLabels);
+		expect(instance.jobs.names()).toEqual(["board.archiveLabels"]);
 	});
 });

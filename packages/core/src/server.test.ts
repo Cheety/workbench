@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { authenticateToken } from "./api-tokens.ts";
 import { Secret } from "./config.ts";
 import { registerEvents } from "./event-registry.ts";
+import { registerJobs } from "./job-registry.ts";
 import { createOperationPipeline } from "./operation-pipeline.ts";
 import { registerOperations } from "./operation-registry.ts";
 import { createPostgresCheck } from "./postgres.ts";
@@ -61,6 +62,9 @@ async function startTestServer(startupStatus: StartupStatus = "started") {
 				newAuditEntryId: () => "00000000-0000-4000-a000-000000000001",
 				newEventId: () => "00000000-0000-4000-e000-000000000001",
 				eventsCommitted: () => {},
+				jobs: registerJobs([]),
+				newJobId: () => "00000000-0000-4000-b000-000000000001",
+				jobsCommitted: () => {},
 				random: () => 0.5,
 				logger,
 			}),

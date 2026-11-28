@@ -80,28 +80,28 @@ export default definePlugin({
 - `requires` nennt vorausgesetzte Plugins mit SemVer-Range (`^`, `~`, Vergleichsoperatoren, `x`/`*`, mit Leerzeichen oder `||` kombiniert).
 - `capabilities` nennt die Capabilities, die das Plugin braucht. `ctx.capability(name)` liefert nur deklarierte und wirft sonst einen Fehler. Der Core bietet `database` an (`DATABASE_CAPABILITY` aus `@workbench/sdk`) und je Event ein Event-Abo, `event:<plugin>.<Event>` (siehe [Events](#events)); ein Manifest, das eine unbekannte deklariert, ist ungültig.
 
-Beim Start entdeckt der Kernel die Plugin-Pakete, lädt die Einstiege der in `PLUGINS` genannten Plugins, löst ihre `requires` auf und aktiviert sie, vorausgesetzte zuerst. Von einem Plugin, das nicht in `PLUGINS` steht, läuft kein Code, und seine Mängel sind kein Ladefehler. Beim Shutdown (`SIGTERM`, `SIGINT`) stoppt erst der Server, dann endet die Zustellung der [Events](#events): Ein laufender Handler wird abgewartet, höchstens seine Frist, weitere Zustellungen beginnen nicht und bleiben für den nächsten Start liegen. Danach werden die Plugins in umgekehrter Reihenfolge deaktiviert. Änderungen an `PLUGINS` wirken nach einem Neustart.
+Beim Start entdeckt der Kernel die Plugin-Pakete, lädt die Einstiege der in `PLUGINS` genannten Plugins, löst ihre `requires` auf und aktiviert sie, vorausgesetzte zuerst. Von einem Plugin, das nicht in `PLUGINS` steht, läuft kein Code, und seine Mängel sind kein Ladefehler. Beim Shutdown (`SIGTERM`, `SIGINT`) stoppt erst der Server, dann endet die Zustellung der [Events](#events): Ein laufender Handler wird abgewartet, höchstens seine Frist, weitere Zustellungen beginnen nicht und bleiben für den nächsten Start liegen. Ebenso endet danach die Job-Queue (siehe [Jobs](#jobs)): Ein laufender Job wird abgewartet, höchstens seine Frist, weitere beginnen nicht. Danach werden die Plugins in umgekehrter Reihenfolge deaktiviert. Änderungen an `PLUGINS` wirken nach einem Neustart.
 
-Jedes Plugin hat für das Laden seines Einstiegs, für `activate` und für `deactivate` je die Frist `PLUGIN_HOOK_TIMEOUT_MS`. Wird der Einstieg nicht rechtzeitig geladen, gilt das Plugin als nicht geladen (`load_timed_out`). Wird `activate` nicht rechtzeitig fertig, gilt das Plugin als nicht geladen (`activation_timed_out`) und der Start geht mit den übrigen weiter. Für ein Plugin, dessen `activate` fehlschlägt oder die Frist überschreitet, ruft der Kernel `deactivate` nicht auf; es muss selbst freigeben, was es bis dahin belegt hat. Wird `deactivate` nicht rechtzeitig fertig oder schlägt es fehl, nennt das Log das Plugin (`plugin deactivation timed out`, `plugin failed to deactivate`), die übrigen werden trotzdem deaktiviert, und die Instanz endet mit Exit-Code 1. Endet die Zustellung der Events nicht sauber, nennt das Log den Fehler im Eintrag `event delivery failed to stop`, und die Instanz endet mit Exit-Code 1. Lassen sich danach die Datenbankverbindungen nicht schließen, nennt das Log den Fehler im Eintrag `database connections failed to close`, und die Instanz endet ebenfalls mit Exit-Code 1. Ein Signal während des Starts beendet den Start der Plugins: Der Kernel aktiviert kein weiteres Plugin (Log-Eintrag `plugin start stopped` mit den nicht aktivierten in `notActivated`), wartet auf ein gerade laufendes `activate` höchstens die Frist und deaktiviert dann die bereits aktiven Plugins. Lädt der Kernel beim Signal noch Einstiege, lädt er die der übrigen aktivierten Plugins zu Ende, je Plugin höchstens die Frist, und aktiviert danach keines.
+Jedes Plugin hat für das Laden seines Einstiegs, für `activate` und für `deactivate` je die Frist `PLUGIN_HOOK_TIMEOUT_MS`. Wird der Einstieg nicht rechtzeitig geladen, gilt das Plugin als nicht geladen (`load_timed_out`). Wird `activate` nicht rechtzeitig fertig, gilt das Plugin als nicht geladen (`activation_timed_out`) und der Start geht mit den übrigen weiter. Für ein Plugin, dessen `activate` fehlschlägt oder die Frist überschreitet, ruft der Kernel `deactivate` nicht auf; es muss selbst freigeben, was es bis dahin belegt hat. Wird `deactivate` nicht rechtzeitig fertig oder schlägt es fehl, nennt das Log das Plugin (`plugin deactivation timed out`, `plugin failed to deactivate`), die übrigen werden trotzdem deaktiviert, und die Instanz endet mit Exit-Code 1. Endet die Zustellung der Events nicht sauber, nennt das Log den Fehler im Eintrag `event delivery failed to stop`, und die Instanz endet mit Exit-Code 1; für die Job-Queue heißt der Eintrag `job queue failed to stop`. Lassen sich danach die Datenbankverbindungen nicht schließen, nennt das Log den Fehler im Eintrag `database connections failed to close`, und die Instanz endet ebenfalls mit Exit-Code 1. Ein Signal während des Starts beendet den Start der Plugins: Der Kernel aktiviert kein weiteres Plugin (Log-Eintrag `plugin start stopped` mit den nicht aktivierten in `notActivated`), wartet auf ein gerade laufendes `activate` höchstens die Frist und deaktiviert dann die bereits aktiven Plugins. Lädt der Kernel beim Signal noch Einstiege, lädt er die der übrigen aktivierten Plugins zu Ende, je Plugin höchstens die Frist, und aktiviert danach keines.
 
 Ein Paket, dessen `package.json` nicht lesbar ist oder `workbench.plugin` in anderer Form angibt, überspringt der Kernel; das Log nennt es als Eintrag `plugin package ignored` mit Verzeichnis (`directory`) und Grund (`problem`). Die übrigen Plugin-Pakete sind davon nicht betroffen.
 
 Kann ein Plugin nicht geladen werden, startet die Instanz trotzdem. Das Log nennt jeden Ladefehler als Eintrag `plugin not loaded` mit `plugin`, `reason` und einer ausformulierten Meldung in `detail`; der Eintrag `plugins started` fasst aktive (`active`) und nicht geladene (`notLoaded`) Plugins zusammen. Hat Code des Plugins oder der Core beim Bereitstellen einer Capability einen Fehler geworfen, steht er mit Name, Meldung und Stacktrace in `error`, ebenso im Eintrag `plugin failed to deactivate`. Fehlermeldungen eines Plugins stehen damit im Log und dürfen keine Secrets enthalten.
 
-| `reason`                 | Bedeutung                                                                                                              |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| `invalid_manifest`       | Manifest, Operationen, Events, Event-Abos oder Paketversion ungültig, Einstieg nicht ladbar, Name anders als im Paket. |
-| `load_timed_out`         | Der Einstieg des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` geladen.                                   |
-| `unknown_plugin`         | In `PLUGINS` genannt, aber kein Plugin-Paket stellt das Plugin bereit.                                                 |
-| `duplicate_plugin`       | Mehrere Plugin-Pakete deklarieren denselben Plugin-Namen; keines davon wird geladen.                                   |
-| `missing_dependency`     | Kein Plugin-Paket stellt ein vorausgesetztes Plugin bereit, oder es ist nicht in `PLUGINS` aktiviert.                  |
-| `version_mismatch`       | Die Version eines vorausgesetzten Plugins erfüllt die Range nicht.                                                     |
-| `dependency_not_loaded`  | Ein vorausgesetztes Plugin wurde selbst nicht geladen; `detail` nennt dessen Ursache.                                  |
-| `dependency_cycle`       | Plugins setzen einander im Kreis voraus; jedes Plugin des Kreises erhält diesen Grund.                                 |
-| `capability_unavailable` | Der Core konnte eine deklarierte Capability nicht bereitstellen; `activate` wurde nicht aufgerufen.                    |
-| `migration_failed`       | Das Schema des Plugins konnte nicht migriert werden; `detail` nennt die Migration und den Fehler.                      |
-| `activation_failed`      | `activate` des Plugins ist fehlgeschlagen.                                                                             |
-| `activation_timed_out`   | `activate` des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` fertig.                                      |
+| `reason`                 | Bedeutung                                                                                                                    |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `invalid_manifest`       | Manifest, Operationen, Events, Event-Abos, Jobs oder Paketversion ungültig, Einstieg nicht ladbar, Name anders als im Paket. |
+| `load_timed_out`         | Der Einstieg des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` geladen.                                         |
+| `unknown_plugin`         | In `PLUGINS` genannt, aber kein Plugin-Paket stellt das Plugin bereit.                                                       |
+| `duplicate_plugin`       | Mehrere Plugin-Pakete deklarieren denselben Plugin-Namen; keines davon wird geladen.                                         |
+| `missing_dependency`     | Kein Plugin-Paket stellt ein vorausgesetztes Plugin bereit, oder es ist nicht in `PLUGINS` aktiviert.                        |
+| `version_mismatch`       | Die Version eines vorausgesetzten Plugins erfüllt die Range nicht.                                                           |
+| `dependency_not_loaded`  | Ein vorausgesetztes Plugin wurde selbst nicht geladen; `detail` nennt dessen Ursache.                                        |
+| `dependency_cycle`       | Plugins setzen einander im Kreis voraus; jedes Plugin des Kreises erhält diesen Grund.                                       |
+| `capability_unavailable` | Der Core konnte eine deklarierte Capability nicht bereitstellen; `activate` wurde nicht aufgerufen.                          |
+| `migration_failed`       | Das Schema des Plugins konnte nicht migriert werden; `detail` nennt die Migration und den Fehler.                            |
+| `activation_failed`      | `activate` des Plugins ist fehlgeschlagen.                                                                                   |
+| `activation_timed_out`   | `activate` des Plugins wurde nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` fertig.                                            |
 
 ### Migrationen
 
@@ -124,7 +124,7 @@ Seine SQL-Migrationen liegen in einem Verzeichnis des Plugin-Pakets, das die `pa
 - Jede Datei mit der Endung `.sql` ist eine Migration. Ihr Name besteht aus vier Ziffern, einem Unterstrich und Kleinbuchstaben, Ziffern oder Unterstrichen, z. B. `0001_create_notes.sql`; die Migrationen laufen in der Reihenfolge ihrer Namen. Andere Dateien bleiben unbeachtet.
 - Jede Migration läuft in einer eigenen Transaktion mit dem Schema des Plugins als `search_path`; Tabellen werden daher ohne Schema angelegt.
 - Angewandte Migrationen hält die Tabelle `core.migrations` fest (Schema, Dateiname, Zeitpunkt); ein erneuter Start wendet nur neue Migrationen an. Eine angewandte Migration wird nie geändert, sondern durch eine neue ergänzt.
-- Die Migrationen des Schemas `core` liegen in `packages/core/migrations` und laufen genauso, mit `core` als `search_path`. Sie legen `core.workspaces` an, die Tabelle der Workspaces (ADR-0002), `core.service_accounts` und `core.api_tokens` für die Service-Accounts und ihre API-Tokens (siehe [HTTP-API](#http-api)) `core.audit_entries` für das [Audit](#audit) sowie `core.events` und `core.event_deliveries`, die Outbox der [Events](#events). Schlägt eine davon fehl, meldet das Log `instance failed to start` mit `reason` `core_schema_not_migrated`, und die Instanz lädt keine Plugins.
+- Die Migrationen des Schemas `core` liegen in `packages/core/migrations` und laufen genauso, mit `core` als `search_path`. Sie legen `core.workspaces` an, die Tabelle der Workspaces (ADR-0002), `core.service_accounts` und `core.api_tokens` für die Service-Accounts und ihre API-Tokens (siehe [HTTP-API](#http-api)) `core.audit_entries` für das [Audit](#audit) sowie `core.events` und `core.event_deliveries`, die Outbox der [Events](#events), und `core.jobs`, die Job-Queue der [Jobs](#jobs). Schlägt eine davon fehl, meldet das Log `instance failed to start` mit `reason` `core_schema_not_migrated`, und die Instanz lädt keine Plugins.
 - Jeder Migrationslauf (erst `core`, dann die Schemas der Plugins) hält dieselbe Postgres-Advisory-Lock. Starten zwei Prozesse gleichzeitig, wartet der zweite (Log-Eintrag `migration lock held by another run, waiting`) und wendet nichts doppelt an. Ein Signal beendet das Warten; eine laufende Migration läuft zu Ende, weitere beginnen nicht. Jede Anweisung eines Laufs darf höchstens 60 s dauern, das Warten auf Tabellensperren eingeschlossen; dauert sie länger, schlägt die Migration fehl (`migration failed`) und der Lauf gibt die Lock frei (Begründung in ADR-0008).
 - Schlägt eine Migration fehl, wird sie zurückgerollt; die folgenden Migrationen desselben Schemas laufen nicht, die anderer Schemas schon. Das Log nennt Schema, Migration und Fehler (`migration failed`), das Plugin wird nicht geladen (`migration_failed`), und die Instanz meldet nicht „bereit“.
 - Nennt die `package.json` Migrationen, deklariert das Manifest aber nicht `database`, ist das Manifest ungültig.
@@ -160,11 +160,11 @@ Ein Akteur ruft eine Operation mit ihrem Namen, einem Workspace und einer Eingab
 2. prüft die Eingabe gegen das Eingabe-Schema,
 3. öffnet eine Transaktion, für eine `query` nur lesend, mit dem Schema des Plugins als `search_path` (für eine Operation des Cores `core`),
 4. prüft, dass der Workspace in `core.workspaces` existiert,
-5. führt `execute(input, ctx)` aus; `ctx` nennt `actor`, `workspace`, `sql` (die Transaktion als Tagged Template), `now()`, `newId()`, `random()` und `publish()` (siehe [Events](#events)),
+5. führt `execute(input, ctx)` aus; `ctx` nennt `actor`, `workspace`, `sql` (eine Funktion des Cores, die eine Anweisung als Tagged Template sofort in der Transaktion ausführt; weitere Methoden des Datenbank-Clients hat sie nicht, wie in Event-Handlern und Jobs), `now()`, `newId()`, `random()`, `publish()` (siehe [Events](#events)) und `enqueue()` (siehe [Jobs](#jobs)),
 6. bildet den Rückgabewert über das Ausgabe-Schema ab,
 7. schreibt für eine `mutation` einen Audit-Eintrag in dieselbe Transaktion (siehe [Audit](#audit)) und schreibt die Transaktion fest.
 
-Wirft `execute`, passt die Ausgabe nicht zum Schema oder lässt sich der Audit-Eintrag nicht schreiben, wird die Transaktion zurückgerollt, samt der Events, die die Mutation publiziert hat. Ein fachlicher Fehler ist ein `OperationError` aus `@workbench/sdk` mit Art (`not_found`, `conflict`, `rejected`), Code (Kleinbuchstaben, Ziffern, Unterstriche) und einer Meldung für den Aufrufer; der Aufrufer erhält den Code als `<plugin>.<code>`, von einer Operation des Cores als `core.<code>`. Jeder andere Fehler erreicht den Aufrufer nur als `internal_error`.
+Wirft `execute`, passt die Ausgabe nicht zum Schema oder lässt sich der Audit-Eintrag nicht schreiben, wird die Transaktion zurückgerollt, samt der Events, die die Mutation publiziert, und der Jobs, die sie eingereiht hat. Ein fachlicher Fehler ist ein `OperationError` aus `@workbench/sdk` mit Art (`not_found`, `conflict`, `rejected`), Code (Kleinbuchstaben, Ziffern, Unterstriche) und einer Meldung für den Aufrufer; der Aufrufer erhält den Code als `<plugin>.<code>`, von einer Operation des Cores als `core.<code>`. Jeder andere Fehler erreicht den Aufrufer nur als `internal_error`.
 
 | Code                  | Art             | Bedeutung                                                                                                                                           |
 | --------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -271,12 +271,12 @@ Eine Mutation publiziert ein Event in `execute`:
 await ctx.publish(labelRenamed, { labelId: input.labelId });
 ```
 
-Der Core prüft die Payload gegen das Schema der Definition und schreibt das Event in die Outbox `core.events`, in der Transaktion der Mutation (ADR-0015): ID, Name, Version, Zeitpunkt in UTC, Workspace und Payload, dazu in `core.event_deliveries` je eine Zustellung für jedes in `PLUGINS` aktivierte Plugin, dessen gültige Definition das Event abonniert, auch wenn es gerade einen Ladefehler hat. Die Payload ist, was das Schema aus dem übergebenen Wert macht; zod-Objekte lassen unbekannte Felder weg. Wird die Mutation zurückgerollt, gibt es das Event nicht, und kein Handler erfährt je davon.
+Der Core prüft die Payload gegen das Schema der Definition und schreibt das Event in die Outbox `core.events`, in der Transaktion der Mutation (ADR-0015): ID, Name, Version, Zeitpunkt in UTC, Workspace und Payload, dazu in `core.event_deliveries` je eine Zustellung für jedes in `PLUGINS` aktivierte Plugin, dessen gültige Definition das Event abonniert, auch wenn es gerade einen Ladefehler hat. Die Payload ist, was das Schema aus dem übergebenen Wert macht; zod-Objekte lassen unbekannte Felder weg. Gespeichert wird ihre JSON-Form, und weil der Handler später genau diese zu lesen bekommt, prüft der Core sie beim Publizieren noch einmal gegen das Schema. Was das Schema aus der gespeicherten Form macht, muss wieder dieselbe JSON-Form haben: `z.coerce.date()`, ein Standardwert oder weggelassene Felder erfüllen das, eine Umformung wie `.transform((n) => n * 2)`, die bei jedem Lesen weiterrechnet, nicht. Tiefer als 100 Ebenen aus Listen und Objekten darf eine Payload nicht verschachtelt sein. Wird die Mutation zurückgerollt, gibt es das Event nicht, und kein Handler erfährt je davon.
 
 `publish` wirft, und die Mutation scheitert mit `internal_error` (`execute_threw` im Log, mit dem Fehler in `error`), wenn
 
 - das Plugin das Event nicht selbst in `events` deklariert, etwa das Event eines anderen Plugins (`UndeclaredEventError`),
-- die Payload nicht zum Schema passt (`InvalidEventPayloadError`),
+- die Payload nicht zum Schema passt (`InvalidEventPayloadError`, mit den Befunden in `issues`); ebenso, wenn das Schema ihre gespeicherte JSON-Form nicht wieder annimmt, etwa `z.date()`, dessen Datum in JSON ein String ist (`z.coerce.date()` nimmt ihn an), wenn es sie beim erneuten Lesen verändert, ist sie tiefer als 100 Ebenen verschachtelt oder hat sie keine JSON-Form, die Postgres speichert (`undefined`, eine Funktion, ein BigInt, ein Wert, der sich selbst enthält, ein String mit NUL-Zeichen oder halbem Surrogatpaar),
 - eine Query publiziert (`EventPublishedByQueryError`).
 
 #### Zustellen
@@ -286,26 +286,143 @@ Ein Event wird erst nach dem Festschreiben seiner Mutation zugestellt, jedem abo
 - `event` nennt `id`, `name` (`board.LabelRenamed`), `version`, `occurredAt`, `workspace` und `payload`, geprüft gegen das Schema der Definition, die das abonnierende Plugin importiert hat.
 - `ctx` nennt `sql`, `now()`, `newId()` und `random()`. `sql` ist eine Transaktion mit dem Schema des abonnierenden Plugins als `search_path`. Einen Akteur hat ein Handler bisher nicht; der Plugin-Service-Account folgt mit Identität und Zugriff.
 
-Der Core vermerkt die Zustellung in der Transaktion des Handlers. Was der Handler über `ctx.sql` schreibt, gibt es deshalb nur zusammen mit der gelungenen Zustellung. Wirft der Handler, wird er nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` fertig, lehnt das Schema die Payload ab oder lässt sich die Transaktion nicht festschreiben, wird zurückgerollt, was er geschrieben hat, und der Core stellt später erneut zu, mit derselben `id`. Ein Handler, der seine Frist überschritten hat, kann danach nichts mehr schreiben. Die Wartezeit wächst mit jedem Versuch exponentiell mit Zufallsanteil (bis 1 s nach dem ersten, höchstens 5 min); eine Obergrenze der Versuche gibt es bisher nicht.
+Der Core vermerkt die Zustellung in der Transaktion des Handlers. Was der Handler über `ctx.sql` schreibt, gibt es deshalb nur zusammen mit der gelungenen Zustellung. Wirft der Handler, wird er nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` fertig, lehnt das Schema die Payload ab oder lässt sich die Transaktion nicht festschreiben, wird zurückgerollt, was er geschrieben hat, und der Core stellt später erneut zu, mit derselben `id`. Die Frist beginnt vor der Prüfung der Payload: Ein Schema, dessen Prüfung nicht fertig wird, scheitert wie ein Handler, der nicht fertig wird, und endet die Prüfung erst nach Ablauf der Frist, ruft der Core den Handler nicht mehr auf. Die Wartezeit wächst mit jedem Versuch exponentiell mit Zufallsanteil (bis 1 s nach dem ersten, höchstens 5 min). Nach 25 gescheiterten Versuchen gibt der Core die Zustellung auf und legt sie in den Dead-Letter; das sind im Mittel rund 40 min, höchstens rund 1,4 h nach dem ersten Versuch. Ein Durchgang, der als Ganzes scheitert, weil Postgres nicht antwortet, zählt keinen Versuch.
+
+Läuft die Frist ab, während eine Anweisung des Handlers in Postgres läuft, bricht der Core sie über eine zweite Verbindung ab (`pg_cancel_backend`), die er nur dafür hält, mit derselben `DATABASE_URL` aufbaut und nach 30 s ohne Abbruch wieder schließt, rollt zurück und vermerkt die gescheiterte Zustellung sofort, statt auf das Ende der Anweisung zu warten. Steht danach noch die Antwort auf eine Anweisung aus, die der Handler vor Ablauf der Frist begonnen hat, etwa weil sie Postgres erst nach dem Abbruch erreichte, bricht der Core alle 100 ms erneut ab, bis keine mehr offen ist. Der Handler selbst läuft im Prozess weiter: Jede Anweisung, die er nach Ablauf der Frist über `ctx.sql` beginnt, lehnt der Core mit einem `StatementRefusedError` ab, ohne sie an Postgres zu senden, sodass sie das Zurückrollen nicht aufhält. Dafür nimmt `ctx.sql` im Handler Anweisungen nur als Tagged Template an und führt jede sofort aus; weitere Methoden des Datenbank-Clients hat es nicht. Code außerhalb von SQL, etwa der Aufruf eines Fremdsystems, lässt sich nicht abbrechen. Lässt sich die Anweisung nicht abbrechen, etwa weil Postgres binnen 5 s keine weitere Verbindung annimmt, steht der Eintrag `statement not cancelled` mit `eventId`, `event`, `subscriber` und dem Fehler in `error` im Log. Die Zustellung scheitert dann weiter mit `handler_timed_out`, aber erst, wenn die Anweisung endet: Für die Anweisungen des Handlers setzt der Core das `statement_timeout` auf `PLUGIN_HOOK_TIMEOUT_MS` plus 1 s, höchstens auf die 60 s der Verbindung, sodass Postgres jede von ihnen spätestens so lange nach ihrem Beginn abbricht. Für den Vermerk der Zustellung gelten danach wieder die 60 s.
 
 Ein Handler ist deshalb idempotent: Eine Wirkung außerhalb der eigenen Datenbank, etwa eine Mail, kann sich wiederholen, wenn der Handler nach ihr scheitert. Die `id` des Events ist der Schlüssel, an dem er eine Wiederholung erkennt.
 
-Eine gelungene Zustellung steht nur mit `LOG_LEVEL=debug` im Log, als Eintrag `event delivered` mit `eventId`, `event` (dem Namen, etwa `board.LabelRenamed`) und `subscriber`. Jede gescheiterte Zustellung steht im Log als Eintrag `event not delivered` mit `eventId`, `event`, `subscriber`, `attempt`, `retryInMs` und `reason`:
+Eine gelungene Zustellung steht nur mit `LOG_LEVEL=debug` im Log, als Eintrag `event delivered` mit `eventId`, `event` (dem Namen, etwa `board.LabelRenamed`) und `subscriber`. Jede gescheiterte Zustellung steht im Log als Eintrag `event not delivered` mit `eventId`, `event`, `subscriber`, `attempt`, `retryInMs` und `reason`; der 25. Versuch als Eintrag `event dead-lettered`, ohne `retryInMs`:
 
 | `reason`            | Bedeutung                                                                                                                                                                     |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `handler_threw`     | Der Handler hat einen Fehler geworfen; er steht mit Name, Meldung und Stacktrace in `error`.                                                                                  |
-| `handler_timed_out` | Der Handler wurde nicht innerhalb von `timeoutMs` (`PLUGIN_HOOK_TIMEOUT_MS`) fertig.                                                                                          |
+| `handler_timed_out` | Die Prüfung der Payload und der Handler wurden zusammen nicht innerhalb von `timeoutMs` (`PLUGIN_HOOK_TIMEOUT_MS`) fertig.                                                    |
 | `invalid_payload`   | Die Payload passt nicht zum Schema des abonnierenden Plugins; `issues` nennt die Befunde.                                                                                     |
 | `delivery_failed`   | Die Zustellung scheiterte außerhalb des Handlers, etwa beim Festschreiben (ein aufgeschobener Constraint) oder weil das Schema der Payload warf; der Fehler steht in `error`. |
 
 - Die Reihenfolge ist nicht zugesichert: Ein Event, dessen Zustellung scheitert, hält die folgenden nicht auf, gleich aus welchem Grund sie scheitert.
 - Ein Plugin, das beim Publizieren in `PLUGINS` steht, aber nicht aktiv ist, etwa weil `activate` oder seine Migration scheiterte oder ein vorausgesetztes Plugin fehlt, erhält das Event, sobald es nach einem Neustart aktiv ist. Ausgenommen ist ein Plugin, dessen Definition selbst ungültig ist oder nicht geladen werden konnte (`invalid_manifest`, `load_timed_out`, `unknown_plugin`, `duplicate_plugin`): Für es entsteht keine Zustellung, und es erhält die Events aus dieser Zeit nie.
-- Die Version eines Events wird nicht mit der Version verglichen, die das abonnierende Plugin importiert hat. Passt die Payload einer anderen Version nicht zu dessen Schema, scheitert die Zustellung bei jedem Versuch mit `invalid_payload`, ohne Ende, bis es eine Obergrenze der Versuche gibt.
-- Eine Zustellung an ein Plugin, das gerade nicht aktiv ist, bleibt liegen, bis es wieder aktiv ist, ohne Frist. Ein Plugin, das ein Event erst später abonniert oder erst später in `PLUGINS` aufgenommen wird, erhält die Events von davor nicht.
+- Die Version eines Events wird nicht mit der Version verglichen, die das abonnierende Plugin importiert hat. Passt die Payload einer anderen Version nicht zu dessen Schema, scheitert die Zustellung bei jedem Versuch mit `invalid_payload`, bis sie nach dem 25. im Dead-Letter landet.
+- Eine Zustellung an ein Plugin, das gerade nicht aktiv ist, bleibt liegen, bis es wieder aktiv ist, höchstens bis zur Zustellfrist von 30 Tagen nach `occurred_at` des Events. Ein Plugin, das ein Event erst später abonniert oder erst später in `PLUGINS` aufgenommen wird, erhält die Events von davor nicht.
 - Ein Handler publiziert bisher selbst keine Events.
 
 Die Instanz stellt zu, sobald eine Mutation mit Events festgeschrieben ist, und sieht zusätzlich jede Sekunde nach fälligen Zustellungen: nach Wiederholungen und nach Events, die ein Absturz oder ein anderer Prozess liegen ließ. Sie versucht eine Zustellung nach der anderen. Scheitert ein solcher Durchgang als Ganzes, etwa weil Postgres nicht antwortet, nennt das Log den Fehler im Eintrag `event delivery failed`, und der nächste Durchgang folgt nach einer Sekunde.
+
+Ist eine Zustellung 30 Tage nach `occurred_at` ihres Events noch offen, ist ihre Zustellfrist abgelaufen: Der Core versucht sie nicht mehr und legt sie mit dem Grund `delivery_expired` in den Dead-Letter, auch wenn das abonnierende Plugin nicht aktiv ist oder gar nicht mehr in `PLUGINS` steht. Er sieht danach mit der Aufbewahrung (unten) einmal je Stunde, höchstens 1000 Zustellungen auf einmal; eine abgelaufene Zustellung kann deshalb bis zu einer Stunde offen stehen, bevor sie im Dead-Letter liegt, wird aber nicht mehr versucht. Je abonnierendem Plugin steht dann der Eintrag `event deliveries expired` auf Level `error` mit `subscriber`, `reason` (`delivery_expired`) und der Zahl `expired` der Zustellungen im Log.
+
+`core.event_deliveries` zeigt den Stand jeder Zustellung: `attempts`, `next_attempt_at`, `delivered_at` für eine gelungene und `dead_lettered_at` mit `failure_reason` für eine aufgegebene, der Grund des letzten Versuchs oder `delivery_expired`. Der Dead-Letter der Events sind die Zeilen mit `dead_lettered_at`. Ein Betreiber stellt eine solche Zustellung nach behobener Ursache von Hand erneut zu, solange ihr Event nicht gelöscht und ihre Zustellfrist nicht abgelaufen ist; sonst landet sie beim nächsten Nachsehen wieder im Dead-Letter:
+
+```sql
+UPDATE core.event_deliveries
+SET dead_lettered_at = NULL, failure_reason = NULL, attempts = 0, next_attempt_at = now()
+WHERE event_id = '…' AND subscriber = '…';
+```
+
+Abgeschlossene Events bleiben nicht für immer in der Outbox: Der Core löscht ein Event samt seinen Zustellungen aus `core.events` und `core.event_deliveries`, sobald jede seiner Zustellungen gelungen oder im Dead-Letter ist und die jüngste davon (`delivered_at` oder `dead_lettered_at`) 7 Tage zurückliegt; ein Event, das beim Publizieren kein Plugin abonnierte, löscht er 7 Tage nach `occurred_at`. Erneut zustellen lässt sich eine Zustellung im Dead-Letter also nur innerhalb dieser 7 Tage. Ein Event mit einer offenen Zustellung wird nicht gelöscht, und seine abgeschlossenen Zustellungen bleiben mit ihm stehen; spätestens nach Zustellfrist und Aufbewahrung, 37 Tage nach `occurred_at`, ist es fort. Die Fristen sind fest und rechnen mit der Uhr der Instanz. Jeder Prozess sieht dafür einmal je Stunde am Ende eines Durchgangs nach und löscht höchstens 1000 Events auf einmal; waren es 1000, macht er im nächsten Durchgang weiter, bis nichts mehr übrig ist. Hat er etwas gelöscht, steht mit `LOG_LEVEL=debug` der Eintrag `settled events removed` mit der Zahl `removed` der Events im Log. Das gilt auch in einer Instanz, in der kein aktives Plugin ein Event abonniert; gelöscht wird, sobald das Core-Schema migriert ist.
+
+### Jobs
+
+Ein Job ist Hintergrundarbeit eines Plugins, die eine Mutation einreiht und die Instanz nach dem Festschreiben ausführt, außerhalb der Anfrage und mindestens einmal (ADR-0016). Ein Plugin definiert ihn mit `defineJob()` aus `@workbench/sdk` und nennt ihn in `definePlugin({ manifest, jobs })`:
+
+```ts
+export const sendReminder = defineJob({
+	name: "sendReminder",
+	payload: z.object({ cardId: z.string() }),
+	maxAttempts: 5,
+	run: async (job, ctx) => {},
+});
+```
+
+- `name` ist in camelCase; der Job heißt `<plugin>.<name>`, hier `board.sendReminder`.
+- `payload` ist ein Schema wie bei einer Operation.
+- `maxAttempts` ist die Zahl der Versuche, nach der der Job im Dead-Letter landet, 1 bis 25.
+
+Ein Plugin ist ungültig (`invalid_manifest`), wenn ein Job keinen Namen in camelCase, kein Payload-Schema, kein `maxAttempts` von 1 bis 25 oder keine Funktion `run` hat oder mehrfach deklariert ist; für einen [Cron-Job](#cron-jobs) gilt dasselbe, mit dem Zeitplan an der Stelle des Payload-Schemas.
+
+#### Einreihen
+
+Eine Mutation reiht einen Job in `execute` ein:
+
+```ts
+await ctx.enqueue(sendReminder, { cardId });
+```
+
+Der Core prüft die Payload gegen das Schema der Definition und schreibt den Job in die Job-Queue `core.jobs`, in der Transaktion der Mutation: ID, Name, Payload, Workspace und Zeitpunkt in UTC. Die Payload ist, was das Schema aus dem übergebenen Wert macht. Gespeichert wird ihre JSON-Form, und weil `run` später genau diese zu lesen bekommt, prüft der Core sie beim Einreihen noch einmal gegen das Schema. Was das Schema aus der gespeicherten Form macht, muss wieder dieselbe JSON-Form haben: `z.coerce.date()`, ein Standardwert oder weggelassene Felder erfüllen das, eine Umformung wie `.transform((n) => n * 2)`, die bei jedem Lesen weiterrechnet, nicht. Tiefer als 100 Ebenen aus Listen und Objekten darf eine Payload nicht verschachtelt sein. Wird die Mutation zurückgerollt, gibt es den Job nicht, und er läuft nie.
+
+`enqueue` wirft, und die Operation scheitert mit `internal_error` (Log-Eintrag `operation failed`, `reason` `execute_threw`), wenn
+
+- das Plugin den Job nicht selbst in `jobs` deklariert (`UndeclaredJobError`),
+- die Payload nicht zum Schema passt (`InvalidJobPayloadError`, mit den Befunden in `issues`); ebenso, wenn das Schema ihre gespeicherte JSON-Form nicht wieder annimmt, etwa `z.date()`, dessen Datum in JSON ein String ist (`z.coerce.date()` nimmt ihn an), wenn es sie beim erneuten Lesen verändert, ist sie tiefer als 100 Ebenen verschachtelt oder hat sie keine JSON-Form, die Postgres speichert (`undefined`, eine Funktion, ein BigInt, ein Wert, der sich selbst enthält, ein String mit NUL-Zeichen oder halbem Surrogatpaar),
+- eine Query einreiht (`JobEnqueuedByQueryError`).
+
+#### Ausführen
+
+Ein Job läuft erst nach dem Festschreiben seiner Mutation. `run` erhält den Job und einen Kontext:
+
+- `job` nennt `id`, `name` (`board.sendReminder`), `attempt` (ab 1), `enqueuedAt`, `workspace` und `payload`, erneut geprüft gegen das Schema der Definition.
+- `ctx` nennt `sql`, eine Transaktion mit dem Schema des Plugins als `search_path`, `now()`, `newId()` und `random()`.
+
+Der Core vermerkt den erledigten Job in der Transaktion von `run`. Was `run` über `ctx.sql` schreibt, gibt es deshalb nur zusammen mit dem erledigten Job. Ein Versuch scheitert, wenn `run` wirft, nicht innerhalb von `PLUGIN_HOOK_TIMEOUT_MS` fertig wird oder sich die Transaktion nicht festschreiben lässt; die Frist beginnt vor der Prüfung der Payload, sodass auch ein Schema, dessen Prüfung nicht fertig wird, den Versuch scheitern lässt, und endet die Prüfung erst nach Ablauf der Frist, ruft der Core `run` nicht mehr auf; dann wird zurückgerollt, was er geschrieben hat. Der Core wiederholt den Job mit derselben `id` nach einer Wartezeit, die mit jedem Versuch exponentiell wächst und einen Zufallsanteil hat (Full Jitter: bis 5 s nach dem ersten, bis 10 s nach dem zweiten, höchstens 1 h). Scheitert der letzte Versuch (`maxAttempts`), landet der Job im Dead-Letter und läuft nicht mehr.
+
+Läuft die Frist ab, während eine Anweisung von `run` in Postgres läuft, bricht der Core sie über eine zweite Verbindung ab (`pg_cancel_backend`), die er nur dafür hält, mit derselben `DATABASE_URL` aufbaut und nach 30 s ohne Abbruch wieder schließt, rollt zurück und vermerkt den gescheiterten Versuch sofort, statt auf das Ende der Anweisung zu warten. Steht danach noch die Antwort auf eine Anweisung aus, die `run` vor Ablauf der Frist begonnen hat, etwa weil sie Postgres erst nach dem Abbruch erreichte, bricht der Core alle 100 ms erneut ab, bis keine mehr offen ist. `run` selbst läuft im Prozess weiter: Jede Anweisung, die es nach Ablauf der Frist über `ctx.sql` beginnt, lehnt der Core mit einem `StatementRefusedError` ab, ohne sie an Postgres zu senden, sodass sie das Zurückrollen nicht aufhält. Dafür nimmt `ctx.sql` in `run` Anweisungen nur als Tagged Template an und führt jede sofort aus; weitere Methoden des Datenbank-Clients hat es nicht. Code außerhalb von SQL, etwa der Aufruf eines Fremdsystems, lässt sich nicht abbrechen und kann sich mit der Wiederholung überschneiden. Lässt sich die Anweisung nicht abbrechen, etwa weil Postgres binnen 5 s keine weitere Verbindung annimmt, steht der Eintrag `statement not cancelled` mit `jobId`, `job`, `attempt` und dem Fehler in `error` im Log. Der Versuch scheitert dann weiter mit `run_timed_out`, aber erst, wenn die Anweisung endet: Für die Anweisungen von `run` setzt der Core das `statement_timeout` auf `PLUGIN_HOOK_TIMEOUT_MS` plus 1 s, höchstens auf die 60 s der Verbindung, sodass Postgres jede von ihnen spätestens so lange nach ihrem Beginn abbricht. Für den Vermerk des erledigten Jobs gelten danach wieder die 60 s.
+
+Ein Job ist deshalb idempotent: Eine Wirkung außerhalb der eigenen Datenbank, etwa eine Mail, kann sich wiederholen, wenn der Job nach ihr scheitert. Die `id` des Jobs ist der Schlüssel, an dem er eine Wiederholung erkennt.
+
+Ein erledigter Job steht nur mit `LOG_LEVEL=debug` im Log, als Eintrag `job completed` mit `jobId`, `job` (dem Namen) und `attempt`. Jeder gescheiterte Versuch steht im Log als Eintrag `job failed` mit `jobId`, `job`, `attempt`, `retryInMs` und `reason`; der letzte als Eintrag `job dead-lettered`, ohne `retryInMs`:
+
+| `reason`          | Bedeutung                                                                                                                                                                                  |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `run_threw`       | `run` hat geworfen; der Fehler steht in `error`.                                                                                                                                           |
+| `run_timed_out`   | Die Prüfung der Payload und `run` wurden zusammen nicht innerhalb von `timeoutMs` fertig.                                                                                                  |
+| `invalid_payload` | Das Schema der Definition lehnt die gespeicherte Payload ab, etwa nach einer Änderung des Schemas; `issues` nennt die Mängel. Der Job landet sofort im Dead-Letter, ohne Wiederholung.     |
+| `attempt_failed`  | Der Versuch scheiterte außerhalb von `run`, etwa beim Festschreiben (ein aufgeschobener Constraint) oder weil das Schema der Payload warf; der Fehler steht in `error`.                    |
+| `attempt_lost`    | Der letzte Versuch gelang weder noch scheiterte er vor Ablauf der Wiederzustellungsfrist, etwa weil der Prozess mitten darin endete. Der Job landet im Dead-Letter, ohne weiteren Versuch. |
+
+Die Job-Queue `core.jobs` zeigt den Stand jedes Jobs: `state` ist `pending`, `completed` oder `dead`, dazu `attempts`, `next_attempt_at`, `settled_at` und `failure_reason`, der Grund des letzten gescheiterten Versuchs. Der Dead-Letter sind die Zeilen mit `state = 'dead'`. Ein Betreiber reiht einen solchen Job nach behobener Ursache von Hand wieder ein:
+
+```sql
+UPDATE core.jobs SET state = 'pending', settled_at = NULL, attempts = 0, next_attempt_at = now() WHERE id = '…';
+```
+
+Abgeschlossene Jobs bleiben nicht für immer in `core.jobs`: Der Core löscht einen erledigten Job (`completed`) 7 Tage und einen Job im Dead-Letter (`dead`) 30 Tage nach `settled_at`. Von Hand wieder einreihen lässt sich ein Job im Dead-Letter also nur innerhalb dieser 30 Tage; danach ist er samt Payload fort. Ein offener Job (`pending`) wird nie gelöscht, wie lange er auch liegt, und je Cron-Job bleibt die Zeile mit der jüngsten Fälligkeit stehen, weil der Core an sie anschließt. Die Fristen sind fest und rechnen mit der Uhr der Instanz. Jeder Prozess sieht dafür einmal je Stunde am Ende eines Durchgangs nach und löscht höchstens 1000 Zeilen auf einmal; waren es 1000, macht er im nächsten Durchgang weiter, bis nichts mehr übrig ist. Hat er etwas gelöscht, steht mit `LOG_LEVEL=debug` der Eintrag `settled jobs removed` mit der Zahl `removed` im Log. Gelöscht wird auch in einer Instanz, in der kein aktives Plugin einen Job deklariert, sobald das Core-Schema migriert ist.
+
+- Beginnt ein Versuch, zählt der Core ihn sofort und stellt den Job für die Wiederzustellungsfrist zurück: die Frist eines Versuchs (`PLUGIN_HOOK_TIMEOUT_MS`) plus 60 s. Endet der Prozess mitten im Versuch, läuft der Job nach dieser Frist erneut, auch in einem anderen Prozess; der abgebrochene Versuch zählt mit, und war es der letzte, landet der Job mit `attempt_lost` im Dead-Letter. Weil die Frist länger ist als die eines Versuchs, laufen nie zwei Versuche desselben Jobs zugleich, solange `run` seine Frist einhält.
+- Die Reihenfolge ist nicht zugesichert: Ein Job, der scheitert, hält die übrigen nicht auf.
+- Ein Job eines Plugins, das gerade nicht aktiv ist, bleibt liegen, bis es wieder aktiv ist, ohne Frist.
+- Ein Job hat bisher keinen Akteur, publiziert keine Events und reiht selbst keine Jobs ein; das gilt auch für einen Cron-Job.
+
+Die Instanz führt Jobs aus, sobald eine Mutation mit Jobs festgeschrieben ist, und sieht zusätzlich jede Sekunde nach fälligen Jobs: nach Wiederholungen und nach Jobs, die ein Absturz oder ein anderer Prozess liegen ließ. Sie führt einen Job nach dem anderen aus. Scheitert ein solcher Durchgang als Ganzes, etwa weil Postgres nicht antwortet, nennt das Log den Fehler im Eintrag `job queue failed`, und der nächste Durchgang folgt nach einer Sekunde.
+
+#### Cron-Jobs
+
+Ein Cron-Job ist ein Job, den keine Mutation einreiht, sondern ein Zeitplan. Ein Plugin definiert ihn mit `defineCronJob()` und nennt ihn in `definePlugin({ manifest, cronJobs })`:
+
+```ts
+export const sendDigest = defineCronJob({
+	name: "sendDigest",
+	schedule: "0 7 * * 1-5",
+	maxAttempts: 3,
+	run: async (job, ctx) => {},
+});
+```
+
+- `schedule` ist ein Cron-Ausdruck aus fünf Feldern, in UTC: Minute (0 bis 59), Stunde (0 bis 23), Tag des Monats (1 bis 31), Monat (1 bis 12) und Wochentag (0 bis 7, 0 und 7 sind Sonntag). Ein Feld ist `*`, eine Zahl, ein Bereich (`1-5`) oder eine Liste davon (`0,30`), je mit optionaler Schrittweite (`*/15`, `10-50/20`). Namen wie `MON` oder `JAN` und Kürzel wie `@daily` gibt es nicht. Beginnt weder der Tag des Monats noch der Wochentag mit `*`, ist der Job fällig, wenn einer von beiden passt, wie bei `cron`: `0 0 13 * 5` läuft am 13. und an jedem Freitag. Beginnt eines der beiden Felder mit `*`, auch als `*/2`, müssen beide passen.
+- Der Cron-Job teilt sich den Namensraum mit den Jobs des Plugins und heißt `<plugin>.<name>`.
+- `job` nennt `id`, `name`, `attempt` und `dueAt`, die Fälligkeit, für die er läuft; `ctx` ist derselbe wie bei einem Job.
+
+Ein Zeitplan, der nicht diese Form hat oder nie fällig wird (`0 0 30 2 *`), macht das Plugin ungültig (`invalid_manifest`). Ein seltener Zeitplan ist gültig, wie lang der Abstand zweier Fälligkeiten auch ist: `0 0 29 2 */7`, der 29. Februar an einem Sonntag, wird nach 2088 erst 2128 wieder fällig.
+
+Der Core reiht jede Fälligkeit im Voraus ein: Ein Durchgang schreibt für jeden Cron-Job die nächste Fälligkeit nach dem Jetzt mit `due_at` nach `core.jobs`, und der Job läuft, sobald sie erreicht ist. Je Cron-Job und Fälligkeit gibt es höchstens eine Zeile (`UNIQUE (name, due_at)`); laufen zwei Prozesse gegen dieselbe Datenbank, legt nur einer sie an und nur einer führt sie aus. Von da an ist sie ein Job wie jeder andere, mit Versuchen, Wartezeit, Frist und Dead-Letter.
+
+Dabei schließt der Core an die jüngste Fälligkeit an, die schon in `core.jobs` steht, nicht an das Jetzt. Sind seit ihr Fälligkeiten verstrichen, ohne eingereiht zu werden, weil ein Durchgang länger dauerte als der Abstand zweier Fälligkeiten oder weil keine Instanz lief, reiht er sie nach, höchstens die zehn jüngsten; `dueAt` nennt jeweils die Fälligkeit, für die der Job läuft.
+
+- Solange je Cron-Job nicht mehr als zehn Fälligkeiten zwischen zwei Durchgängen verstreichen, läuft er für jede genau einmal, auch wenn ein Durchgang oder ein Stillstand sie überdeckt.
+- Verstreichen mehr, etwa bei `* * * * *` nach einer Stunde Stillstand, läuft er für die eine, die schon eingereiht war, und für die zehn jüngsten; die dazwischen entfallen. Das Log meldet dann einmal die Warnung `cron due times skipped` mit `job` (dem Namen), `latestEnqueuedDueAt`, der Fälligkeit, die schon eingereiht war, und `oldestCaughtUpDueAt`, der ältesten nachgeholten; entfallen sind die Fälligkeiten zwischen den beiden. Ein Cron-Job, der keine auslassen darf, rechnet von `dueAt` aus selbst nach.
+- Die Nachgeholten laufen nacheinander, die älteste zuerst, sobald eine Instanz läuft.
+- Ein neuer Cron-Job läuft zum ersten Mal zur ersten Fälligkeit nach dem Start, an dem er aktiv wurde, nicht rückwirkend. War er früher schon einmal aktiv und steht noch eine Fälligkeit von damals in `core.jobs`, gilt sie als die jüngste, und er holt bis zu zehn nach.
+- Eine bereits eingereihte Fälligkeit bleibt bestehen, wenn sich der Zeitplan ändert, und läuft noch einmal nach dem alten; nachgeholt wird nach dem neuen.
+- Eine Wiederholung kann sich mit der nächsten Fälligkeit überschneiden; `dueAt` und `id` unterscheiden die beiden.
 
 ### Test-Harness
 
@@ -330,9 +447,11 @@ const result = await harness.call({
 await harness.stop();
 ```
 
-`result` ist `{ ok: true, output }` oder `{ ok: false, failure }` mit `code`, `kind`, `detail` und `issues`. Ohne Angabe gibt das Harness eine feste Uhr (`2026-11-26T08:00:00.000Z`), fortlaufende IDs im UUID-Format (`00000000-0000-4000-8000-000000000001`, …), den Audit-Einträgen fortlaufende IDs aus einer eigenen Folge (`00000000-0000-4000-a000-000000000001`, …), sodass eine Mutation die IDs der folgenden Operationen nicht verschiebt, den Events fortlaufende IDs aus einer dritten Folge (`00000000-0000-4000-e000-000000000001`, …), `random()` = `0.5` und jedem Aufruf eine fortlaufende Correlation-ID (`harness-call-1`, …), unter der die Pipeline loggt; `now`, `newId`, `random` und `newCorrelationId` lassen sich als Optionen übergeben. Lädt ein Plugin nicht, wirft `startOperationHarness` einen `HarnessStartError` mit dem Ladefehler. `harness.logEntries` enthält die Log-Einträge.
+`result` ist `{ ok: true, output }` oder `{ ok: false, failure }` mit `code`, `kind`, `detail` und `issues`. Ohne Angabe gibt das Harness eine feste Uhr (`2026-11-26T08:00:00.000Z`), fortlaufende IDs im UUID-Format (`00000000-0000-4000-8000-000000000001`, …), den Audit-Einträgen fortlaufende IDs aus einer eigenen Folge (`00000000-0000-4000-a000-000000000001`, …), sodass eine Mutation die IDs der folgenden Operationen nicht verschiebt, den Events fortlaufende IDs aus einer dritten Folge (`00000000-0000-4000-e000-000000000001`, …), den Jobs aus einer vierten (`00000000-0000-4000-b000-000000000001`, …), `random()` = `0.5` und jedem Aufruf eine fortlaufende Correlation-ID (`harness-call-1`, …), unter der die Pipeline loggt; `now`, `newId`, `newAuditEntryId`, `random` und `newCorrelationId` lassen sich als Optionen übergeben. Lädt ein Plugin nicht, wirft `startOperationHarness` einen `HarnessStartError` mit dem Ladefehler. `harness.logEntries` enthält die Log-Einträge.
 
-Events stellt das Harness nicht von selbst zu: `await harness.deliverEvents()` ruft die Handler aller fälligen Zustellungen auf und kehrt zurück, wenn jede einmal versucht ist. Eine gescheiterte Zustellung wird erst wieder fällig, wenn die Uhr des Harness (`now`) weiter ist als ihre Wartezeit.
+Events stellt das Harness nicht von selbst zu: `await harness.deliverEvents()` ruft die Handler aller fälligen Zustellungen auf und kehrt zurück, wenn jede einmal versucht ist. Eine gescheiterte Zustellung wird erst wieder fällig, wenn die Uhr des Harness (`now`) weiter ist als ihre Wartezeit. Stellt ein Test die Uhr um Tage vor, legt `deliverEvents()` wie die Instanz die Zustellungen in den Dead-Letter, deren Zustellfrist abgelaufen ist, und löscht die Events aus der Outbox, deren Zustellungen alle seit 7 Tagen gelungen oder im Dead-Letter sind.
+
+Auch Jobs führt das Harness nicht von selbst aus: `await harness.runJobs()` versucht jeden fälligen Job einmal und kehrt dann zurück. Ein gescheiterter Job wird erst wieder fällig, wenn die Uhr des Harness (`now`) weiter ist als seine Wartezeit; ein Test stellt die Uhr vor, statt zu warten. Für einen Cron-Job reiht der erste Aufruf die nächste Fälligkeit nach der Uhr des Harness ein; ist die Uhr danach bei ihr angekommen, führt der nächste Aufruf ihn aus, auch für die Fälligkeiten, über die der Test die Uhr hinweggestellt hat, höchstens die zehn jüngsten. Stellt ein Test die Uhr um Tage vor, löscht `runJobs()` wie die Instanz erledigte Jobs nach 7 und Jobs im Dead-Letter nach 30 Tagen aus `core.jobs`.
 
 Das Referenz-Plugin bietet so die Mutation `reference.createNote` (Eingabe `title`, 1 bis 200 Zeichen nach Entfernen von Leerraum am Rand) und die Query `reference.listNotes` (Eingabe `limit`, 1 bis 100; die neuesten zuerst), beide auf den Notizen eines Workspaces in `plugin_reference.notes`. `reference.createNote` publiziert das Event `reference.NoteCreated` (Version 1, Payload `noteId`), dessen Definition `noteCreated` im Contract des Plugins liegt (siehe [Events](#events)). Seine Tests in `packages/plugin-reference/src/operations.test.ts` zeigen das Harness im Einsatz.
 
@@ -427,14 +546,14 @@ Die Architekturtests in `packages/architecture` lassen `bun run check` scheitern
 
 Die Konfiguration kommt ausschließlich aus der Umgebung und wird beim Start geprüft. Fehlt eine Pflichtvariable oder ist ein Wert ungültig, endet der Start mit Exit-Code 1 und einer Meldung, die die Variable nennt, aber keinen Wert ausgibt. Leere Variablen gelten als nicht gesetzt. Zahlen sind ganze Dezimalzahlen ohne Vorzeichen, führende Nullen oder Leerraum; Schreibweisen wie `0x1F90` oder `1e3` werden abgelehnt.
 
-| Variable                 | Pflicht | Standard | Bedeutung                                                                                                                                                               |
-| ------------------------ | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`           | ja      | –        | Postgres-URL (`postgres://` oder `postgresql://`) mit Host. Secret.                                                                                                     |
-| `DATABASE_URL_FILE`      | –       | –        | Pfad einer Datei mit der Postgres-URL (Docker-Secret). Ersetzt `DATABASE_URL`; beide zugleich sind ein Fehler.                                                          |
-| `PORT`                   | nein    | `3000`   | HTTP-Port, 0 bis 65535 (0 wählt einen freien Port).                                                                                                                     |
-| `LOG_LEVEL`              | nein    | `info`   | `debug`, `info`, `warn` oder `error`.                                                                                                                                   |
-| `READINESS_TIMEOUT_MS`   | nein    | `2000`   | Frist der Datenbankprüfung im Readiness-Check in Millisekunden, 1 bis 60000.                                                                                            |
-| `PLUGIN_HOOK_TIMEOUT_MS` | nein    | `10000`  | Frist in Millisekunden, die ein Plugin je für das Laden seines Einstiegs, für `activate`, für `deactivate` und für jeden Aufruf eines Event-Handlers hat, 1 bis 600000. |
-| `PLUGINS`                | nein    | –        | Namen der Plugins, die die Instanz aktiviert, durch Komma getrennt. Ohne Angabe ist kein Plugin aktiv.                                                                  |
+| Variable                 | Pflicht | Standard | Bedeutung                                                                                                                                                                                             |
+| ------------------------ | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`           | ja      | –        | Postgres-URL (`postgres://` oder `postgresql://`) mit Host. Secret.                                                                                                                                   |
+| `DATABASE_URL_FILE`      | –       | –        | Pfad einer Datei mit der Postgres-URL (Docker-Secret). Ersetzt `DATABASE_URL`; beide zugleich sind ein Fehler.                                                                                        |
+| `PORT`                   | nein    | `3000`   | HTTP-Port, 0 bis 65535 (0 wählt einen freien Port).                                                                                                                                                   |
+| `LOG_LEVEL`              | nein    | `info`   | `debug`, `info`, `warn` oder `error`.                                                                                                                                                                 |
+| `READINESS_TIMEOUT_MS`   | nein    | `2000`   | Frist der Datenbankprüfung im Readiness-Check in Millisekunden, 1 bis 60000.                                                                                                                          |
+| `PLUGIN_HOOK_TIMEOUT_MS` | nein    | `10000`  | Frist in Millisekunden, die ein Plugin je für das Laden seines Einstiegs, für `activate`, für `deactivate`, für jeden Aufruf eines Event-Handlers und für jeden Versuch eines Jobs hat, 1 bis 600000. |
+| `PLUGINS`                | nein    | –        | Namen der Plugins, die die Instanz aktiviert, durch Komma getrennt. Ohne Angabe ist kein Plugin aktiv.                                                                                                |
 
 Für die Tests gilt zusätzlich `TEST_DATABASE_URL` (Standard: die Datenbank aus `compose.dev.yaml`).

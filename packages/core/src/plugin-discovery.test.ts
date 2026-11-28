@@ -272,7 +272,10 @@ describe("plugin discovery", () => {
 	test("finds no migrations for a package whose package.json names none", async () => {
 		const { packages } = await discoverPluginPackages(packagesDirectory)();
 
-		expect(packages[1]?.loadMigrations).toBeUndefined();
+		const notes = packages.find(({ pluginName }) => pluginName === "notes");
+
+		expect(notes).toBeDefined();
+		expect(notes?.loadMigrations).toBeUndefined();
 	});
 
 	test("refuses to read a migration whose file name does not start with a four-digit number", async () => {
