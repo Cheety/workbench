@@ -1,8 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { SQL } from "bun";
 import {
 	assertSupportedPostgresVersion,
+	PostgresGate,
 	UnsupportedPostgresVersionError,
 } from "./postgres.ts";
+
+const CLIENT_STATEMENT_TIMEOUT_MS = 200;
 
 describe("supported Postgres version", () => {
 	test.each([170000, 170002, 179999])(
@@ -30,4 +34,34 @@ describe("supported Postgres version", () => {
 			);
 		},
 	);
+});
+
+describe("a PostgresGate going silent", () => {
+	const cleanups: (() => Promise<void>)[] = [];
+
+	afterEach(async () => {
+		for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+	});
+
+	test("leaves an established connection open and unanswered, so that only the client's own timeout ends a statement on it", async () => {
+		const gate = PostgresGate.create();
+		gate.forward();
+		const sql = new SQL(gate.url, { max: 1 });
+		cleanups.push(async () => {
+			gate.close();
+			await sql.close({ timeout: 0 }).catch(() => {});
+		});
+		await sql`SELECT 1`;
+		gate.goSilent();
+
+		const outcome = await Promise.race([
+			sql`SELECT 1`.then(
+				() => "answered",
+				(error: unknown) => error,
+			),
+			Bun.sleep(CLIENT_STATEMENT_TIMEOUT_MS).then(() => "timed_out"),
+		]);
+
+		expect(outcome).toBe("timed_out");
+	});
 });
