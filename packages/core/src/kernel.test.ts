@@ -2448,7 +2448,10 @@ describe("jobs of a plugin", () => {
 		});
 
 		expect(plugins.failures).toEqual([]);
-		expect(plugins.jobs.names()).toEqual(["board.archiveCards"]);
+		expect(plugins.jobs.names()).toEqual([
+			"board.archiveCards",
+			"core.removeExpiredIdempotencyKeys",
+		]);
 		expect(plugins.jobs.find("board.archiveCards")).toEqual(
 			expect.objectContaining({
 				owner: { kind: "plugin", name: "board" },
@@ -2470,7 +2473,7 @@ describe("jobs of a plugin", () => {
 			enabledPlugins: ["board"],
 		});
 
-		expect(plugins.jobs.names()).toEqual([]);
+		expect(plugins.jobs.names()).toEqual(["core.removeExpiredIdempotencyKeys"]);
 		expect(plugins.jobs.find("board.archiveCards")).toBeUndefined();
 	});
 
@@ -2572,9 +2575,11 @@ describe("cron jobs of a plugin", () => {
 		expect(plugins.jobs.names()).toEqual([
 			"board.archiveCards",
 			"board.sendDigest",
+			"core.removeExpiredIdempotencyKeys",
 		]);
 		expect(plugins.jobs.cronJobs().map((job) => job.name)).toEqual([
 			"board.sendDigest",
+			"core.removeExpiredIdempotencyKeys",
 		]);
 	});
 

@@ -114,7 +114,18 @@ docker compose -f compose.dev.yaml exec -T postgres psql -U workbench -d workben
 
 Die Ausgabe nennt neben dem Primärschlüssel und `jobs_name_due_at_key` beide Indizes; `jobs_settled_idx` liegt auf `(state, settled_at)` und umfasst nur Zeilen mit `settled_at`.
 
-Die Tabelle bleibt leer, solange kein aktives Plugin einen Job einreiht oder einen Cron-Job deklariert; das Referenz-Plugin tut beides nicht. Mit einem solchen Plugin steht dort je Job eine Zeile (`pending`, `completed` oder `dead`), für einen Cron-Job die nächste Fälligkeit in `due_at`, und mit `LOG_LEVEL=debug` meldet das Log `job completed`, sonst nur `job failed` und `job dead-lettered` mit `reason`. Wie ein Job nach dem Festschreiben läuft, wiederholt wird, seine Frist überschreitet und im Dead-Letter landet, zeigen die Tests in `packages/core/src/jobs.test.ts` und `packages/core/src/job-queue.test.ts`, mit einer Uhr, die der Test stellt.
+Dort steht immer der Cron-Job des Cores `core.removeExpiredIdempotencyKeys` mit seiner nächsten Fälligkeit in `due_at`, alle zehn Minuten; das Referenz-Plugin reiht keine Jobs ein und deklariert keinen Cron-Job. Mit einem Plugin, das es tut, steht dort je Job eine Zeile (`pending`, `completed` oder `dead`), für einen Cron-Job die nächste Fälligkeit in `due_at`, und mit `LOG_LEVEL=debug` meldet das Log `job completed`, sonst nur `job failed` und `job dead-lettered` mit `reason`. Wie ein Job nach dem Festschreiben läuft, wiederholt wird, seine Frist überschreitet und im Dead-Letter landet, zeigen die Tests in `packages/core/src/jobs.test.ts` und `packages/core/src/job-queue.test.ts`, mit einer Uhr, die der Test stellt.
+
+## Einen Idempotency-Key ansehen
+
+Den Server, den Workspace und das Token wie unter [Ein Event in der Outbox ansehen](#ein-event-in-der-outbox-ansehen) anlegen. Dieselbe Mutation zweimal mit demselben Key aufrufen, dann einmal mit anderer Eingabe:
+
+```sh
+for title in Plan Plan Other; do curl -s -X POST http://127.0.0.1:3123/api/workspaces/00000000-0000-4000-8000-00000000aaaa/operations/reference.createNote -H "Authorization: Bearer $(cat /tmp/workbench-verify.token)" -H 'Idempotency-Key: verify-1' -d "{\"title\":\"$title\"}"; echo; done
+docker compose -f compose.dev.yaml exec -T postgres psql -U workbench -d workbench_verify -c 'SELECT key, operation, output, created_at FROM core.idempotency_keys' -c 'SELECT count(*) FROM plugin_reference.notes'
+```
+
+Die ersten beiden Antworten sind gleich, mit derselben `id`; die dritte ist Problem Details mit Status 422 und `code` `idempotency_key_reused`. `core.idempotency_keys` hat eine Zeile mit dem Key `verify-1`, `reference.createNote` und der Antwort als JSON, und `plugin_reference.notes` hat genau eine Notiz. Dass der Cron-Job den Key nach 24 Stunden löscht und dass zwei gleichzeitige Aufrufe nur einmal ausführen, zeigen die Tests in `packages/core/src/idempotency-keys.test.ts`, mit einer Uhr, die der Test stellt.
 
 ## Einen Ladefehler auslösen
 

@@ -5,6 +5,7 @@ import {
 	type PluginContext,
 	subscribedEventOf,
 } from "@workbench/sdk";
+import { CORE_JOBS } from "./core-jobs.ts";
 import { CORE_OPERATIONS } from "./core-operations.ts";
 import { type EventRegistry, registerEvents } from "./event-registry.ts";
 import {
@@ -110,7 +111,10 @@ export async function startPlugins(
 			...active.flatMap((plugin) => plugin.operations),
 		]),
 		events,
-		jobs: registerJobs(active.flatMap((plugin) => plugin.jobs)),
+		jobs: registerJobs([
+			...active.flatMap((plugin) => plugin.jobs),
+			...CORE_JOBS,
+		]),
 		deactivate: () => {
 			deactivation ??= deactivate(active, options);
 			return deactivation;

@@ -331,6 +331,57 @@ describe("a query called with an idempotency key", () => {
 	});
 });
 
+function adjustableClock(start: string) {
+	let current = new Date(start);
+	return {
+		now: () => current,
+		advanceBy: (ms: number) => {
+			current = new Date(current.getTime() + ms);
+		},
+	};
+}
+
+const ONE_MINUTE_MS = 60_000;
+
+const ONE_DAY_MS = 86_400_000;
+
+describe("an idempotency key", () => {
+	test("holds for 24 hours, however often the due jobs run", async () => {
+		const clock = adjustableClock("2026-11-27T09:00:30.000Z");
+		const harness = await startLedger({ now: clock.now });
+		const workspace = await harness.createWorkspace("Accounts");
+		await harness.call(addingEntry(workspace, 42, "retry-1"));
+		await harness.runJobs();
+		clock.advanceBy(ONE_DAY_MS - ONE_MINUTE_MS);
+		await harness.runJobs();
+		await harness.runJobs();
+
+		const again = await harness.call(addingEntry(workspace, 43, "retry-1"));
+
+		expect(again).toEqual({
+			ok: false,
+			failure: expect.objectContaining({ code: "idempotency_key_reused" }),
+		});
+	});
+
+	test("is removed by a cron job of the core once 24 hours have passed, so a call with it runs again", async () => {
+		const clock = adjustableClock("2026-11-27T09:00:30.000Z");
+		const harness = await startLedger({ now: clock.now });
+		const workspace = await harness.createWorkspace("Accounts");
+		await harness.call(addingEntry(workspace, 42, "retry-1"));
+		await harness.runJobs();
+		clock.advanceBy(ONE_DAY_MS + 10 * ONE_MINUTE_MS);
+		await harness.runJobs();
+
+		const again = await harness.call(addingEntry(workspace, 43, "retry-1"));
+
+		expect(again).toEqual({
+			ok: true,
+			output: { id: expect.any(String), amount: 43 },
+		});
+	});
+});
+
 const cleanups: (() => Promise<void>)[] = [];
 
 afterEach(async () => {

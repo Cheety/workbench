@@ -1,10 +1,14 @@
 import { createHash } from "node:crypto";
-import type { Actor } from "@workbench/sdk";
+import { type Actor, defineCronJob } from "@workbench/sdk";
 import type { SQL } from "bun";
 import { z } from "zod";
 import { isRecord } from "./is-record.ts";
 
 const IDEMPOTENCY_KEY = /^[ -~]{1,255}$/;
+
+const RETENTION_MS = 86_400_000;
+
+const MOST_REMOVED_PER_RUN = 10_000;
 
 export function isIdempotencyKey(value: string): boolean {
 	return IDEMPOTENCY_KEY.test(value);
@@ -88,3 +92,21 @@ function canonicalJsonOf(value: unknown): string {
 function jsonFormOf(output: unknown): string {
 	return JSON.stringify(output) ?? "null";
 }
+
+export const removeExpiredIdempotencyKeys = defineCronJob({
+	name: "removeExpiredIdempotencyKeys",
+	schedule: "*/10 * * * *",
+	maxAttempts: 3,
+	run: async (_job, ctx) => {
+		const expiredBy = new Date(ctx.now().getTime() - RETENTION_MS);
+		await ctx.sql`
+			DELETE FROM core.idempotency_keys
+			WHERE (actor_kind, actor_id, key) IN (
+				SELECT actor_kind, actor_id, key FROM core.idempotency_keys
+				WHERE created_at <= ${expiredBy}
+				ORDER BY created_at
+				LIMIT ${MOST_REMOVED_PER_RUN}
+				FOR UPDATE SKIP LOCKED
+			)`;
+	},
+});
