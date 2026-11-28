@@ -10,6 +10,9 @@ export type IdempotencyKey = string & { readonly [idempotencyKeyBrand]: true };
 
 export const IDEMPOTENCY_KEY_PATTERN = "^[ -~]{1,255}$";
 
+export const IDEMPOTENCY_KEY_RULE =
+	"1 to 255 visible ASCII characters or spaces";
+
 const IDEMPOTENCY_KEY = new RegExp(IDEMPOTENCY_KEY_PATTERN);
 
 const RETENTION_MS = 86_400_000;
@@ -21,16 +24,13 @@ export const TAKES_IDEMPOTENCY_KEY: Record<OperationKind, boolean> = {
 	mutation: true,
 };
 
-export class InvalidIdempotencyKeyError extends Error {
-	constructor() {
-		super(`an idempotency key must match ${IDEMPOTENCY_KEY_PATTERN}`);
-		this.name = "InvalidIdempotencyKeyError";
-	}
-}
+export type ParsedIdempotencyKey =
+	| { readonly valid: true; readonly key: IdempotencyKey }
+	| { readonly valid: false };
 
-export function idempotencyKey(value: string): IdempotencyKey {
-	if (!IDEMPOTENCY_KEY.test(value)) throw new InvalidIdempotencyKeyError();
-	return value as IdempotencyKey;
+export function parseIdempotencyKey(value: string): ParsedIdempotencyKey {
+	if (!IDEMPOTENCY_KEY.test(value)) return { valid: false };
+	return { valid: true, key: value as IdempotencyKey };
 }
 
 export type IdempotentCall = {
@@ -70,16 +70,16 @@ export async function runIdempotently(
 	run: () => Promise<unknown>,
 ): Promise<unknown> {
 	const inputHash = inputHashOf(call.input);
-	for (let claim = 1; claim <= MOST_CLAIMS; claim += 1) {
-		if (await isClaimed(transaction, call, inputHash))
-			return answered(transaction, call, await run());
+	for (let attempt = 1; attempt <= MOST_CLAIMS; attempt += 1) {
+		if (await claim(transaction, call, inputHash))
+			return storeAnswer(transaction, call, await run());
 		const stored = await findStoredCall(transaction, call, inputHash);
-		if (stored !== undefined) return replayed(stored);
+		if (stored !== undefined) return replay(stored);
 	}
 	throw new IdempotencyKeyKeptRemovedError();
 }
 
-async function isClaimed(
+async function claim(
 	transaction: SQL,
 	call: IdempotentCall,
 	inputHash: string,
@@ -92,7 +92,7 @@ async function isClaimed(
 	return claimed.length > 0;
 }
 
-async function answered(
+async function storeAnswer(
 	transaction: SQL,
 	call: IdempotentCall,
 	output: unknown,
@@ -119,7 +119,7 @@ async function findStoredCall(
 	return row === undefined ? undefined : storedCall.parse(row);
 }
 
-function replayed(stored: StoredCall): unknown {
+function replay(stored: StoredCall): unknown {
 	if (!stored.matches) throw new IdempotencyKeyReusedError();
 	const answer: unknown = JSON.parse(stored.output);
 	return answer;

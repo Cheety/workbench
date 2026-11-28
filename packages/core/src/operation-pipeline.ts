@@ -11,9 +11,10 @@ import { recordEvent } from "./event-outbox.ts";
 import type { EventRegistry } from "./event-registry.ts";
 import { describeThrown } from "./failure-reason.ts";
 import {
+	IDEMPOTENCY_KEY_RULE,
+	type IdempotencyKey,
 	IdempotencyKeyReusedError,
-	InvalidIdempotencyKeyError,
-	idempotencyKey,
+	parseIdempotencyKey,
 	runIdempotently,
 	TAKES_IDEMPOTENCY_KEY,
 } from "./idempotency-keys.ts";
@@ -83,8 +84,7 @@ const INTERNAL_ERROR: OperationFailure = {
 const INVALID_IDEMPOTENCY_KEY: OperationFailure = {
 	code: "invalid_idempotency_key",
 	kind: "invalid_input",
-	detail:
-		"the idempotency key must consist of 1 to 255 visible ASCII characters or spaces",
+	detail: `the idempotency key must consist of ${IDEMPOTENCY_KEY_RULE}`,
 	issues: [],
 };
 
@@ -167,11 +167,9 @@ async function invoke(
 		correlationId: call.correlationId,
 		operation: operation.name,
 	});
+	const key = idempotencyKeyOf(call, operation.kind);
+	if (!key.valid) return failed(INVALID_IDEMPOTENCY_KEY);
 	try {
-		const key =
-			call.idempotencyKey === null || !TAKES_IDEMPOTENCY_KEY[operation.kind]
-				? null
-				: idempotencyKey(call.idempotencyKey);
 		const input = await operation.validateInput(call.input);
 		if (!input.valid)
 			return failed({
@@ -203,12 +201,12 @@ async function invoke(
 						);
 					return executed;
 				};
-				if (key === null) return run();
+				if (key.key === null) return run();
 				return runIdempotently(
 					transaction,
 					{
 						actor: call.actor,
-						key,
+						key: key.key,
 						operation: operation.name,
 						workspace: call.workspace,
 						input: call.input,
@@ -224,6 +222,19 @@ async function invoke(
 	} catch (error) {
 		return failed(logAndMapFailure(error, logger, operation.owner));
 	}
+}
+
+type IdempotencyKeyOfCall =
+	| { readonly valid: true; readonly key: IdempotencyKey | null }
+	| { readonly valid: false };
+
+function idempotencyKeyOf(
+	call: OperationCall,
+	kind: OperationKind,
+): IdempotencyKeyOfCall {
+	if (call.idempotencyKey === null || !TAKES_IDEMPOTENCY_KEY[kind])
+		return { valid: true, key: null };
+	return parseIdempotencyKey(call.idempotencyKey);
 }
 
 const BEGIN_TRANSACTION: Record<
@@ -392,8 +403,6 @@ function logAndMapFailure(
 	owner: Owner,
 ): OperationFailure {
 	if (error instanceof WorkspaceNotFoundError) return WORKSPACE_NOT_FOUND;
-	if (error instanceof InvalidIdempotencyKeyError)
-		return INVALID_IDEMPOTENCY_KEY;
 	if (error instanceof IdempotencyKeyReusedError) return IDEMPOTENCY_KEY_REUSED;
 	if (error instanceof OperationError)
 		return {
